@@ -1,0 +1,22 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "",
+                "Name": "GloriousEggroll"
+            }
+        ],
+        "Category": "",
+        "Description": "Nobara - theme variant of KDE BreezeDark",
+        "Id": "org.nobaraproject.desktop",
+        "License": "GPLv2+",
+        "Name": "Nobara",
+        "ServiceTypes": [
+            "Plasma/LookAndFeel"
+        ],
+        "Version": "0.01",
+        "Website": ""
+    },
+    "X-KDE-ParentApp": "",
+    "X-Plasma-MainScript": "defaults"
+}

@@ -1,0 +1,7 @@
+#! /usr/bin/bash
+if [[ ! -d /home/$USER/.steam/steam/userdata/ ]]; then
+	zenity --error --text='You need to login to Steam first.'
+else
+	bash -c /etc/nobara/scripts/steam-game-fixups/steam-game-fixups.sh
+	zenity --info --text='Steam game fixups have been applied.'
+fi

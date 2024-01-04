@@ -1,0 +1,25 @@
+[Desktop Entry]
+Comment=Nobara - Theme based on KDE Breeze and Breath
+Name=Nobara
+X-KDE-PluginInfo-Author=GloriousEggroll
+X-KDE-PluginInfo-Category=Plasma Theme
+X-KDE-PluginInfo-Email=
+X-KDE-PluginInfo-EnabledByDefault=true
+X-KDE-PluginInfo-License=GPL version 3
+X-KDE-PluginInfo-Name=Nobara
+X-KDE-PluginInfo-Version=0.0.17
+X-KDE-PluginInfo-Website=
+X-Plasma-API=5.0
+
+[ContrastEffect]
+enabled=true
+contrast=1.0
+intensity=1.0
+saturation=1.0
+
+[Wallpaper]
+defaultFileSuffix=.png
+defaultWallpaperTheme=Nobara
+
+[AdaptiveTransparency]
+enabled=true

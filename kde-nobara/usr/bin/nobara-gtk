@@ -1,0 +1,4 @@
+#!/bin/bash
+if [[ -n $(cat ~/.config/plasmarc | grep 'name=Nobara') ]]; then
+  gsettings set org.gnome.desktop.interface gtk-theme Nobara
+fi

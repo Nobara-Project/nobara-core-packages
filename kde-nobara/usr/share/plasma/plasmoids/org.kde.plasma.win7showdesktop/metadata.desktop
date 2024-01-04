@@ -1,0 +1,32 @@
+[Desktop Entry]
+Name=Show Desktop (Win7)
+Comment=Show the Plasma desktop
+
+Type=Service
+Icon=user-desktop
+
+X-KDE-PluginInfo-Author=Chris Holland
+X-KDE-PluginInfo-Email=zrenfire@gmail.com
+X-KDE-PluginInfo-Name=org.kde.plasma.win7showdesktop
+X-KDE-PluginInfo-Version=13
+X-KDE-PluginInfo-Website=https://github.com/Zren/plasma-applet-win7showdesktop
+X-KDE-PluginInfo-Category=Windows and Tasks
+X-KDE-PluginInfo-License=GPL
+X-Plasma-MainScript=ui/main.qml
+X-Plasma-Provides=org.kde.plasma.windowmanagement
+
+X-Plasma-API=declarativeappletscript
+X-KDE-ServiceTypes=Plasma/Applet
+X-KDE-FormFactors=desktop
+
+
+Name[ar]=أظهر سطح المكتب (Win7)
+Name[es]=Mostrar el escritorio (Win7)
+Name[fr]=Afficher un bureau (Win7)
+Name[nl]=Bureaublad tonen (Win7)
+Name[pt_BR]=Exibir a área de trabalho (Win7)
+Comment[ar]=أظهر سطح مكتب بلازما
+Comment[es]=Mostrar el escritorio de Plasma
+Comment[fr]=Afficher le bureau Plasma
+Comment[nl]=Toont het Plasma-bureaublad
+Comment[pt_BR]=Mostra a área de trabalho do Plasma

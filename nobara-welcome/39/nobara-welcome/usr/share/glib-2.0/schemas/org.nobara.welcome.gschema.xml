@@ -1,0 +1,18 @@
+<schemalist>
+  <schema path="/org/nobara/welcome/" id="org.nobara.welcome">
+    <key type="b" name="startup-show">
+      <default>true</default>
+      <summary>Show Nobara Welcome on startup.</summary>
+      <description>
+        Show Nobara Welcome on startup.
+      </description>
+    </key>
+    <key type="b" name="use-system-icons">
+      <default>false</default>
+      <summary>Disables Hardcoded icons in Nobara Welcome.</summary>
+      <description>
+        Disables Hardcoded icons in Nobara Welcome.
+      </description>
+    </key>
+  </schema>
+</schemalist>

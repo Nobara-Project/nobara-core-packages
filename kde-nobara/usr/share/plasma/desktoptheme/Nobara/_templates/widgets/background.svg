@@ -1,0 +1,192 @@
+<?xml version="1.0"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+<svg xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:svg="http://www.w3.org/2000/svg" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="121" height="56" viewBox="0 0 121 56" id="svg2" version="1.1" sodipodi:docname="background.svgz">
+  <defs id="defs4">
+    <style type="text/css" id="current-color-scheme">
+      .ColorScheme-Text {
+        color:#31363b;
+        stop-color:#31363b;
+      }
+      .ColorScheme-Background {
+        color:#eff0f1;
+        stop-color:#eff0f1;
+      }
+      .ColorScheme-Highlight {
+        color:#3daee9;
+        stop-color:#3daee9;
+      }
+      .ColorScheme-ViewText {
+        color:#31363b;
+        stop-color:#31363b;
+      }
+      .ColorScheme-ViewBackground {
+        color:#fcfcfc;
+        stop-color:#fcfcfc;
+      }
+      .ColorScheme-ViewHover {
+        color:#93cee9;
+        stop-color:#93cee9;
+      }
+      .ColorScheme-ViewFocus{
+        color:#3daee9;
+        stop-color:#3daee9;
+      }
+      .ColorScheme-ButtonText {
+        color:#31363b;
+        stop-color:#31363b;
+      }
+      .ColorScheme-ButtonBackground {
+        color:#eff0f1;
+        stop-color:#eff0f1;
+      }
+      .ColorScheme-ButtonHover {
+        color:#93cee9;
+        stop-color:#93cee9;
+      }
+      .ColorScheme-ButtonFocus{
+        color:#3daee9;
+        stop-color:#3daee9;
+      }
+      </style>
+    <radialGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="radialGradientTopRight" cx="56" cy="7" fx="56" fy="7" r="2" gradientUnits="userSpaceOnUse"/>
+    <radialGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="radialGradientBottomRight" cx="56" cy="49" fx="56" fy="49" r="2" gradientUnits="userSpaceOnUse" />
+    <radialGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="radialGradientBottomLeft" cx="14" cy="49" fx="14" fy="49" r="2" gradientUnits="userSpaceOnUse"/>
+    <radialGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="radialGradientTopLeft" cx="14" cy="7" fx="14" fy="7" r="2" gradientUnits="userSpaceOnUse"/>
+    <radialGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="radialGradientShadowTopLeft" gradientUnits="userSpaceOnUse" gradientTransform="matrix(4.3053928e-7,-0.33333335,0.3333339,4.3054001e-7,-232.15696,14.899586)" cx="23.700001" cy="912.4693" fx="23.700001" fy="912.4693" r="6"/>
+    <radialGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="radialGradientShadowTopRight" gradientUnits="userSpaceOnUse" gradientTransform="matrix(0.33333332,2.4112937e-6,-2.4112795e-6,0.33333136,95.537914,-296.41909)" cx="55.392845" cy="910.26215" fx="55.392845" fy="910.26215" r="6"/>
+    <radialGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="radialGradientShadowBottomLeft" gradientUnits="userSpaceOnUse" gradientTransform="matrix(-0.3333334,-1.5267249e-6,1.5267197e-6,-0.33333227,75.046174,365.28628)" cx="9.1428642" cy="948.86188" fx="9.1428642" fy="948.86188" r="6"/>
+    <radialGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="radialGradientShadowBottomRight" gradientUnits="userSpaceOnUse" gradientTransform="matrix(1.0353385e-7,0.33333326,-0.33333422,1.0353415e-7,428.53826,30.416558)" cx="55.749981" cy="943.6123" fx="55.749981" fy="943.6123" r="6"/>
+    <linearGradient inkscape:collect="always" id="linearGradientFadeOut">
+      <stop style="stop-color:#000000;stop-opacity:1;" offset="0" id="stop4291"/>
+      <stop style="stop-color:#000000;stop-opacity:0;" offset="1" id="stop4292"/>
+    </linearGradient>
+    <linearGradient inkscape:collect="always" id="linearGradientFadeIn">
+      <stop style="stop-color:#000000;stop-opacity:0;" offset="0" id="stop4293"/>
+      <stop style="stop-color:#000000;stop-opacity:1;" offset="1" id="stop4294"/>
+    </linearGradient>
+    <linearGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="linearGradientLeft" gradientUnits="userSpaceOnUse" x1="15" y1="0" x2="12" y2="0"/>
+    <linearGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="linearGradientRight" gradientUnits="userSpaceOnUse" x1="55" y1="0" x2="58" y2="0"/>
+    <linearGradient inkscape:collect="always" xlink:href="#linearGradientFadeIn" id="linearGradientTop" gradientUnits="userSpaceOnUse" x1="0" y1="5" x2="0" y2="8"/>
+    <linearGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="linearGradientBottom" gradientUnits="userSpaceOnUse" x1="0" y1="48" x2="0" y2="51"/>
+    <linearGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="linearGradientShadowLeft" gradientUnits="userSpaceOnUse" x1="73" y1="0" x2="70" y2="0"/>
+    <linearGradient inkscape:collect="always" xlink:href="#linearGradientFadeOut" id="linearGradientShadowRight" gradientUnits="userSpaceOnUse" x1="113" y1="0" x2="116" y2="0"/>
+  </defs>
+  <sodipodi:namedview id="base" pagecolor="#b0dba0" bordercolor="#cc0000" borderopacity="1" inkscape:pageopacity="0" inkscape:pageshadow="2" inkscape:zoom="8" inkscape:cx="65.206603" inkscape:cy="30.095125" inkscape:document-units="px" inkscape:current-layer="layer1" showgrid="true" inkscape:showpageshadow="false" borderlayer="true" units="px" inkscape:window-width="2560" inkscape:window-height="957" inkscape:window-x="0" inkscape:window-y="30" inkscape:window-maximized="1" showguides="true" fit-margin-top="0" fit-margin-left="0" fit-margin-right="0" fit-margin-bottom="0">
+    <inkscape:grid type="xygrid" id="grid3336" empspacing="2" originx="0" originy="-91.999978"/>
+  </sodipodi:namedview>
+  <metadata id="metadata7">
+    <rdf:RDF>
+      <cc:Work rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+        <dc:title/>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <g inkscape:label="Layer 1" inkscape:groupmode="layer" id="layer1">
+    <!-- Hints -->
+    <rect id="hint-tile-center" x="0" y="0" width="5" height="5" style="opacity:1;fill:#ff6600;fill-opacity:1;stroke:none"/>
+
+    <!-- Tileset -->
+    <g id="top">
+      <rect id="rect4152" x="19" y="6" width="32" height="6" class="ColorScheme-Background" style="opacity:{{fillOpacity}};fill:currentColor;fill-opacity:1;stroke:none"/>
+      <rect id="rect4154" x="19" y="0" width="32" height="6" style="opacity:{{shadowOpacity}};fill:url(#linearGradientTop);fill-opacity:1;stroke:none"/>
+    </g>
+    <g id="topleft">
+      <rect id="rect4547" x="7" y="7" width="6" height="5" style="opacity:{{shadowOpacity}};fill:url(#linearGradientLeft);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"/>
+      <path style="opacity:{{cornerOpacity}};fill:url(#radialGradientTopLeft);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" d="M 7 0 L 7 7 L 13 7 C 13 6.4460137 13.446014 6 14 6 L 14 0 L 7 0 z " id="path4554"/>
+      <rect id="rect4195" x="14" y="0" width="5" height="6" style="opacity:{{shadowOpacity}};fill:url(#linearGradientTop);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"/>
+      <path style="opacity:{{fillOpacity}};fill:currentColor;fill-opacity:1" d="M 14 6 C 13.446014 6 13 6.4460137 13 7 L 13 11 L 13 12 L 17 12 L 18 12 L 19 12 L 19 11 L 19 7 L 19 6 L 18 6 L 17 6 L 14 6 z " id="rect4159" class="ColorScheme-Background"/>
+    </g>
+    <g id="topright">
+      <rect id="rect4565" x="57" y="7" width="6" height="5" style="opacity:{{shadowOpacity}};fill:url(#linearGradientRight);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"/>
+      <path style="opacity:{{cornerOpacity}};fill:url(#radialGradientTopRight);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" d="M 56 0 L 56 6 C 56.553986 6 57 6.4460137 57 7 L 63 7 L 63 0 L 56 0 z " id="path4563"/>
+      <rect id="rect4199" x="51" y="0" width="5" height="6" style="opacity:{{shadowOpacity}};fill:url(#linearGradientTop);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"/>
+      <path style="opacity:{{fillOpacity}};fill:currentColor;fill-opacity:1" d="M 51 6 L 51 7 L 51 11 L 51 12 L 52 12 L 53 12 L 56 12 L 57 12 L 57 11 L 57 7 C 57 6.4460137 56.553986 6 56 6 L 53 6 L 52 6 L 51 6 z " id="rect4177" class="ColorScheme-Background"/>
+    </g>
+    <g id="bottom">
+      <rect id="rect4148" x="19" y="44" width="32" height="6" class="ColorScheme-Background" style="opacity:{{fillOpacity}};fill:currentColor;fill-opacity:1;stroke:none"/>
+      <rect id="rect4150" x="19" y="50" width="32" height="6" style="opacity:{{shadowOpacity}};fill:url(#linearGradientBottom);fill-opacity:1;stroke:none"/>
+    </g>
+    <g id="bottomleft">
+      <path id="path4538" d="m 14,50 0,6 1,0 4,0 0,-6 -2,0 -2,0 -1,0 z" style="opacity:{{shadowOpacity}};fill:url(#linearGradientBottom);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" inkscape:connector-curvature="0"/>
+      <path id="path4531" d="m 7,49 0,7 7,0 0,-6 c -0.553845,0 -1,-0.44616 -1,-1 l -6,0 z" style="opacity:{{cornerOpacity}};fill:url(#radialGradientBottomLeft);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" inkscape:connector-curvature="0"/>
+      <path id="path4203" d="m 7,44 0,4 0,1 6,0 0,-1 0,-4 -6,0 z" style="opacity:{{shadowOpacity}};fill:url(#linearGradientLeft);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" inkscape:connector-curvature="0"/>
+      <path id="path5048" d="m 19,50 0,-1 0,-4 0,-1 -1,0 -1,0 -3,0 -1,0 0,1 0,4 c 0,0.55399 0.446014,1 1,1 l 3,0 1,0 1,0 z" class="ColorScheme-Background" style="opacity:{{fillOpacity}};fill:currentColor;fill-opacity:1" inkscape:connector-curvature="0"/>
+    </g>
+    <g id="bottomright">
+      <path id="path4572" d="m 51,50 0,6 4,0 1,0 0,-6 -1,0 -2,0 -2,0 z" style="opacity:{{shadowOpacity}};fill:url(#linearGradientBottom);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" inkscape:connector-curvature="0"/>
+      <path id="path4570" d="m 57,49 c 0,0.55384 -0.446155,1 -1,1 l 0,6 7,0 0,-7 -6,0 z" style="opacity:{{cornerOpacity}};fill:url(#radialGradientBottomRight);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" inkscape:connector-curvature="0"/>
+      <path id="path4201" d="m 57,44 0,4 0,1 6,0 0,-1 0,-4 -6,0 z" style="opacity:{{shadowOpacity}};fill:url(#linearGradientRight);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" inkscape:connector-curvature="0"/>
+      <path id="rect4178" d="m 51,50 0,-1 0,-4 0,-1 1,0 1,0 3,0 1,0 0,1 0,4 c 0,0.55399 -0.446014,1 -1,1 l -3,0 -1,0 -1,0 z" class="ColorScheme-Background" style="opacity:{{fillOpacity}};fill:currentColor;fill-opacity:1" inkscape:connector-curvature="0"/>
+    </g>
+    <g id="left">
+      <rect id="rect4144" x="13" y="12" width="6" height="32" class="ColorScheme-Background" style="opacity:{{fillOpacity}};fill:currentColor;fill-opacity:1;stroke:none"/>
+      <rect id="rect4146" x="7" y="12" width="6" height="32" style="opacity:{{shadowOpacity}};fill:url(#linearGradientLeft);fill-opacity:1;stroke:none"/>
+    </g>
+    <g id="right">
+      <rect id="rect4140" x="51" y="12" width="6" height="32" class="ColorScheme-Background" style="opacity:{{fillOpacity}};fill:currentColor;fill-opacity:1;stroke:none"/>
+      <rect id="rect4142" x="57" y="12" width="6" height="32" style="opacity:{{shadowOpacity}};fill:url(#linearGradientRight);fill-opacity:1;stroke:none"/>
+    </g>
+    <g id="center">
+      <rect id="rect4138" x="19" y="12" width="32" height="32" class="ColorScheme-Background" style="opacity:{{fillOpacity}};fill:currentColor;fill-opacity:1;stroke:none"/>
+    </g>
+
+    <!-- Margins -->
+    <rect id="hint-top-margin" x="33" y="0" width="4" height="12" style="fill:#ff00ff;fill-opacity:1;stroke:none"/>
+    <rect id="hint-bottom-margin" x="33" y="44" width="4" height="12" style="fill:#ff00ff;fill-opacity:1;stroke:none"/>
+    <rect id="hint-right-margin" x="51" y="26" width="12" height="4" style="fill:#ff00ff;fill-opacity:1;stroke:none"/>
+    <rect id="hint-left-margin" x="7" y="26" width="12" height="4" style="fill:#ff00ff;fill-opacity:1;stroke:none"/>
+
+    <!-- Shadow Tileset -->
+    <g id="shadow-top">
+      <rect id="rect4858" x="77" y="0" width="32" height="6" style="opacity:1;fill:url(#linearGradientTop);fill-opacity:1;stroke:none"/>
+      <rect id="rect4856" x="77" y="6" width="32" height="6" style="opacity:1;fill:none;fill-opacity:1;stroke:none"/>
+    </g>
+    <g id="shadow-topleft">
+      <rect id="rect4864" x="72" y="0" width="5" height="6" style="opacity:1;fill:url(#linearGradientTop);fill-opacity:1;stroke:none"/>
+      <path id="path4866" d="m 65,0 0,7 6,0 0,-1 1,0 0,-6 -7,0 z" style="opacity:0.6;fill:url(#radialGradientShadowTopLeft);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" inkscape:connector-curvature="0"/>
+      <rect id="rect4868" x="65" y="7" width="6" height="5" style="opacity:1;fill:url(#linearGradientShadowLeft);fill-opacity:1;stroke:none"/>
+      <rect id="rect4870" x="71" y="6" width="6" height="6" style="fill:none;fill-opacity:1" />
+    </g>
+    <g id="shadow-topright">
+      <rect id="rect4864" x="109" y="0" width="5" height="6" style="opacity:1;fill:url(#linearGradientTop);fill-opacity:1;stroke:none"/>
+      <path id="path4866" d="m 114,0 0,6 1,0 0,1 6,0 0,-7 -7,0 z" style="opacity:0.6;fill:url(#radialGradientShadowTopRight);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" inkscape:connector-curvature="0"/>
+      <rect id="rect4868" x="115" y="7" width="6" height="5" style="opacity:1;fill:url(#linearGradientShadowRight);fill-opacity:1;stroke:none"/>
+      <rect id="rect4870" x="109" y="6" width="6" height="6" style="fill:none;fill-opacity:1" />
+    </g>
+    <g id="shadow-bottom">
+      <rect id="rect4856" x="77" y="44" width="32" height="6" style="opacity:1;fill:none;fill-opacity:1;stroke:none"/>
+      <rect id="rect4858" x="77" y="50" width="32" height="6" style="opacity:1;fill:url(#linearGradientBottom);fill-opacity:1;stroke:none"/>
+    </g>
+    <g id="shadow-bottomleft">
+      <rect id="rect4864" x="72" y="50" width="5" height="6" style="opacity:1;fill:url(#linearGradientBottom);fill-opacity:1;stroke:none"/>
+      <path id="path4866" d="m 65,49 0,7 7,0 0,-6 -1,0 0,-1 -6,0 z" style="opacity:0.6;fill:url(#radialGradientShadowBottomLeft);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" inkscape:connector-curvature="0"/>
+      <rect id="rect4868" x="65" y="44" width="6" height="5" style="opacity:1;fill:url(#linearGradientShadowLeft);fill-opacity:1;stroke:none"/>
+      <rect id="rect4870" x="71" y="44" width="6" height="6" style="fill:none;fill-opacity:1" />
+    </g>
+    <g id="shadow-bottomright">
+      <rect id="rect4878" x="109" y="50" width="5" height="6" style="opacity:1;fill:url(#linearGradientBottom);fill-opacity:1;stroke:none"/>
+      <path id="path4880" d="m 115,49 0,1 -1,0 0,6 7,0 0,-7 -6,0 z" style="opacity:0.6;fill:url(#radialGradientShadowBottomRight);fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" inkscape:connector-curvature="0"/>
+      <rect id="rect4882" x="115" y="44" width="6" height="5" style="opacity:1;fill:url(#linearGradientShadowRight);fill-opacity:1;stroke:none"/>
+      <rect id="rect4884" x="109" y="44" width="6" height="6" style="fill:none;fill-opacity:1"/>
+    </g>
+    <g id="shadow-left">
+      <rect id="rect4892" x="71" y="12" width="6" height="32" style="opacity:1;fill:none;fill-opacity:1;stroke:none"/>
+      <rect id="rect4894" x="65" y="12" width="6" height="32" style="opacity:1;fill:url(#linearGradientShadowLeft);fill-opacity:1;stroke:none"/>
+    </g>
+    <g id="shadow-right">
+      <rect id="rect4900" x="109" y="12" width="6" height="32" style="opacity:1;fill:none;fill-opacity:1;stroke:none"/>
+      <rect id="rect4902" x="115" y="12" width="6" height="32" style="opacity:1;fill:url(#linearGradientShadowRight);fill-opacity:1;stroke:none"/>
+    </g>
+    <g id="shadow-center">
+      <rect id="rect4908" x="77" y="12" width="32" height="32" style="opacity:1;fill:none;fill-opacity:1;stroke:none"/>
+    </g>
+
+    <!-- Shadow Margins -->
+    <rect id="shadow-hint-top-margin" x="91" y="0" width="4" height="12" style="fill:#ff00ff;fill-opacity:1;stroke:none"/>
+    <rect id="shadow-hint-bottom-margin" x="91" y="44" width="4" height="12" style="fill:#ff00ff;fill-opacity:1;stroke:none" />
+    <rect id="shadow-hint-right-margin" x="109" y="26" width="12" height="4" style="fill:#ff00ff;fill-opacity:1;stroke:none"/>
+    <rect id="shadow-hint-left-margin" x="65" y="26" width="12" height="4" style="fill:#ff00ff;fill-opacity:1;stroke:none"/>
+  </g>
+</svg>

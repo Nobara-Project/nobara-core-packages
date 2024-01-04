@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" version="1.1">
+ <defs>
+  <style id="current-color-scheme" type="text/css">
+   .ColorScheme-Text { color:#1d344f; } .ColorScheme-Highlight { color:#5294e2; } .ColorScheme-Background { color:#e4e4e4; }
+  </style>
+ </defs>
+ <rect style="opacity:0.2" width="28" height="26" x="2" y="4" rx="1.4" ry="1.4"/>
+ <path style="fill:currentColor" class="ColorScheme-Highlight" d="M 3.4003906 3 C 2.6253906 3 2 3.6253906 2 4.4003906 L 2 7 L 2 27.599609 C 2 28.374609 2.6251906 29 3.4003906 29 L 28.599609 29 C 29.374609 29 30 28.374609 30 27.599609 L 30 7 L 30 4.4003906 C 30 3.6253906 29.374609 3 28.599609 3 L 3.4003906 3 z"/>
+ <path style="opacity:0.85;fill:currentColor" class="ColorScheme-Background" d="M 3.4,3 C 2.625,3 2,3.625 2,4.4 V 7 H 30 V 4.4 C 30,3.625 29.375,3 28.6,3 Z"/>
+ <path style="opacity:0.85;fill:currentColor" class="ColorScheme-Background" d="M 10.4 25 C 9.6248 25 9 25.625 9 26.4 L 9 29 L 22 29 L 22 26.4 C 22 25.625 21.375 25 20.6 25 L 10.4 25 z"/>
+ <path style="opacity:0.1;fill:#ffffff" d="M 3.4,3 C 2.625,3 2,3.625 2,4.4 V 5.4 C 2,4.625 2.625,4 3.4,4 H 28.6 C 29.375,4 30,4.625 30,5.4 V 4.4 C 30,3.625 29.375,3 28.6,3 Z"/>
+</svg>

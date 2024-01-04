@@ -1,0 +1,5 @@
+#! /bin/bash
+AUTOSTART=$(gsettings get org.nobara.welcome startup-show)
+if [[ "$AUTOSTART" == "true" ]]; then
+	/usr/bin/nobara-welcome
+fi

@@ -1,0 +1,16 @@
+[SddmGreeterTheme]
+Name=Nobara
+Description=Nobara Theme
+Author=Nobara
+Copyright=(c) 2014, David Edmundson
+License=CC-BY-SA
+Type=sddm-theme
+Version=0.2
+Website=http://www.nobaraproject.org
+Screenshot=preview.png
+MainScript=Main.qml
+ConfigFile=theme.conf
+TranslationsDirectory=translations
+Email=gloriouseggroll@gmail.com
+Theme-Id=nobara
+Theme-API=2.0

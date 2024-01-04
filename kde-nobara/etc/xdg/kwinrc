@@ -1,0 +1,12 @@
+[Plugins]
+blurEnabled=true
+
+[Effect-ًRound-Corners]
+ActiveShadowAlpha=69
+ActiveShadowUseCustom=true
+ActiveShadowUsePalette=false
+InactiveOutlineColor=62,62,62
+InactiveShadowAlpha=0
+InactiveShadowUseCustom=true
+InactiveShadowUsePalette=false
+OutlineColor=62,62,62

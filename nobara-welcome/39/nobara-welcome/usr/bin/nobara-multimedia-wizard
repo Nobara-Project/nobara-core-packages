@@ -1,0 +1,2 @@
+#! /usr/bin/bash
+python3 /etc/nobara/scripts/nobara-multimedia/main.py

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" version="1">
+ <defs>
+  <style id="current-color-scheme" type="text/css">
+   .ColorScheme-Text { color:#1d344f; } .ColorScheme-Highlight { color:#5294e2; } .ColorScheme-Background { color:#e4e4e4; }
+  </style>
+ </defs>
+ <path style="opacity:0.2" d="M 6,4.5 H 18 C 19,4.5 21,10 21,13.75 21,17.5 19.5,22.5 18,22.5 H 6 C 4.5,22.5 3,17.5 3,13.75 3,10 5,4.5 6,4.5 Z"/>
+ <path style="fill:currentColor" class="ColorScheme-Highlight" d="M 6,4 H 18 C 19,4 21,9.5 21,13.25 21,17 19.5,22 18,22 H 6 C 4.5,22 3,17 3,13.25 3,9.5 5,4 6,4 Z"/>
+ <rect style="fill:currentColor" class="ColorScheme-Highlight" width="6" height="2" x="9" y="2"/>
+ <rect style="opacity:0.2" width="18" height="4" x="3" y="3.5" rx="1" ry="1"/>
+ <rect style="fill:#ffffff;opacity:0.19" width="6" height="2" x="9" y="2"/>
+ <rect style="fill:currentColor" class="ColorScheme-Highlight" width="18" height="4" x="3" y="3" rx="1" ry="1"/>
+ <path style="opacity:0.45;fill:currentColor" class="ColorScheme-Text;fill-opacity:1" d="m 12,10 a 1,1 0 0 0 -1,1 v 7 a 1,1 0 0 0 1,1 1,1 0 0 0 1,-1 v -7 a 1,1 0 0 0 -1,-1 z m -4.1953125,0.01953 A 1,1 0 0 0 7.1679687,10.445313 C 7.1679687,10.445313 6,12.166636 6,14.5 c 0,2.333364 1.1679687,4.054687 1.1679687,4.054687 a 1,1 0 0 0 1.3867188,0.277344 1,1 0 0 0 0.2773438,-1.386719 C 8.8320313,17.445312 8,16.166632 8,14.5 8,12.833368 8.8320312,11.554687 8.8320313,11.554688 a 1,1 0 0 0 -0.2773438,-1.386719 1,1 0 0 0 -0.75,-0.148438 z m 7.6406255,0.148438 a 1,1 0 0 0 -0.277344,1.386719 c 0,0 0.832031,1.278647 0.832031,2.945312 0,1.666665 -0.832031,2.945313 -0.832031,2.945312 a 1,1 0 0 0 0.277344,1.386719 1,1 0 0 0 1.386718,-0.277344 c 0,0 1.167969,-1.721356 1.167969,-4.054687 0,-2.333331 -1.167969,-4.054687 -1.167969,-4.054687 a 1,1 0 0 0 -1.386718,-0.277344 z"/>
+ <path style="fill:#ffffff;opacity:0.2" d="M 4 3 C 3.446 3 3 3.446 3 4 L 3 4.5 C 3 3.946 3.446 3.5 4 3.5 L 20 3.5 C 20.554 3.5 21 3.946 21 4.5 L 21 4 C 21 3.446 20.554 3 20 3 L 4 3 z"/>
+ <rect style="fill:#ffffff;opacity:0.19" width="18" height="4" x="3" y="3" rx="1" ry="1"/>
+</svg>
