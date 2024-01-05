@@ -2,7 +2,8 @@
 tar -cvzf kde-nobara.tar.gz kde-nobara
 tar -cvzf nobara-nvidia-wizard.tar.gz nobara-nvidia-wizard
 tar -cvzf nobara-resolve-runtime.tar.gz nobara-resolve-runtime
-tar -cvzf nobara-welcome-38.tar.gz nobara-welcome/38/nobara-welcome
+tar -cvzf nobara-logos.tar.gz nobara-logos
+
 cd nobara-welcome/38
 tar -cvzf nobara-welcome-38.tar.gz nobara-welcome
 mv nobara-welcome-38.tar.gz ../../

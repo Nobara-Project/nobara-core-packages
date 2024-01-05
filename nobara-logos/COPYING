@@ -1,0 +1,18 @@
+Fedora®, the Fedora word design, and the Infinity design logo, either separately or in combination, are hereinafter referred to as "Fedora Trademarks" and are 
+trademarks of Red Hat, Inc., registered in the United States and other countries.
+
+The fedora-logos package ("Package") contains images that are or include the Fedora Trademarks.  You are granted the right to use the Package during the normal 
+operation of software spins approved by the Fedora Project that call upon the Package.  You are also granted a license to copy and redistribute an unmodified Package as 
+part of an accepted Fedora spin.
+
+All uses of this Package, its content and the Trademarks must comply with the Fedora Trademark Guidelines: https://fedoraproject.org/wiki/Legal:Trademark_guidelines.  
+In the case of conflict between the license granted herein and the Fedora Trademark Guidelines, the Fedora Trademark Guidelines will control.
+
+All such rights are granted to you provided that the above trademark legend and this license are included with each copy you make, and they remain intact and are not 
+altered, deleted, or modified in any way.
+
+NO WARRANTY.  THIS PACKAGE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS 
+FOR A PARTICULAR PURPOSE, AND INTELLECTUAL PROPERTY NONINFRINGEMENT ARE DISCLAIMED.  IN NO EVENT SHALL RED HAT, INC. BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, 
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA OR PROFITS; OR BUSINESS 
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT 
+OF THE USE OF THIS PACKAGE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 

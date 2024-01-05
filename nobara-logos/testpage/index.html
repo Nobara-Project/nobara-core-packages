@@ -1,0 +1,318 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset='utf-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <title>Test Page for the HTTP Server on Fedora</title>
+    <style type="text/css">
+      /*<![CDATA[*/
+      
+      html {
+        height: 100%;
+        width: 100%;
+      }  
+        body {
+  background: rgb(60,149,180);
+  background: -moz-linear-gradient(180deg, rgba(60,110,180,1) 30%, rgba(60,149,180,1) 90%)  ;
+  background: -webkit-linear-gradient(180deg, rgba(60,110,180,1) 30%, rgba(60,149,180,1) 90%) ;
+  background: linear-gradient(180deg, rgba(60,110,180,1) 30%, rgba(60,149,180,1) 90%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  filter: progid:DXImageTransform.Microsoft.gradient(startColorstr="#3c6eb4",endColorstr="#3c95b4",GradientType=1); 
+        color: white;
+        font-size: 0.9em;
+        font-weight: 400;
+        font-family: 'Montserrat', sans-serif;
+        margin: 0;
+        padding: 10em 6em 10em 6em;
+        box-sizing: border-box;      
+        
+      }
+
+   
+  h1 {
+    text-align: center;
+    margin: 0;
+    padding: 0.6em 2em 0.4em;
+    color: #fff;
+    font-weight: bold;
+    font-family: 'Montserrat', sans-serif;
+    font-size: 2em;
+  }
+  h1 strong {
+    font-weight: bolder;
+    font-family: 'Montserrat', sans-serif;
+  }
+  h2 {
+    font-size: 1.5em;
+    font-weight:bold;
+  }
+  
+  .title {
+    border: 1px solid black;
+    font-weight: bold;
+    position: relative;
+    float: right;
+    width: 150px;
+    text-align: center;
+    padding: 10px 0 10px 0;
+    margin-top: 0;
+  }
+  
+  .description {
+    padding: 45px 10px 5px 10px;
+    clear: right;
+    padding: 15px;
+  }
+  
+  .section {
+    padding-left: 3%;
+   margin-bottom: 10px;
+  }
+  
+  img {
+  
+    padding: 2px;
+    margin: 2px;
+  }
+  a:hover img {
+    padding: 2px;
+    margin: 2px;
+  }
+
+  :link {
+    color: rgb(199, 252, 77);
+    text-shadow:
+  }
+  :visited {
+    color: rgb(122, 206, 255);
+  }
+  a:hover {
+    color: rgb(16, 44, 122);
+  }
+  .row {
+    width: 100%;
+    padding: 0 10px 0 10px;
+  }
+  
+  footer {
+    padding-top: 6em;
+    margin-bottom: 6em;
+    text-align: center;
+    font-size: xx-small;
+    overflow:hidden;
+    clear: both;
+  }
+ 
+  .summary {
+    font-size: 140%;
+    text-align: center;
+  }
+
+  #fedora-poweredby img {
+    margin-left: -10px;
+  }
+
+  #logos img {
+    vertical-align: top;
+  }
+  
+  /* Desktop  View Options */
+ 
+  @media (min-width: 768px)  {
+  
+    body {
+      padding: 10em 20% !important;
+    }
+    
+    .col-md-1, .col-md-2, .col-md-3, .col-md-4, .col-md-5, .col-md-6,
+    .col-md-7, .col-md-8, .col-md-9, .col-md-10, .col-md-11, .col-md-12 {
+      float: left;
+    }
+  
+    .col-md-1 {
+      width: 8.33%;
+    }
+    .col-md-2 {
+      width: 16.66%;
+    }
+    .col-md-3 {
+      width: 25%;
+    }
+    .col-md-4 {
+      width: 33%;
+    }
+    .col-md-5 {
+      width: 41.66%;
+    }
+    .col-md-6 {
+      border-left:3px ;
+      width: 50%;
+      
+
+    }
+    .col-md-7 {
+      width: 58.33%;
+    }
+    .col-md-8 {
+      width: 66.66%;
+    }
+    .col-md-9 {
+      width: 74.99%;
+    }
+    .col-md-10 {
+      width: 83.33%;
+    }
+    .col-md-11 {
+      width: 91.66%;
+    }
+    .col-md-12 {
+      width: 100%;
+    }
+  }
+  
+  /* Mobile View Options */
+  @media (max-width: 767px) {
+    .col-sm-1, .col-sm-2, .col-sm-3, .col-sm-4, .col-sm-5, .col-sm-6,
+    .col-sm-7, .col-sm-8, .col-sm-9, .col-sm-10, .col-sm-11, .col-sm-12 {
+      float: left;
+    }
+  
+    .col-sm-1 {
+      width: 8.33%;
+    }
+    .col-sm-2 {
+      width: 16.66%;
+    }
+    .col-sm-3 {
+      width: 25%;
+    }
+    .col-sm-4 {
+      width: 33%;
+    }
+    .col-sm-5 {
+      width: 41.66%;
+    }
+    .col-sm-6 {
+      width: 50%;
+    }
+    .col-sm-7 {
+      width: 58.33%;
+    }
+    .col-sm-8 {
+      width: 66.66%;
+    }
+    .col-sm-9 {
+      width: 74.99%;
+    }
+    .col-sm-10 {
+      width: 83.33%;
+    }
+    .col-sm-11 {
+      width: 91.66%;
+    }
+    .col-sm-12 {
+      width: 100%;
+    }
+    h1 {
+      padding: 0 !important;
+    }
+  }
+        
+  
+  </style>
+  </head>
+  <body>
+    <h1>Fedora Webserver <strong>Test Page</strong></h1>
+
+    <div class='row'>
+    
+      <div class='col-sm-12 col-md-6 col-md-6 '></div>
+          <p class="summary">If you can
+            read this page, it means that the web server installed at
+            this site is working properly, but has not yet been
+            configured.</p>
+      </div>
+      
+      <div class='col-sm-12 col-md-6 col-md-6 col-md-offset-12'>
+     
+       
+        <div class='section'>
+          <h2>If you are a member of the general public:</h2>
+
+          <p>The website you just visited is either <strong>experiencing
+          problems</strong> or <strong>undergoing routine maintenance</strong>.</p>
+  
+          <p>To let the administrators of this website know that you are
+          seeing this page and not what you were expecting, an e-mail 
+          addressed to "webmaster" at the website's domain should reach 
+          an appropriate person. For example, if you saw this page while visiting
+          <strong>www.example.com</strong>, you could send e-mail to 
+          "<strong>webmaster@example.com</strong>".</p>
+    
+          <p>Fedora is a distribution of Linux, a popular computer
+          operating system. It is commonly used by hosting companies
+          because it is free, and includes free web server software.
+          This "test page" is shown instead of the expected
+          website if they do not set up their web server correctly.</p>
+          <p>Accordingly, please keep these facts in mind:</p>
+
+        <ul>
+          <li>Neither the Fedora Project or Red Hat has any
+          affiliation with any website or content hosted from this
+          server (unless otherwise explicitly stated).</li>
+
+          <li>Neither the Fedora Project or Red Hat has "hacked"
+          this webserver: this test page is an included component
+          of the Fedora webserver software.</li>
+        </ul>
+        <p>For more information about Fedora, please visit the
+          <a href="https://getfedora.org/"><strong>Fedora Project 
+          website</strong></a>.
+        </p>
+        </div>
+      </div>
+      <div class='col-sm-12 col-md-6 col-md-6 col-md-offset-12'>
+        <div class='section'>
+         
+          <h2>If you are the website administrator:</h2>
+
+        <p>You may now add content to the webroot directory. Note
+        that until you do so, people visiting your website will see
+        this page, and not your content.</p>
+
+        <p><strong>For systems using 
+        <a href="https://docs.fedoraproject.org/en-US/quick-docs/getting-started-with-apache-http-server/index.html">Apache Webserver</strong></a>:
+        You may now add content to the directory <code>/var/www/html/</code>.
+        Note that until you do so, people visiting your website will see
+        this page, and not your content. To prevent this page from
+        ever being used, follow the instructions in the file
+        <code>/etc/httpd/conf.d/welcome.conf</code>.</p>
+
+        <p><strong>For systems using
+        <a href="https://fedoraproject.org/wiki/Nginx">Nginx</strong></a>:
+        You should now put your content in a location of your
+        choice and edit the <code>root</code> configuration directive
+        in the <strong>nginx</strong> configuration file
+        <code>/etc/nginx/nginx.conf</code>.</p>
+        
+        <p><strong>For systems using <a href="https://caddyserver.com">Caddy</strong></a>: 
+        You should now put your content in a location of your choice and 
+        edit the root configuration directive in the Caddy configuration 
+        file <code>/etc/caddy/Caddyfile</code>.
+        
+        <div id="logos">
+          <a href="https://getfedora.org/" id="fedora-poweredby"><img src= "icons/poweredby.png" alt="[ Powered by Fedora ]" /></a> <!-- Fedora -->
+          <img src="poweredby.png" /> <!-- webserver -->
+        </div>       
+      </div>
+      </div>
+      
+      <footer class="col-sm-12">
+      <a href="https://apache.org">Apache&trade;</a> is a registered trademark of <a href="https://apache.org">the Apache Software Foundation</a> in the United States and/or other countries.<br />
+      <a href="https://nginx.org">NGINX&trade;</a> is a registered trademark of <a href="https://">F5 Networks, Inc.</a>.
+      <a href="https://caddyserver.com">Caddy&trade;</a> is a registered trademark of Stack Holdings GmbH.
+      </footer>
+      
+  </body>
+</html>
