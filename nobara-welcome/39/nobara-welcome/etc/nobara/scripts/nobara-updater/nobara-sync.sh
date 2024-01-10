@@ -392,8 +392,6 @@ if [[ ! -z $nvkernmod ]]; then
     sudo dnf install -y $NVIDIA_FIXUPS
   fi
 
-  sudo akmods
-
 fi
 
 # Install some special software for ROG Ally and Lenovo Legion Go special buttons
@@ -447,6 +445,10 @@ sudo dnf remove -y musescore &> /dev/null
 if [ -e /etc/nobara/newinstall ]; then
 	rm -Rf /etc/nobara/newinstall
 fi
+
+# always run akmods and dracut at the end of updates
+sudo akmods
+sudo dracut -f --regenerate-all
 
 }
 
