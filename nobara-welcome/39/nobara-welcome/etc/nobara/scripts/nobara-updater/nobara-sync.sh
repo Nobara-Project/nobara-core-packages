@@ -384,24 +384,26 @@ fi
 
 # Install some special software for ROG Ally and Lenovo Legion Go special buttons
 if [[ -n $(sudo dmesg | grep 'ROG Ally') ]]; then
-  if [[ -z $(rpm -qa | grep rogue-enemy) ]]; then
+  if [[ -z $(rpm -qa | grep hhd) ]]; then
     echo "#####"
-    echo "ROG Ally detected, installing rogue-enemy for functionality"
+    echo "ROG Ally detected, installing Handheld Daemon (HHD) for functionality"
     echo "#####"
     sudo systemctl disable --now handycon &> /dev/null
     sudo dnf5 remove -y HandyGCCS &> /dev/null
-    sudo dnf5 install -y rogue-enemy
+    sudo dnf5 remove -y rogue-enemy &> /dev/null
+    sudo dnf5 install -y hhd
   fi
 fi
 
 if [[ -n $(sudo dmesg | grep 'Legion Go') ]]; then
-  if [[ -z $(rpm -qa | grep lgcd) ]]; then
+  if [[ -z $(rpm -qa | grep hhd) ]]; then
     echo "#####"
-    echo "Lenovo Legion Go detected, installing lgcd for functionality"
+    echo "Lenovo Legion Go detected, installing Handheld Daemon (HHD) for functionality"
     echo "#####"
     sudo systemctl disable --now handycon &> /dev/null
     sudo dnf5 remove -y HandyGCCS &> /dev/null
-    sudo dnf5 install -y lgcd
+    sudo dnf5 remove -y lgcd &> /dev/null
+    sudo dnf5 install -y hhd
   fi
 fi
 
