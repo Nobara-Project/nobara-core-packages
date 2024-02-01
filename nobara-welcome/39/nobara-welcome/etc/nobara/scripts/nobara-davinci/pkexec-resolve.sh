@@ -1,10 +1,10 @@
 #!/bin/sh
 
 # install rocm packages for opencl support
-dnf install -y rocm-meta
+dnf5 install -y rocm-meta
 
 # install runtime libraries ported from Fedora 37
-dnf install -y nobara-resolve-runtime
+dnf5 install -y nobara-resolve-runtime
 
 # edit resolve shortcuts
 for systemuser in $(ls /home/); do

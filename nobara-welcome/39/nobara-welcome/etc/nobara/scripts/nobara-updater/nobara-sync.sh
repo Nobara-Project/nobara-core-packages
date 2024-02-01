@@ -65,27 +65,27 @@ SHANOBARA=$(sha256sum /etc/yum.repos.d/nobara.repo)
 
 # Get repo updates first
 
-sudo dnf update -y fedora-gpg-keys nobara-gpg-keys  fedora-repos nobara-repos --nogpgcheck --refresh
+sudo dnf5 update -y fedora-gpg-keys nobara-gpg-keys  fedora-repos nobara-repos --nogpgcheck --refresh
 
 # Make sure rpmfusion repos never get removed -- this can happen by accident if migrating between gnome and kde
 
 if [[ ! -e /etc/yum.repos.d/rpmfusion-free.repo ]];then
-	sudo dnf install -y rpmfusion-free-release
+	sudo dnf5 install -y rpmfusion-free-release
 fi
 
 if [[ ! -e /etc/yum.repos.d/rpmfusion-free-updates.repo ]];then
-	sudo dnf install -y rpmfusion-free-release
+	sudo dnf5 install -y rpmfusion-free-release
 fi
 
 if [[ ! -e /etc/yum.repos.d/rpmfusion-nonfree.repo ]];then
-	sudo dnf install -y rpmfusion-nonfree-release
+	sudo dnf5 install -y rpmfusion-nonfree-release
 fi
 
 if [[ ! -e /etc/yum.repos.d/rpmfusion-nonfree-updates.repo ]];then
-	sudo dnf install -y rpmfusion-nonfree-release
+	sudo dnf5 install -y rpmfusion-nonfree-release
 fi
 
-sudo -S dnf update -y rpmfusion-nonfree-release rpmfusion-free-release
+sudo -S dnf5 update -y rpmfusion-nonfree-release rpmfusion-free-release
 
 # Check against shasums for new repo files
 # We don't check against rpmfusion because those should never change.
@@ -110,7 +110,7 @@ UPDATEREFRESH="$(rpm -qa | grep nobara-welcome)"
 
 # Update the welcome app to check for update script changes
 
-sudo -S dnf update -y nobara-welcome $REFRESH
+sudo -S dnf5 update -y nobara-welcome $REFRESH
 
 # If script has been updated, restart it:
 
@@ -121,18 +121,6 @@ else
 	exec sh -c "$script nobara-sync-cli $displayuser"
 fi
 fi
-
-# before anything, make sure we're updated to dnf 5
-if [[ ! $(file /usr/bin/dnf | grep dnf5) ]];  then
-	echo "Upgrading DNF to DNF5"
-	sudo dnf4 update dnf --refresh
-	if [[ -n $DISPLAY ]] ; then
-		exec sh -c "$script nobara-sync-gui $displayuser"
-	else
-		exec sh -c "$script nobara-sync-cli $displayuser"
-	fi
-fi
-
 
 # Check for non-fedora shipped codec/multimedia packages. If they are installed, trigger media fixup to reset them
 MEDIAFIXUP=0
@@ -238,40 +226,40 @@ media_fixup() {
         sudo rpm -e --nodeps x265.x86_64 &> /dev/null
         sudo rpm -e --nodeps x265-libs.x86_64 &> /dev/null
         sudo rpm -e --nodeps x265-libs.i686 &> /dev/null
-        sudo dnf remove -y qt5-qtwebengine-freeworld &> /dev/null
-        sudo dnf remove -y mozilla-openh264 &> /dev/null
+        sudo dnf5 remove -y qt5-qtwebengine-freeworld &> /dev/null
+        sudo dnf5 remove -y mozilla-openh264 &> /dev/null
 
-        sudo dnf install -y ffmpeg-free --refresh
-        sudo dnf install -y libavcodec-free.x86_64 libavcodec-free.i686
-        sudo dnf install -y libavutil-free.x86_64 libavutil-free.i686
-        sudo dnf install -y libswresample-free.x86_64 libswresample-free.i686
-        sudo dnf install -y libavformat-free.x86_64 libavformat-free.i686
-        sudo dnf install -y libpostproc-free.x86_64 libpostproc-free.i686
-        sudo dnf install -y libswscale-free.x86_64 libswscale-free.i686
-        sudo dnf install -y libavfilter-free.x86_64 libavfilter-free.i686
-        sudo dnf install -y libavdevice-free.x86_64 libavdevice-free.i686
-        sudo dnf install -y mesa-va-drivers.x86_64
-        sudo dnf install -y mesa-vdpau-drivers.x86_64
-        sudo dnf install -y gstreamer1-plugins-bad-free-extras.x86_64
+        sudo dnf5 install -y ffmpeg-free --refresh
+        sudo dnf5 install -y libavcodec-free.x86_64 libavcodec-free.i686
+        sudo dnf5 install -y libavutil-free.x86_64 libavutil-free.i686
+        sudo dnf5 install -y libswresample-free.x86_64 libswresample-free.i686
+        sudo dnf5 install -y libavformat-free.x86_64 libavformat-free.i686
+        sudo dnf5 install -y libpostproc-free.x86_64 libpostproc-free.i686
+        sudo dnf5 install -y libswscale-free.x86_64 libswscale-free.i686
+        sudo dnf5 install -y libavfilter-free.x86_64 libavfilter-free.i686
+        sudo dnf5 install -y libavdevice-free.x86_64 libavdevice-free.i686
+        sudo dnf5 install -y mesa-va-drivers.x86_64
+        sudo dnf5 install -y mesa-vdpau-drivers.x86_64
+        sudo dnf5 install -y gstreamer1-plugins-bad-free-extras.x86_64
 
         echo "INFO: Updating multimedia packages to codec-enabled versions."
-        sudo dnf swap -y noopenh264.x86_64 openh264.x86_64
-        sudo dnf remove -y noopenh264.i686 &> /dev/null
-        sudo dnf install -y mozilla-openh264.x86_64
-        sudo dnf install -y x264-libs.x86_64
-        sudo dnf install -y x264-libs.i686
-        sudo dnf install -y x265-libs.x86_64
-        sudo dnf install -y x265-libs.i686
+        sudo dnf5 swap -y noopenh264.x86_64 openh264.x86_64
+        sudo dnf5 remove -y noopenh264.i686 &> /dev/null
+        sudo dnf5 install -y mozilla-openh264.x86_64
+        sudo dnf5 install -y x264-libs.x86_64
+        sudo dnf5 install -y x264-libs.i686
+        sudo dnf5 install -y x265-libs.x86_64
+        sudo dnf5 install -y x265-libs.i686
 
-        sudo dnf group install -y multimedia --exclude=ffmpeg,ffmpeg-libs,qt5-qtwebengine-freeworld
+        sudo dnf5 group install -y multimedia --exclude=ffmpeg,ffmpeg-libs,qt5-qtwebengine-freeworld
 
         if [[ $(rpm -qa | grep libavcodec-freeworld | wc -l) < 2 ]]; then
-          sudo dnf install -y libavcodec-freeworld.x86_64 libavcodec-freeworld.i686
+          sudo dnf5 install -y libavcodec-freeworld.x86_64 libavcodec-freeworld.i686
         fi
 
         # Swap limited VAAPI encoders with full function versions
-        sudo dnf swap -y mesa-va-drivers mesa-va-drivers-freeworld
-        sudo dnf swap -y mesa-vdpau-drivers mesa-vdpau-drivers-freeworld
+        sudo dnf5 swap -y mesa-va-drivers mesa-va-drivers-freeworld
+        sudo dnf5 swap -y mesa-vdpau-drivers mesa-vdpau-drivers-freeworld
 }
 
 # Check for media codecs
@@ -306,10 +294,10 @@ NVIDIA_FIXUPS=""
 nvkernmod=$(sudo lspci -kD | grep -iEA3 '^[[:alnum:]]{4}:[[:alnum:]]{2}:[[:alnum:]]{2}.*VGA|3D' | grep -iA3 nvidia | grep -i 'kernel driver' | grep -iE 'vfio-pci|nvidia')
 
 if [[ ! -z $(rpm -qa | grep kmod-nvidia | grep 545) ]]; then
-  if [[ -z $(dnf repolist | grep nobara-nvidia-new-feature-39) ]]; then
-    sudo dnf remove -y kmod-nvidia* &> /dev/null
-    sudo dnf remove -y akmod-nvidia* &> /dev/null
-    sudo dnf remove -y nvidia* &> /dev/null
+  if [[ -z $(dnf5 repolist | grep nobara-nvidia-new-feature-39) ]]; then
+    sudo dnf5 remove -y kmod-nvidia* &> /dev/null
+    sudo dnf5 remove -y akmod-nvidia* &> /dev/null
+    sudo dnf5 remove -y nvidia* &> /dev/null
   fi
 fi
 
@@ -389,7 +377,7 @@ if [[ ! -z $nvkernmod ]]; then
     echo "Reinstalling some missing Nvidia packages"
     echo "#####"
 
-    sudo dnf install -y $NVIDIA_FIXUPS
+    sudo dnf5 install -y $NVIDIA_FIXUPS
   fi
 
 fi
@@ -401,8 +389,8 @@ if [[ -n $(sudo dmesg | grep 'ROG Ally') ]]; then
     echo "ROG Ally detected, installing rogue-enemy for functionality"
     echo "#####"
     sudo systemctl disable --now handycon &> /dev/null
-    sudo dnf remove -y HandyGCCS &> /dev/null
-    sudo dnf install -y rogue-enemy
+    sudo dnf5 remove -y HandyGCCS &> /dev/null
+    sudo dnf5 install -y rogue-enemy
   fi
 fi
 
@@ -412,35 +400,35 @@ if [[ -n $(sudo dmesg | grep 'Legion Go') ]]; then
     echo "Lenovo Legion Go detected, installing lgcd for functionality"
     echo "#####"
     sudo systemctl disable --now handycon &> /dev/null
-    sudo dnf remove -y HandyGCCS &> /dev/null
-    sudo dnf install -y lgcd
+    sudo dnf5 remove -y HandyGCCS &> /dev/null
+    sudo dnf5 install -y lgcd
   fi
 fi
 
 echo "#####"
 echo "Performing distribution sync to prevent package update mismatches"
 echo "#####"
-sudo -S dnf distro-sync -y | sed 's/plasma-lookandfeel-nobara-steamdeck-additions/steamdeck-additions/g'
+sudo -S dnf5 distro-sync -y | sed 's/plasma-lookandfeel-nobara-steamdeck-additions/steamdeck-additions/g'
 
 echo "#####"
 echo "Updating the system"
 echo "#####"
-sudo -S dnf update -y
+sudo -S dnf5 update -y
 
 # Remove some known problematic packages
 # unneeded, bsdtar is shipped by fedora can extract rar files
-sudo dnf remove -y unrar &> /dev/null
+sudo dnf5 remove -y unrar &> /dev/null
 
 # unneeded and regularly cause breakage between rpmfusion and fedora upstream
-sudo dnf remove -y qt5-qtwebengine-freeworld &> /dev/null
-sudo dnf remove -y qt6-qtwebengine-freeworld &> /dev/null
+sudo dnf5 remove -y qt5-qtwebengine-freeworld &> /dev/null
+sudo dnf5 remove -y qt6-qtwebengine-freeworld &> /dev/null
 
 # known to be problematic/cause theming problems in obs-studio
-sudo dnf remove -y qgnomeplatform-qt6 &> /dev/null
-sudo dnf remove -y qgnomeplatform-qt5 &> /dev/null
+sudo dnf5 remove -y qgnomeplatform-qt6 &> /dev/null
+sudo dnf5 remove -y qgnomeplatform-qt5 &> /dev/null
 
 # accidentally added to ISOs
-sudo dnf remove -y musescore &> /dev/null
+sudo dnf5 remove -y musescore &> /dev/null
 
 if [ -e /etc/nobara/newinstall ]; then
 	rm -Rf /etc/nobara/newinstall
