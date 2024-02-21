@@ -457,6 +457,7 @@ dnf_install_progress() {
 }
 
 flatpak_install_progress() {
+    export XDG_DATA_DIRS=$USERHOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share:/var/lib/snapd/desktop
 	if [[ -n $DISPLAY ]] ; then
 		if zenity --question --text="Flatpak has been detected! Would like to update all Flatpaks on your system?" 2>/dev/null
 		then
