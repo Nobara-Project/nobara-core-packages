@@ -27,7 +27,8 @@ if [[ -n $DISPLAY ]] ; then
       if [[ ! -z $(w | grep $USER | grep "gamescope-session-plus@steam.service") ]];then
         LD_PRELOAD="" konsole -e /bin/bash -c "sudo /etc/nobara/scripts/nobara-updater/nobara-sync.sh nobara-cli $USER"
       else
-        DISPLAY="" sudo /etc/nobara/scripts/nobara-updater/nobara-sync.sh nobara-cli $USER
+        unset DISPLAY
+        sudo /etc/nobara/scripts/nobara-updater/nobara-sync.sh nobara-cli $USER
       fi
     fi
 else
