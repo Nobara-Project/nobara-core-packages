@@ -297,7 +297,7 @@ class Application:
         subprocess.Popen(["/etc/nobara/scripts/nobara-welcome/nvidia.sh"], shell=True)
     ### ROCm ###
     def enter_rocm(self, widget):
-        subprocess.Popen(["/usr/lib/pika/welcome/xdg-terminal '/usr/lib/pika/welcome/pkcon-install.sh install nobara-rocm-meta'"], shell=True)
+        subprocess.Popen(["/etc/nobara/scripts/nobara-welcome/xdg-terminal '/etc/nobara/scripts/nobara-welcome/pkcon-install.sh install rocm-meta'"], shell=True)
     ### XONE ###
     def enter_xone(self, widget):
         subprocess.Popen(["/usr/bin/nobara-controller-config"], shell=True)

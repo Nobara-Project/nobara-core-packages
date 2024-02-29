@@ -804,6 +804,7 @@ communities called "servers".</property>
                         <property name="orientation">vertical</property>
                         <child>
                           <object class="GtkBox" id="rocm_box">
+                            <property name="visible">True</property>
                             <property name="can-focus">False</property>
                             <property name="spacing">10</property>
                             <child>
