@@ -1058,7 +1058,6 @@ Install fixups to allow DaVinci Resolve to run.
                             <property name="position">3</property>
                           </packing>
                         </child>
-
                         <child>
                           <object class="GtkBox" id="steamfix_box">
                             <property name="visible">True</property>
@@ -1122,7 +1121,6 @@ Install fixups to allow a few native linux Steam games to work (see https://gist
                             <property name="position">3</property>
                           </packing>
                         </child>
-
                       </object>
                     </child>
                   </object>
@@ -1956,6 +1954,67 @@ Install fixups to allow a few native linux Steam games to work (see https://gist
                             <property name="fill">True</property>
                             <property name="padding">4</property>
                             <property name="position">4</property>
+                          </packing>
+                        </child>
+                        <child>
+                          <object class="GtkBox" id="nobara_github_box">
+                            <property name="visible">True</property>
+                            <property name="can-focus">False</property>
+                            <property name="spacing">10</property>
+                            <child>
+                              <object class="GtkImage" id="nobara_project_logo">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="margin-start">10</property>
+                                <property name="pixel-size">80</property>
+                                <property name="icon-name">fedora-logo-icon</property>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">0</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkLabel" id="nobara_github_text">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="label" translatable="yes">&lt;big&gt;Contribute code to Nobara Project's &lt;b&gt;Github&lt;/b&gt;&lt;/big&gt;</property>
+                                <property name="use-markup">True</property>
+                                <property name="wrap">True</property>
+                                <property name="xalign">0</property>
+                              </object>
+                              <packing>
+                                <property name="expand">True</property>
+                                <property name="fill">True</property>
+                                <property name="position">1</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="nobara_project_button">
+                                <property name="label" translatable="yes">Open</property>
+                                <property name="visible">True</property>
+                                <property name="can-focus">True</property>
+                                <property name="receives-default">True</property>
+                                <property name="halign">center</property>
+                                <property name="valign">center</property>
+                                <property name="margin-end">10</property>
+                                <property name="margin-top">10</property>
+                                <property name="margin-bottom">10</property>
+                                <signal name="pressed" handler="enter_nobara_github" swapped="no"/>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">2</property>
+                              </packing>
+                            </child>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="padding">4</property>
+                            <property name="position">6</property>
                           </packing>
                         </child>
                       </object>

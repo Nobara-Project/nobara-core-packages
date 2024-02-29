@@ -168,6 +168,7 @@ class Application:
             ge_gitlab_logo = self.builder.get_object("ge_gitlab_logo")
             ge_github_logo = self.builder.get_object("ge_github_logo")
             cosmo_github_logo = self.builder.get_object("cosmo_github_logo")
+            nobara_project_logo = self.builder.get_object("nobara_project_logo")
             
             ###
             
@@ -227,6 +228,7 @@ class Application:
             ge_gitlab_logo = self.builder.get_object("ge_gitlab_logo")
             ge_github_logo = self.builder.get_object("ge_github_logo")
             cosmo_github_logo = self.builder.get_object("cosmo_github_logo")
+            nobara_project_logo = self.builder.get_object("nobara_project_logo")
             
             update_logo.set_from_icon_name("system-software-update", 80)
             nvidia_logo.set_from_icon_name("nvidia", 80)
@@ -262,6 +264,7 @@ class Application:
             ge_gitlab_logo.set_from_icon_name("gitlab", 80)
             ge_github_logo.set_from_icon_name("github", 80)
             cosmo_github_logo.set_from_icon_name("github", 80)
+            nobara_project_logo.set_from_icon_name("fedora-logo-icon", 80)
         pass
         
     def on_sidebar_btn_pressed(self, widget):
@@ -365,6 +368,9 @@ class Application:
     ### COSMO GITHUB ###
     def enter_cosmo_github(self, widget):
         subprocess.Popen(["xdg-open https://github.com/CosmicFusion"], shell=True)
+    ### NOBARA GITHUB ###
+    def enter_nobara_github(self, widget):
+        subprocess.Popen(["xdg-open https://github.com/Nobara-Project"], shell=True)
     ###############################################################
     #### Install Window ####
     
