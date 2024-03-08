@@ -1,12 +1,12 @@
-import "components"
+import org.kde.breeze.components
 
 import QtQuick 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Controls 2.15 as QQC2
 
-import org.kde.plasma.core 2.0 as PlasmaCore
 import org.kde.plasma.components 3.0 as PlasmaComponents3
 import org.kde.plasma.extras 2.0 as PlasmaExtras
+import org.kde.kirigami 2.20 as Kirigami
 
 SessionManagementScreen {
     id: root
@@ -19,7 +19,7 @@ SessionManagementScreen {
 
     //the y position that should be ensured visible when the on screen keyboard is visible
     property int visibleBoundary: mapFromItem(loginButton, 0, 0).y
-    onHeightChanged: visibleBoundary = mapFromItem(loginButton, 0, 0).y + loginButton.height + PlasmaCore.Units.smallSpacing
+    onHeightChanged: visibleBoundary = mapFromItem(loginButton, 0, 0).y + loginButton.height + Kirigami.Units.smallSpacing
 
     property int fontSize: parseInt(config.fontSize)
 
@@ -101,11 +101,6 @@ SessionManagementScreen {
 
             placeholderText: i18nd("plasma_lookandfeel_org.kde.lookandfeel", "Password")
             focus: !showUsernamePrompt || lastUserName
-            echoMode: TextInput.Password
-            revealPasswordButtonShown: true
-        
-            // Disable reveal password action because SDDM does not have the breeze icon set loaded
-            rightActions: []
 
             onAccepted: {
                 if (root.loginScreenUiVisible) {
@@ -121,7 +116,7 @@ SessionManagementScreen {
 
             //if empty and left or right is pressed change selection in user switch
             //this cannot be in keys.onLeftPressed as then it doesn't reach the password box
-            Keys.onPressed: {
+            Keys.onPressed: event => {
                 if (event.key === Qt.Key_Left && !text) {
                     userList.decrementCurrentIndex();
                     event.accepted = true

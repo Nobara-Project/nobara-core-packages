@@ -9,7 +9,7 @@ X-KDE-PluginInfo-License=GPL version 3
 X-KDE-PluginInfo-Name=Nobara
 X-KDE-PluginInfo-Version=0.0.17
 X-KDE-PluginInfo-Website=
-X-Plasma-API=5.0
+X-Plasma-API=6.0
 
 [ContrastEffect]
 enabled=true

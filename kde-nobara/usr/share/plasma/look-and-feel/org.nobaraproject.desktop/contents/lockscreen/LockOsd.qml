@@ -5,10 +5,11 @@
 */
 
 import QtQuick 2.0
-import org.kde.plasma.core 2.0 as PlasmaCore
+import org.kde.ksvg 1.0 as KSvg
+import org.kde.kirigami 2.20 as Kirigami
 import "../osd"
 
-PlasmaCore.FrameSvgItem {
+KSvg.FrameSvgItem {
     id: osd
 
     property alias timeout: osdItem.timeout
@@ -21,7 +22,10 @@ PlasmaCore.FrameSvgItem {
     visible: false
     width: osdItem.width + margins.left + margins.right
     height: osdItem.height + margins.top + margins.bottom
-    imagePath: "widgets/background"
+    imagePath: "dialogs/background"
+
+    Kirigami.Theme.inherit: false
+    Kirigami.Theme.colorSet: Kirigami.Theme.Window
 
     function show() {
         osd.visible = true;
@@ -29,11 +33,10 @@ PlasmaCore.FrameSvgItem {
     }
 
     // avoid leaking ColorScope of lock screen theme into the OSD "popup"
-    PlasmaCore.ColorScope {
+    Item {
         width: osdItem.width
         height: osdItem.height
         anchors.centerIn: parent
-        colorGroup: PlasmaCore.Theme.NormalColorGroup
 
         OsdItem {
             id: osdItem
@@ -43,7 +46,7 @@ PlasmaCore.FrameSvgItem {
     SequentialAnimation {
         id: hideAnimation
         // prevent press and hold from flickering
-        PauseAnimation { duration: PlasmaCore.Units.shortDuration }
+        PauseAnimation { duration: Kirigami.Units.shortDuration }
         NumberAnimation {
             target: osd
             property: "opacity"

@@ -1,4 +1,5 @@
 {
+    "KPackageStructure": "Plasma/LayoutTemplate",
     "KPlugin": {
         "Authors": [
             {
@@ -14,12 +15,14 @@
                 "Name[da]": "Aaron Seigo",
                 "Name[de]": "Aaron Seigo",
                 "Name[en_GB]": "Aaron Seigo",
+                "Name[eo]": "Aaron Seigo",
                 "Name[es]": "Aaron Seigo",
                 "Name[et]": "Aaron Seigo",
                 "Name[eu]": "Aaron Seigo",
                 "Name[fi]": "Aaron Seigo",
                 "Name[fr]": "Aaron Seigo",
                 "Name[gl]": "Aaron Seigo",
+                "Name[he]": "אהרון סייגו",
                 "Name[hu]": "Aaron Seigo",
                 "Name[ia]": "Aaron Seigo",
                 "Name[id]": "Aaron Seigo",
@@ -30,6 +33,7 @@
                 "Name[ka]": "აარონ სეიგო",
                 "Name[ko]": "Aaron Seigo",
                 "Name[lt]": "Aaron Seigo",
+                "Name[lv]": "Aaron Seigo",
                 "Name[nl]": "Aaron Seigo",
                 "Name[nn]": "Aaron Seigo",
                 "Name[pl]": "Aaron Seigo",
@@ -61,12 +65,14 @@
         "Description[da]": "Standardpanel med programstarter, opgavelinje og statusområde",
         "Description[de]": "Standardkontrollleiste mit dem Anwendungsstarter, Fensterleiste und dem Systemabschnitt der Kontrollleiste",
         "Description[en_GB]": "Default panel featuring application launcher, task manager and system tray",
+        "Description[eo]": "Defaŭlta panelo kun aplikaĵlanĉilo, taskadministrilo kaj sistempleto",
         "Description[es]": "Panel por defecto que contiene un lanzador de aplicaciones, un gestor de tareas y la bandeja del sistema",
         "Description[et]": "Vaikimisi paneel rakenduste käivitaja, ülesannete halduri ja süsteemisalvega",
         "Description[eu]": "Lehenetsitako panela, aplikazio abiarazlea, ataza kudeatzailea eta sistemaren erretilua dituena",
         "Description[fi]": "Oletuspaneeli, jossa sovelluskäynnistin, tehtävänhallinta ja ilmoitusalue",
         "Description[fr]": "Panneau par défaut contenant le lanceur d'application, le gestionnaire de tâches et la boîte à miniatures.",
         "Description[gl]": "Panel predeterminado que contén un iniciador de aplicacións, un xestor de tarefas e unha área de notificación.",
+        "Description[he]": "לוח ברירת מחדל שמציג משגר חלונות, מנהל משימות ומגש מערכת",
         "Description[hu]": "Az alapértelmezett panel, amely tartalmazza az alkalmazásindítót, a feladatkezelőt és a rendszertálcát",
         "Description[ia]": "Pannello predefinite con lanceator de application, administrator de carga e tabuliero de systema ",
         "Description[id]": "Perfituran panel bawaan peluncur aplikasi, pengelola tugas dan baki sistem",
@@ -76,8 +82,10 @@
         "Description[ka]": "ნაგულისხმები პანელი, რომელიც აპლიკაციების გამშვებს, აპლიკაციების მმართველს და საათს შეიცავს",
         "Description[ko]": "앱 실행기, 작업 관리자, 시스템 트레이가 있는 기본 패널",
         "Description[lt]": "Numatytasis skydelis su programų paleidykle, užduočių tvarkytuve ir sistemos dėklu",
+        "Description[lv]": "Noklusējuma panelis, kas satur lietotņu palaidēju, uzdevumu pārvaldnieku un sistēmas ikonu joslu",
         "Description[nl]": "Standaard paneel met starter van toepassingen, taakbeheerder en systeemvak",
         "Description[nn]": "Standardpanel med programstartar, oppgåvehandsamar og systemtrau",
+        "Description[pa]": "ਡਿਫਾਲਟ ਪੈਨਲ ਵਿੱਚ ਐਪਲੀਕੇਸ਼ਨ ਲਾਂਚਰ, ਟਾਸਕ ਮੈਨੇਜਰ ਅਤੇ ਸਿਸਟਮ ਟਰੇ ਹੁੰਦੇ ਹਨ",
         "Description[pl]": "Domyślny panel zawierający uruchamiacza programów, pasek zadań i tackę systemową",
         "Description[pt]": "O painel predefinido, que possui o lançador de aplicações, o gestor de tarefas e a bandeja do sistema",
         "Description[pt_BR]": "Painel padrão contendo o lançador de aplicativos, gerenciador de tarefas e área de notificação",
@@ -96,11 +104,7 @@
         "EnabledByDefault": true,
         "Id": "org.kde.plasma.desktop.nobaraPanel",
         "License": "LGPLv2+",
-        "Name": "Nobara Panel",
-        "ServiceTypes": [
-            "Plasma/LayoutTemplate"
-        ],
-        "Website": "https://www.kde.org/plasma-desktop"
+        "Name": "Nobara Panel"
     },
     "X-Plasma-ContainmentCategories": [
         "panel"

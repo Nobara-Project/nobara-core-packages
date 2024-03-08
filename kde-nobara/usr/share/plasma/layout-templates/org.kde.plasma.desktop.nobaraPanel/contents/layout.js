@@ -3,6 +3,7 @@ var panelScreen = panel.screen
 
 // No need to set panel.location as ShellCorona::addPanel will automatically pick one available edge
 
+// For an Icons-Only Task Manager on the bottom, *3 is too much, *2 is too little
 // Round down to next highest even number since the Panel size widget only displays
 // even numbers
 panel.height = 2 * Math.floor(gridUnit * 2 / 2)
@@ -74,5 +75,6 @@ if (langIds.indexOf(languageId) != -1) {
 
 panel.addWidget("org.kde.plasma.systemtray")
 panel.addWidget("org.kde.plasma.digitalclock")
-panel.addWidget("org.kde.plasma.win7showdesktop")
+panel.addWidget("org.kde.plasma.showdesktop")
+//panel.addWidget("org.kde.plasma.win7showdesktop")
 
