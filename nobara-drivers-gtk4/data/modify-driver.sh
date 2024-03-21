@@ -2,6 +2,7 @@
 
 set -e
 
+# Special override for nvidia-driver
 if [[ "$1" = "nvidia-driver" ]]
 then
 	if rpm -q nvidia-driver
@@ -38,9 +39,8 @@ then
 		systemctl enable --now akmods; akmods
 	fi
 	exit 0
-fi
-
-if [[ "$1" = "xone" ]]
+# Special override for xone
+elif [[ "$1" = "xone" ]]
 then
 	if rpm -q xone
 	then
@@ -52,15 +52,13 @@ then
 		lpf update xone-firmware
 	fi
 	exit 0
-fi
-
-if [[ "$1" = "rocm-meta" ]]
-then
-	if rpm -q rocm-meta
+# Standard case
+else
+	if rpm -q "$1"
 	then
-		pkcon remove -y rocm-meta
+		pkcon remove -y "$1"
 	else
-		pkcon install -y rocm-meta
+		pkcon install -y "$1"
 	fi
 	exit 0
 fi
