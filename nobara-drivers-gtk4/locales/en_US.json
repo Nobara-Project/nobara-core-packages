@@ -1,0 +1,21 @@
+{
+    "app_name": "nobaraOS Driver Manager",
+    "app_dev": "Cosmo",
+    "loading_label_label": "Downloading driver database...",
+    "loading_no_internet_box_text_title": "Network Error!",
+    "loading_no_internet_box_text_description": "An Internet Connection is needed to download the driver database.",
+    "device_label_label_prefix": "Device: ",
+    "driver_install_button_label": "Install",
+    "driver_install_button_tooltip_text": "Install the driver package.",
+    "driver_remove_button_label": "Uninstall",
+    "driver_remove_button_tooltip_text": "Uninstall the driver package.",
+    "driver_expander_row_title_suffix": " (WARNING: THIS DRIVER IS EXPERIMENTAL USE AT YOUR OWN RISK!)",
+    "driver_install_dialog_heading": "Driver Processing Log",
+    "driver_install_dialog_ok_label": "Reboot later",
+    "driver_install_dialog_reboot_label": "Reboot now",
+    "driver_install_dialog_success_true": "Driver processed successfully!",
+    "driver_install_dialog_success_false": "Driver did not process successfully!",
+    "window_no_drivers_box_text_title": "No Devices require any special drivers",
+    "window_no_drivers_box_text_description": "No Devices installed on your system, have a special driver in our database.",
+    "driver_status_icon_tooltip_text": "This Driver is installed!"
+}

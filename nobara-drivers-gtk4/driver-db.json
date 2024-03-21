@@ -1,0 +1,28 @@
+{
+  "drivers": [
+    {
+      "id": 0,
+      "driver": "xone-dkms",
+      "icon": "input-gaming",
+      "experimental": false,
+      "removable": true,
+      "detection": "lsusb | grep -i xbox"
+    },
+    {
+      "id": 1,
+      "driver": "rocm-meta",
+      "icon": "amd",
+      "experimental": false,
+      "removable": true,
+      "detection": "lspci -D | grep -iE 'VGA|3D' | grep -i amd"
+    },
+    {
+      "id": 2,
+      "driver": "nvidia-driver",
+      "icon": "nvidia",
+      "experimental": false,
+      "removable": true,
+      "detection": "lspci -D | grep -iE 'VGA|3D' | grep -i nvidia"
+    }
+  ]
+}

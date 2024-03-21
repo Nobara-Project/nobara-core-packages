@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Nobara Driver Manager
+Exec=nobara-drivers
+Icon=com.github.nobaraproject.nobaradrivers
+Terminal=false
+Type=Application
+Encoding=UTF-8
+Categories=Application;System;Settings;XFCE;X-XFCE-SettingsDialog;X-XFCE-SystemSettings;
+StartupNotify=true
