@@ -1,4 +1,4 @@
 #!/bin/bash
 #nobara-sync "$@"
 
-while true;do echo 1; done
+### Put an update script that output info to terminal stdout

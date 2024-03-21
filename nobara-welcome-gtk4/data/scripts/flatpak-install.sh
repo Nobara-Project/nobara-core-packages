@@ -35,6 +35,14 @@ if [[ $INTERNET == yes ]]; then
 			zenity --notification --text="$APPNICK $1 has failed!" && export SUCCESS=no
 		fi
 	fi
+	
+	if [[ $1 == 'check' ]]; then
+		if [[ -z $(flatpak list | grep -i $2) ]]; then
+			exit 1
+		else
+			exit 0
+		fi
+	fi
 else
 	zenity --error --text="No internet connection."
 fi

@@ -20,40 +20,52 @@ struct recommended_addons_entry {
     title: String,
     subtitle: String,
     icon: String,
+    pkgman: String,
     checkpkg: String,
     packages: String,
 }
 
-const ADDON_COMMAND_PROG1: &str = r###"
-#! /bin/bash
-set -e
-export DEBIAN_FRONTEND=noninteractive
-DEBIAN_FRONTEND=noninteractive
-apt update -y -o Dpkg::Options::="--force-confnew"
-
-"###;
-
-const ADDON_COMMAND_PROG2: &str = r###"
-
-apt autoremove -y -o Dpkg::Options::="--force-confnew"
-"###;
-fn run_addon_command(
+fn run_pkcon_command(
     log_loop_sender: async_channel::Sender<String>,
     operation: &str,
     entry_packages: &str,
 ) -> Result<(), std::boxed::Box<dyn Error + Send + Sync>> {
     let (pipe_reader, pipe_writer) = os_pipe::pipe()?;
     let child = cmd!(
-        "pkexec",
         "bash",
         "-c",
-        ADDON_COMMAND_PROG1.to_owned()
-            + "dnf "
+        "/usr/lib/nobara/nobara-welcome/scripts/pkcon-install.sh ".to_owned()
             + operation
             + " "
             + &entry_packages
-            + " -y "
-            + ADDON_COMMAND_PROG2
+    )
+    .stderr_to_stdout()
+    .stdout_file(pipe_writer)
+    .start()?;
+    for line in BufReader::new(pipe_reader).lines() {
+        thread::sleep(time::Duration::from_secs(1));
+        log_loop_sender
+            .send_blocking(line?)
+            .expect("Channel needs to be opened.")
+    }
+    child.wait()?;
+
+    Ok(())
+}
+
+fn run_flatpak_command(
+    log_loop_sender: async_channel::Sender<String>,
+    operation: &str,
+    entry_packages: &str,
+) -> Result<(), std::boxed::Box<dyn Error + Send + Sync>> {
+    let (pipe_reader, pipe_writer) = os_pipe::pipe()?;
+    let child = cmd!(
+        "bash",
+        "-c",
+        "/usr/lib/nobara/nobara-welcome/scripts/flatpak-install.sh ".to_owned()
+            + operation
+            + " "
+            + &entry_packages
     )
     .stderr_to_stdout()
     .stdout_file(pipe_writer)
@@ -152,167 +164,327 @@ pub fn recommended_addons_page(
         let entry_title = recommended_addons_entry.title;
         let entry_subtitle = recommended_addons_entry.subtitle;
         let entry_icon = recommended_addons_entry.icon;
+        let entry_pkgman = recommended_addons_entry.pkgman;
         let entry_checkpkg = recommended_addons_entry.checkpkg;
         let entry_packages = recommended_addons_entry.packages;
 
-        gio::spawn_blocking(
-            clone!(@strong checkpkg_status_loop_sender, @strong entry_checkpkg => move || loop {
-                let checkpkg_command = Command::new("rpm")
-                    .arg("-q")
-                    .arg(&entry_checkpkg)
-                    .output()
-                    .expect("failed to execute process");
-                if checkpkg_command.status.success() {
-                    checkpkg_status_loop_sender.send_blocking(true).expect("The channel needs to be open.");
-                } else {
-                    checkpkg_status_loop_sender.send_blocking(false).expect("The channel needs to be open.");
-                }
-                thread::sleep(time::Duration::from_secs(6));
-            }),
-        );
-
-        let entry_row = adw::ActionRow::builder()
-            .title(t!(&entry_title))
-            .subtitle(t!(&entry_subtitle))
-            .vexpand(true)
-            .hexpand(true)
-            .build();
-        let entry_row_icon = gtk::Image::builder()
-            .icon_name(entry_icon)
-            .pixel_size(80)
-            .vexpand(true)
-            .valign(gtk::Align::Center)
-            .build();
-        let entry_row_button = gtk::Button::builder()
-            .vexpand(true)
-            .valign(gtk::Align::Center)
-            .build();
-        entry_buttons_size_group.add_widget(&entry_row_button);
-        entry_row.add_prefix(&entry_row_icon);
-        entry_row.add_suffix(&entry_row_button);
-
-        let recommended_addons_command_log_terminal_buffer = gtk::TextBuffer::builder().build();
-
-        let recommended_addons_command_log_terminal = gtk::TextView::builder()
-            .vexpand(true)
-            .hexpand(true)
-            .editable(false)
-            .buffer(&recommended_addons_command_log_terminal_buffer)
-            .build();
-
-        let recommended_addons_command_log_terminal_scroll = gtk::ScrolledWindow::builder()
-            .width_request(400)
-            .height_request(200)
-            .vexpand(true)
-            .hexpand(true)
-            .child(&recommended_addons_command_log_terminal)
-            .build();
-
-        let recommended_addons_command_dialog = adw::MessageDialog::builder()
-            .transient_for(window)
-            .hide_on_close(true)
-            .extra_child(&recommended_addons_command_log_terminal_scroll)
-            .width_request(400)
-            .height_request(200)
-            .heading(t!("recommended_addons_command_dialog_heading"))
-            .build();
-        recommended_addons_command_dialog.add_response(
-            "recommended_addons_command_dialog_ok",
-            &t!("recommended_addons_command_dialog_ok_label").to_string(),
-        );
-
-        let checkpkg_status_loop_context = MainContext::default();
-        // The main loop executes the asynchronous block
-        checkpkg_status_loop_context.spawn_local(
-            clone!(@weak entry_row_button, @strong checkpkg_status_loop_receiver => async move {
-                while let Ok(state) = checkpkg_status_loop_receiver.recv().await {
-                    if state == false {
-                        entry_row_button.remove_css_class("destructive-action");
-                        entry_row_button.set_label(&t!("entry_row_button_install").to_string());
-                        entry_row_button.add_css_class("suggested-action");
-                        entry_row_button.set_widget_name("false")
+        if entry_pkgman == "pkcon" {
+            gio::spawn_blocking(
+                clone!(@strong checkpkg_status_loop_sender, @strong entry_checkpkg => move || loop {
+                    let checkpkg_command = Command::new("rpm")
+                        .arg("-q")
+                        .arg(&entry_checkpkg)
+                        .output()
+                        .expect("failed to execute process");
+                    if checkpkg_command.status.success() {
+                        checkpkg_status_loop_sender.send_blocking(true).expect("The channel needs to be open.");
                     } else {
-                        entry_row_button.remove_css_class("suggested-action");
-                        entry_row_button.set_label(&t!("entry_row_button_remove").to_string());
-                        entry_row_button.add_css_class("destructive-action");
-                        entry_row_button.set_widget_name("true")
+                        checkpkg_status_loop_sender.send_blocking(false).expect("The channel needs to be open.");
                     }
-                }
-            }),
-        );
-
-        //
-        let log_loop_context = MainContext::default();
-        // The main loop executes the asynchronous block
-        log_loop_context.spawn_local(clone!(@weak recommended_addons_command_log_terminal_buffer, @weak recommended_addons_command_dialog, @strong log_loop_receiver => async move {
-            while let Ok(state) = log_loop_receiver.recv().await {
-                recommended_addons_command_log_terminal_buffer.insert(&mut recommended_addons_command_log_terminal_buffer.end_iter(), &("\n".to_string() + &state))
-            }
-        }));
-
-        let log_status_loop_context = MainContext::default();
-        // The main loop executes the asynchronous block
-        log_status_loop_context.spawn_local(clone!(@weak recommended_addons_command_dialog, @strong log_status_loop_receiver => async move {
-                    while let Ok(state) = log_status_loop_receiver.recv().await {
-                        if state == true {
-                            recommended_addons_command_dialog.set_response_enabled("recommended_addons_command_dialog_ok", true);
-                            recommended_addons_command_dialog.set_body(&t!("recommended_addons_command_dialog_success_true"));
+                    thread::sleep(time::Duration::from_secs(10));
+                }),
+            );
+    
+            let entry_row = adw::ActionRow::builder()
+                .title(t!(&entry_title))
+                .subtitle(t!(&entry_subtitle))
+                .vexpand(true)
+                .hexpand(true)
+                .build();
+            let entry_row_icon = gtk::Image::builder()
+                .icon_name(entry_icon)
+                .pixel_size(80)
+                .vexpand(true)
+                .valign(gtk::Align::Center)
+                .build();
+            let entry_row_button = gtk::Button::builder()
+                .vexpand(true)
+                .valign(gtk::Align::Center)
+                .build();
+            entry_buttons_size_group.add_widget(&entry_row_button);
+            entry_row.add_prefix(&entry_row_icon);
+            entry_row.add_suffix(&entry_row_button);
+    
+            let recommended_addons_command_log_terminal_buffer = gtk::TextBuffer::builder().build();
+    
+            let recommended_addons_command_log_terminal = gtk::TextView::builder()
+                .vexpand(true)
+                .hexpand(true)
+                .editable(false)
+                .buffer(&recommended_addons_command_log_terminal_buffer)
+                .build();
+    
+            let recommended_addons_command_log_terminal_scroll = gtk::ScrolledWindow::builder()
+                .width_request(400)
+                .height_request(200)
+                .vexpand(true)
+                .hexpand(true)
+                .child(&recommended_addons_command_log_terminal)
+                .build();
+    
+            let recommended_addons_command_dialog = adw::MessageDialog::builder()
+                .transient_for(window)
+                .hide_on_close(true)
+                .extra_child(&recommended_addons_command_log_terminal_scroll)
+                .width_request(400)
+                .height_request(200)
+                .heading(t!("recommended_addons_command_dialog_heading"))
+                .build();
+            recommended_addons_command_dialog.add_response(
+                "recommended_addons_command_dialog_ok",
+                &t!("recommended_addons_command_dialog_ok_label").to_string(),
+            );
+    
+            let checkpkg_status_loop_context = MainContext::default();
+            // The main loop executes the asynchronous block
+            checkpkg_status_loop_context.spawn_local(
+                clone!(@weak entry_row_button, @strong checkpkg_status_loop_receiver => async move {
+                    while let Ok(state) = checkpkg_status_loop_receiver.recv().await {
+                        if state == false {
+                            entry_row_button.remove_css_class("destructive-action");
+                            entry_row_button.set_label(&t!("entry_row_button_install").to_string());
+                            entry_row_button.add_css_class("suggested-action");
+                            entry_row_button.set_widget_name("false")
                         } else {
-                            recommended_addons_command_dialog.set_response_enabled("recommended_addons_command_dialog_ok", true);
-                            recommended_addons_command_dialog.set_body(&t!("recommended_addons_command_dialog_success_false"));
+                            entry_row_button.remove_css_class("suggested-action");
+                            entry_row_button.set_label(&t!("entry_row_button_remove").to_string());
+                            entry_row_button.add_css_class("destructive-action");
+                            entry_row_button.set_widget_name("true")
                         }
                     }
-            }));
-        //
-        recommended_addons_command_log_terminal_buffer.connect_changed(clone!(@weak recommended_addons_command_log_terminal, @weak recommended_addons_command_log_terminal_buffer,@weak recommended_addons_command_log_terminal_scroll => move |_|{
-               if recommended_addons_command_log_terminal_scroll.vadjustment().upper() - recommended_addons_command_log_terminal_scroll.vadjustment().value() > 100.0 {
-                    recommended_addons_command_log_terminal_scroll.vadjustment().set_value(recommended_addons_command_log_terminal_scroll.vadjustment().upper())
+                }),
+            );
+    
+            //
+            let log_loop_context = MainContext::default();
+            // The main loop executes the asynchronous block
+            log_loop_context.spawn_local(clone!(@weak recommended_addons_command_log_terminal_buffer, @weak recommended_addons_command_dialog, @strong log_loop_receiver => async move {
+                while let Ok(state) = log_loop_receiver.recv().await {
+                    recommended_addons_command_log_terminal_buffer.insert(&mut recommended_addons_command_log_terminal_buffer.end_iter(), &("\n".to_string() + &state))
                 }
             }));
-
-        entry_row_button.connect_clicked(clone!(@strong entry_packages, @weak entry_row_button, @weak window => move |_| {
-                recommended_addons_command_log_terminal_buffer.delete(&mut recommended_addons_command_log_terminal_buffer.bounds().0, &mut recommended_addons_command_log_terminal_buffer.bounds().1);
-                recommended_addons_command_dialog.set_response_enabled("recommended_addons_command_dialog_ok", false);
-                recommended_addons_command_dialog.set_body("");
-                recommended_addons_command_dialog.present();
-                if &entry_row_button.widget_name() == "true" {
-                    let log_status_loop_sender_clone = log_status_loop_sender.clone();
-                    let log_loop_sender_clone= log_loop_sender.clone();
-                    let entry_packages_clone= entry_packages.clone();
-                    std::thread::spawn(move || {
-                        let command = run_addon_command(log_loop_sender_clone, "remove", &entry_packages_clone);
-                        match command {
-                            Ok(_) => {
-                                println!("Status: Addon Command Successful");
-                                log_status_loop_sender_clone.send_blocking(true).expect("The channel needs to be open.");
-                            }
-                            Err(_) => {
-                                println!("Status: Addon Command Failed");
-                                log_status_loop_sender_clone.send_blocking(false).expect("The channel needs to be open.");
+    
+            let log_status_loop_context = MainContext::default();
+            // The main loop executes the asynchronous block
+            log_status_loop_context.spawn_local(clone!(@weak recommended_addons_command_dialog, @strong log_status_loop_receiver => async move {
+                        while let Ok(state) = log_status_loop_receiver.recv().await {
+                            if state == true {
+                                recommended_addons_command_dialog.set_response_enabled("recommended_addons_command_dialog_ok", true);
+                                recommended_addons_command_dialog.set_body(&t!("recommended_addons_command_dialog_success_true"));
+                            } else {
+                                recommended_addons_command_dialog.set_response_enabled("recommended_addons_command_dialog_ok", true);
+                                recommended_addons_command_dialog.set_body(&t!("recommended_addons_command_dialog_success_false"));
                             }
                         }
-                    });
-                } else {
-                    let log_status_loop_sender_clone = log_status_loop_sender.clone();
-                    let log_loop_sender_clone= log_loop_sender.clone();
-                    let entry_packages_clone= entry_packages.clone();
-                    std::thread::spawn(move || {
-                        let command = run_addon_command(log_loop_sender_clone, "install", &entry_packages_clone);
-                        match command {
-                            Ok(_) => {
-                                println!("Status: Addon Command Successful");
-                                log_status_loop_sender_clone.send_blocking(true).expect("The channel needs to be open.");
+                }));
+            //
+            recommended_addons_command_log_terminal_buffer.connect_changed(clone!(@weak recommended_addons_command_log_terminal, @weak recommended_addons_command_log_terminal_buffer,@weak recommended_addons_command_log_terminal_scroll => move |_|{
+                   if recommended_addons_command_log_terminal_scroll.vadjustment().upper() - recommended_addons_command_log_terminal_scroll.vadjustment().value() > 100.0 {
+                        recommended_addons_command_log_terminal_scroll.vadjustment().set_value(recommended_addons_command_log_terminal_scroll.vadjustment().upper())
+                    }
+                }));
+    
+            entry_row_button.connect_clicked(clone!(@strong entry_packages, @weak entry_row_button, @weak window => move |_| {
+                    recommended_addons_command_log_terminal_buffer.delete(&mut recommended_addons_command_log_terminal_buffer.bounds().0, &mut recommended_addons_command_log_terminal_buffer.bounds().1);
+                    recommended_addons_command_dialog.set_response_enabled("recommended_addons_command_dialog_ok", false);
+                    recommended_addons_command_dialog.set_body("");
+                    recommended_addons_command_dialog.present();
+                    if &entry_row_button.widget_name() == "true" {
+                        let log_status_loop_sender_clone = log_status_loop_sender.clone();
+                        let log_loop_sender_clone= log_loop_sender.clone();
+                        let entry_packages_clone= entry_packages.clone();
+                        std::thread::spawn(move || {
+                            let command = run_pkcon_command(log_loop_sender_clone, "remove", &entry_packages_clone);
+                            match command {
+                                Ok(_) => {
+                                    println!("Status: Addon Command Successful");
+                                    log_status_loop_sender_clone.send_blocking(true).expect("The channel needs to be open.");
+                                }
+                                Err(_) => {
+                                    println!("Status: Addon Command Failed");
+                                    log_status_loop_sender_clone.send_blocking(false).expect("The channel needs to be open.");
+                                }
                             }
-                            Err(_) => {
-                                println!("Status: Addon Command Failed");
-                                log_status_loop_sender_clone.send_blocking(false).expect("The channel needs to be open.");
+                        });
+                    } else {
+                        let log_status_loop_sender_clone = log_status_loop_sender.clone();
+                        let log_loop_sender_clone= log_loop_sender.clone();
+                        let entry_packages_clone= entry_packages.clone();
+                        std::thread::spawn(move || {
+                            let command = run_pkcon_command(log_loop_sender_clone, "install", &entry_packages_clone);
+                            match command {
+                                Ok(_) => {
+                                    println!("Status: Addon Command Successful");
+                                    log_status_loop_sender_clone.send_blocking(true).expect("The channel needs to be open.");
+                                }
+                                Err(_) => {
+                                    println!("Status: Addon Command Failed");
+                                    log_status_loop_sender_clone.send_blocking(false).expect("The channel needs to be open.");
+                                }
                             }
+                        });
+                    }
+            }));
+            recommended_addons_page_listbox.append(&entry_row)
+        } else if entry_pkgman == "flatpak" {
+            gio::spawn_blocking(
+                clone!(@strong checkpkg_status_loop_sender, @strong entry_checkpkg => move || loop {
+                    let checkpkg_command = Command::new("/usr/lib/nobara/nobara-welcome/scripts/flatpak-install.sh")
+                        .arg("check")
+                        .arg(&entry_checkpkg)
+                        .output()
+                        .expect("failed to execute process");
+                    if checkpkg_command.status.success() {
+                        checkpkg_status_loop_sender.send_blocking(true).expect("The channel needs to be open.");
+                    } else {
+                        checkpkg_status_loop_sender.send_blocking(false).expect("The channel needs to be open.");
+                    }
+                    thread::sleep(time::Duration::from_secs(10));
+                }),
+            );
+    
+            let entry_row = adw::ActionRow::builder()
+                .title(t!(&entry_title))
+                .subtitle(t!(&entry_subtitle))
+                .vexpand(true)
+                .hexpand(true)
+                .build();
+            let entry_row_icon = gtk::Image::builder()
+                .icon_name(entry_icon)
+                .pixel_size(80)
+                .vexpand(true)
+                .valign(gtk::Align::Center)
+                .build();
+            let entry_row_button = gtk::Button::builder()
+                .vexpand(true)
+                .valign(gtk::Align::Center)
+                .build();
+            entry_buttons_size_group.add_widget(&entry_row_button);
+            entry_row.add_prefix(&entry_row_icon);
+            entry_row.add_suffix(&entry_row_button);
+    
+            let recommended_addons_command_log_terminal_buffer = gtk::TextBuffer::builder().build();
+    
+            let recommended_addons_command_log_terminal = gtk::TextView::builder()
+                .vexpand(true)
+                .hexpand(true)
+                .editable(false)
+                .buffer(&recommended_addons_command_log_terminal_buffer)
+                .build();
+    
+            let recommended_addons_command_log_terminal_scroll = gtk::ScrolledWindow::builder()
+                .width_request(400)
+                .height_request(200)
+                .vexpand(true)
+                .hexpand(true)
+                .child(&recommended_addons_command_log_terminal)
+                .build();
+    
+            let recommended_addons_command_dialog = adw::MessageDialog::builder()
+                .transient_for(window)
+                .hide_on_close(true)
+                .extra_child(&recommended_addons_command_log_terminal_scroll)
+                .width_request(400)
+                .height_request(200)
+                .heading(t!("recommended_addons_command_dialog_heading"))
+                .build();
+            recommended_addons_command_dialog.add_response(
+                "recommended_addons_command_dialog_ok",
+                &t!("recommended_addons_command_dialog_ok_label").to_string(),
+            );
+    
+            let checkpkg_status_loop_context = MainContext::default();
+            // The main loop executes the asynchronous block
+            checkpkg_status_loop_context.spawn_local(
+                clone!(@weak entry_row_button, @strong checkpkg_status_loop_receiver => async move {
+                    while let Ok(state) = checkpkg_status_loop_receiver.recv().await {
+                        if state == false {
+                            entry_row_button.remove_css_class("destructive-action");
+                            entry_row_button.set_label(&t!("entry_row_button_install").to_string());
+                            entry_row_button.add_css_class("suggested-action");
+                            entry_row_button.set_widget_name("false")
+                        } else {
+                            entry_row_button.remove_css_class("suggested-action");
+                            entry_row_button.set_label(&t!("entry_row_button_remove").to_string());
+                            entry_row_button.add_css_class("destructive-action");
+                            entry_row_button.set_widget_name("true")
                         }
-                    });
+                    }
+                }),
+            );
+    
+            //
+            let log_loop_context = MainContext::default();
+            // The main loop executes the asynchronous block
+            log_loop_context.spawn_local(clone!(@weak recommended_addons_command_log_terminal_buffer, @weak recommended_addons_command_dialog, @strong log_loop_receiver => async move {
+                while let Ok(state) = log_loop_receiver.recv().await {
+                    recommended_addons_command_log_terminal_buffer.insert(&mut recommended_addons_command_log_terminal_buffer.end_iter(), &("\n".to_string() + &state))
                 }
-        }));
-
-        recommended_addons_page_listbox.append(&entry_row)
+            }));
+    
+            let log_status_loop_context = MainContext::default();
+            // The main loop executes the asynchronous block
+            log_status_loop_context.spawn_local(clone!(@weak recommended_addons_command_dialog, @strong log_status_loop_receiver => async move {
+                        while let Ok(state) = log_status_loop_receiver.recv().await {
+                            if state == true {
+                                recommended_addons_command_dialog.set_response_enabled("recommended_addons_command_dialog_ok", true);
+                                recommended_addons_command_dialog.set_body(&t!("recommended_addons_command_dialog_success_true"));
+                            } else {
+                                recommended_addons_command_dialog.set_response_enabled("recommended_addons_command_dialog_ok", true);
+                                recommended_addons_command_dialog.set_body(&t!("recommended_addons_command_dialog_success_false"));
+                            }
+                        }
+                }));
+            //
+            recommended_addons_command_log_terminal_buffer.connect_changed(clone!(@weak recommended_addons_command_log_terminal, @weak recommended_addons_command_log_terminal_buffer,@weak recommended_addons_command_log_terminal_scroll => move |_|{
+                   if recommended_addons_command_log_terminal_scroll.vadjustment().upper() - recommended_addons_command_log_terminal_scroll.vadjustment().value() > 100.0 {
+                        recommended_addons_command_log_terminal_scroll.vadjustment().set_value(recommended_addons_command_log_terminal_scroll.vadjustment().upper())
+                    }
+                }));
+    
+            entry_row_button.connect_clicked(clone!(@strong entry_packages, @weak entry_row_button, @weak window => move |_| {
+                    recommended_addons_command_log_terminal_buffer.delete(&mut recommended_addons_command_log_terminal_buffer.bounds().0, &mut recommended_addons_command_log_terminal_buffer.bounds().1);
+                    recommended_addons_command_dialog.set_response_enabled("recommended_addons_command_dialog_ok", false);
+                    recommended_addons_command_dialog.set_body("");
+                    recommended_addons_command_dialog.present();
+                    if &entry_row_button.widget_name() == "true" {
+                        let log_status_loop_sender_clone = log_status_loop_sender.clone();
+                        let log_loop_sender_clone= log_loop_sender.clone();
+                        let entry_packages_clone= entry_packages.clone();
+                        std::thread::spawn(move || {
+                            let command = run_flatpak_command(log_loop_sender_clone, "remove", &entry_packages_clone);
+                            match command {
+                                Ok(_) => {
+                                    println!("Status: Addon Command Successful");
+                                    log_status_loop_sender_clone.send_blocking(true).expect("The channel needs to be open.");
+                                }
+                                Err(_) => {
+                                    println!("Status: Addon Command Failed");
+                                    log_status_loop_sender_clone.send_blocking(false).expect("The channel needs to be open.");
+                                }
+                            }
+                        });
+                    } else {
+                        let log_status_loop_sender_clone = log_status_loop_sender.clone();
+                        let log_loop_sender_clone= log_loop_sender.clone();
+                        let entry_packages_clone= entry_packages.clone();
+                        std::thread::spawn(move || {
+                            let command = run_flatpak_command(log_loop_sender_clone, "install", &entry_packages_clone);
+                            match command {
+                                Ok(_) => {
+                                    println!("Status: Addon Command Successful");
+                                    log_status_loop_sender_clone.send_blocking(true).expect("The channel needs to be open.");
+                                }
+                                Err(_) => {
+                                    println!("Status: Addon Command Failed");
+                                    log_status_loop_sender_clone.send_blocking(false).expect("The channel needs to be open.");
+                                }
+                            }
+                        });
+                    }
+            }));
+            recommended_addons_page_listbox.append(&entry_row)
+        }
     }
 
     recommended_addons_page_box.append(&recommended_addons_page_listbox);

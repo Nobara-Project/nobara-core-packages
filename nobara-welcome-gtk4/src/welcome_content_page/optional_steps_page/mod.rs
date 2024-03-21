@@ -15,7 +15,7 @@ use std::{thread, time};
 
 #[allow(non_camel_case_types)]
 #[derive(PartialEq, Debug, Eq, Hash, Clone, Ord, PartialOrd, Deserialize)]
-struct setup_steps_entry {
+struct optional_steps_entry {
     id: i32,
     title: String,
     subtitle: String,
@@ -48,8 +48,8 @@ fn run_with_gui(
     Ok(())
 }
 
-pub fn setup_steps_page(
-    setup_steps_content_page_stack: &gtk::Stack,
+pub fn optional_steps_page(
+    optional_steps_content_page_stack: &gtk::Stack,
     window: &adw::ApplicationWindow,
     internet_connected: &Rc<RefCell<bool>>,
 ) {
@@ -65,9 +65,9 @@ pub fn setup_steps_page(
             .expect("The channel needs to be open.");
     });
 
-    let setup_steps_page_box = gtk::Box::builder().vexpand(true).hexpand(true).build();
+    let optional_steps_page_box = gtk::Box::builder().vexpand(true).hexpand(true).build();
 
-    let setup_steps_page_listbox = gtk::ListBox::builder()
+    let optional_steps_page_listbox = gtk::ListBox::builder()
         .margin_top(20)
         .margin_bottom(20)
         .margin_start(20)
@@ -75,13 +75,13 @@ pub fn setup_steps_page(
         .vexpand(true)
         .hexpand(true)
         .build();
-    setup_steps_page_listbox.add_css_class("boxed-list");
+    optional_steps_page_listbox.add_css_class("boxed-list");
 
-    let setup_steps_page_scroll = gtk::ScrolledWindow::builder()
+    let optional_steps_page_scroll = gtk::ScrolledWindow::builder()
         // that puts items vertically
         .hexpand(true)
         .vexpand(true)
-        .child(&setup_steps_page_box)
+        .child(&optional_steps_page_box)
         .propagate_natural_width(true)
         .propagate_natural_height(true)
         .min_content_width(520)
@@ -90,44 +90,44 @@ pub fn setup_steps_page(
     let internet_loop_context = MainContext::default();
     // The main loop executes the asynchronous block
     internet_loop_context.spawn_local(
-        clone!(@strong internet_connected_status, @weak setup_steps_page_box => async move {
+        clone!(@strong internet_connected_status, @weak optional_steps_page_box => async move {
             while let Ok(_state) = internet_loop_receiver.recv().await {
                 if *internet_connected_status.borrow_mut() == true {
-                    setup_steps_page_box.set_sensitive(true);
+                    optional_steps_page_box.set_sensitive(true);
                 } else {
-                    setup_steps_page_box.set_sensitive(false);
+                    optional_steps_page_box.set_sensitive(false);
                 }
             }
         }),
     );
 
-    let mut json_array: Vec<setup_steps_entry> = Vec::new();
-    let json_path = "/usr/share/nobara/nobara-welcome/config/setup_steps.json";
+    let mut json_array: Vec<optional_steps_entry> = Vec::new();
+    let json_path = "/usr/share/nobara/nobara-welcome/config/optional_steps.json";
     let json_data = fs::read_to_string(json_path).expect("Unable to read json");
     let json_data: serde_json::Value =
         serde_json::from_str(&json_data).expect("JSON format invalid");
-    if let serde_json::Value::Array(setup_steps) = &json_data["setup_steps"] {
-        for setup_steps_entry in setup_steps {
-            let setup_steps_entry_struct: setup_steps_entry =
-                serde_json::from_value(setup_steps_entry.clone()).unwrap();
-            json_array.push(setup_steps_entry_struct);
+    if let serde_json::Value::Array(optional_steps) = &json_data["optional_steps"] {
+        for optional_steps_entry in optional_steps {
+            let optional_steps_entry_struct: optional_steps_entry =
+                serde_json::from_value(optional_steps_entry.clone()).unwrap();
+            json_array.push(optional_steps_entry_struct);
         }
     }
 
     let entry_buttons_size_group = gtk::SizeGroup::new(gtk::SizeGroupMode::Both);
 
-    for setup_steps_entry in json_array {
+    for optional_steps_entry in json_array {
         let (entry_command_status_loop_sender, entry_command_status_loop_receiver) =
             async_channel::unbounded();
         let entry_command_status_loop_sender: async_channel::Sender<bool> =
             entry_command_status_loop_sender.clone();
 
-        let entry_title = setup_steps_entry.title;
-        let entry_subtitle = setup_steps_entry.subtitle;
-        let entry_icon = setup_steps_entry.icon;
-        let entry_button = setup_steps_entry.button;
-        let entry_with_terminal = setup_steps_entry.terminal;
-        let entry_command = setup_steps_entry.command;
+        let entry_title = optional_steps_entry.title;
+        let entry_subtitle = optional_steps_entry.subtitle;
+        let entry_icon = optional_steps_entry.icon;
+        let entry_button = optional_steps_entry.button;
+        let entry_with_terminal = optional_steps_entry.terminal;
+        let entry_command = optional_steps_entry.command;
         let entry_row = adw::ActionRow::builder()
             .title(t!(&entry_title))
             .subtitle(t!(&entry_subtitle))
@@ -277,14 +277,14 @@ pub fn setup_steps_page(
                 }
             }),
         );
-        setup_steps_page_listbox.append(&entry_row)
+        optional_steps_page_listbox.append(&entry_row)
     }
 
-    setup_steps_page_box.append(&setup_steps_page_listbox);
+    optional_steps_page_box.append(&optional_steps_page_listbox);
 
-    setup_steps_content_page_stack.add_titled(
-        &setup_steps_page_scroll,
-        Some("setup_steps_page"),
-        &t!("setup_steps_page_title").to_string(),
+    optional_steps_content_page_stack.add_titled(
+        &optional_steps_page_scroll,
+        Some("optional_steps_page"),
+        &t!("optional_steps_page_title").to_string(),
     );
 }

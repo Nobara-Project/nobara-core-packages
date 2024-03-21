@@ -68,5 +68,12 @@
     "contribute-gitlab-ge-title": "Visit GlouriousEggroll Gitlab Repository",
     "contribute-gitlab-ge-subtitle": "Contribute code or open issues and pull request to GE Gitlab.",
     "contribute-design-title": "Visit The Designs Channel in our Discord server",
-    "contribute-design-subtitle": "Submit Designs and Wallpapers to our #memes Discord Channel."
+    "contribute-design-subtitle": "Submit Designs and Wallpapers to our #memes Discord Channel.",
+    "optional_steps_page_title": "Optional Steps",
+    "open-nobara-resolve-wizard-title": "Install DaVinci Resolve Fixups",
+    "open-nobara-resolve-wizard-subtitle": "Install fixups to allow DaVinci Resolve to run.",
+    "open-nobara-steam-fixes-title": "Install Steam Game Fixups",
+    "open-nobara-steam-fixes-subtitle": "Install fixups to allow a few native linux Steam games to work (see https://gist.github.com/GloriousEggroll/8a8531a4b0b66317183c58237d1d6aca).",
+    "open-protonup-qt-title": "Install ProtonUP-QT",
+    "open-protonup-qt-subtitle": "Compatibility tool for Steam Play based on Wine and additional components made by GloriousEggroll\nthis tool allows steam to run windows games natively on linux."
 }

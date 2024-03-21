@@ -1,0 +1,31 @@
+{
+  "optional_steps": [
+    {
+      "id": 0,
+      "title": "open-nobara-resolve-wizard-title",
+      "subtitle": "open-nobara-resolve-wizard-subtitle",
+      "icon": "nobara-resolve",
+      "button": "launch-label",
+      "terminal": false,
+      "command": "/usr/bin/nobara-resolve-wizard"
+    },
+    {
+      "id": 1,
+      "title": "open-nobara-steam-fixes-title",
+      "subtitle": "open-nobara-steam-fixes-subtitle",
+      "icon": "steam",
+      "button": "launch-label",
+      "terminal": false,
+      "command": "/usr/bin/nobara-steam-fixes"
+    },
+    {
+      "id": 2,
+      "title": "open-protonup-qt-title",
+      "subtitle": "open-protonup-qt-subtitle",
+      "icon": "nobara-net.davidotek.pupgui2",
+      "button": "launch-label",
+      "terminal": false,
+      "command": "/usr/bin/protonup-qt"
+    }
+  ]
+}
