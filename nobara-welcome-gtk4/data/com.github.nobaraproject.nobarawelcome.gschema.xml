@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<schemalist>
+  <schema id="com.github.nobaraproject.nobarawelcome" path="/com/github/nobaraproject/nobarawelcome/">
+    <key name="window-width" type="i">
+      <default>1400</default>
+      <summary>Default window width</summary>
+    </key>
+    <key name="window-height" type="i">
+      <default>700</default>
+      <summary>Default window height</summary>
+    </key>
+    <key name="is-maximized" type="b">
+      <default>false</default>
+      <summary>Default window maximized behaviour</summary>
+    </key>
+    <key type="b" name="startup-show">
+      <default>true</default>
+      <summary>Show Nobara Welcome on startup.</summary>
+      <description>
+        Show Nobara Welcome on startup.
+      </description>
+    </key>
+  </schema>
+</schemalist>

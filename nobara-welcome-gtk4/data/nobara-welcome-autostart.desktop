@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Welcome to Nobara
+Exec=nobara-welcome-autostart
+Icon=com.github.nobaraproject.nobarawelcome
+StartupWMClass=nobara_welcome
+Terminal=false
+Type=Application
+Terminal=false
+Categories=GNOME;GTK;Utility;
+Keywords=Gnome;GTK
+NoDisplay=true

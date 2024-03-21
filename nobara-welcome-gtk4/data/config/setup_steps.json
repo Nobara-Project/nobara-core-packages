@@ -1,0 +1,49 @@
+{
+  "setup_steps": [
+    {
+      "id": 0,
+      "title": "update-nobara-title",
+      "subtitle": "update-nobara-subtitle",
+      "icon": "nobara-system-software-update",
+      "button": "launch-label",
+      "terminal": true,
+      "command": "/usr/lib/nobara/nobara-welcome/scripts/update-manager.sh"
+    },
+    {
+      "id": 1,
+      "title": "install-media-codec-title",
+      "subtitle": "install-media-codec-subtitle",
+      "icon": "nobara-media-tape",
+      "button": "launch-label",
+      "terminal": false,
+      "command": "/usr/lib/nobara/nobara-welcome/scripts/nobara-codec.sh"
+    },
+    {
+      "id": 2,
+      "title": "open-driver-manager-title",
+      "subtitle": "open-driver-manager-subtitle",
+      "icon": "com.github.nobaraproject.nobaradrivers",
+      "button": "launch-label",
+      "terminal": false,
+      "command": "/usr/lib/nobara/nobara-welcome/scripts/driver-manager.sh"
+    },
+    {
+      "id": 3,
+      "title": "open-software-manager-title",
+      "subtitle": "open-software-manager-subtitle",
+      "icon": "nobara-media-floppy",
+      "button": "launch-label",
+      "terminal": false,
+      "command": "/usr/lib/nobara/nobara-welcome/scripts/software-manager.sh"
+    },
+    {
+      "id": 4,
+      "title": "open-webapp-manager-title",
+      "subtitle": "open-webapp-manager-subtitle",
+      "icon": "nobara-applications-internet",
+      "button": "launch-label",
+      "terminal": false,
+      "command": "/usr/lib/nobara/nobara-welcome/scripts/webapp-manager.sh"
+    }
+  ]
+}

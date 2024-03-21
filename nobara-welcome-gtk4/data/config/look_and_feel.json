@@ -1,0 +1,40 @@
+{
+  "look_and_feel": [
+    {
+      "id": 0,
+      "title": "open-pling-title",
+      "subtitle": "open-pling-subtitle",
+      "icon": "nobara-emblem-downloads",
+      "button": "launch-label",
+      "onlyin": "",
+      "command": "xdg-open https://pling.com/"
+    },
+    {
+      "id": 1,
+      "title": "open-login-config-title",
+      "subtitle": "open-login-config-subtitle",
+      "icon": "nobara-emblem-readonly",
+      "button": "launch-label",
+      "onlyin": "",
+      "command": "nobara-login-config"
+    },
+    {
+      "id": 2,
+      "title": "open-gnome-tweaks-title",
+      "subtitle": "open-gnome-tweaks-subtitle",
+      "icon": "nobara-applications-graphics",
+      "button": "launch-label",
+      "onlyin": "gnome",
+      "command": "/usr/bin/gnome-tweaks"
+    },
+    {
+      "id": 3,
+      "title": "open-gnome-extensions-title",
+      "subtitle": "open-gnome-extensions-subtitle",
+      "icon": "nobara-application-x-addon",
+      "button": "launch-label",
+      "onlyin": "gnome",
+      "command": "/usr/bin/extension-manager"
+    }
+  ]
+}

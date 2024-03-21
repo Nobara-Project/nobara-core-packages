@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Welcome to Nobara
+Exec=nobara-welcome
+Hidden=falsen
+Icon=com.github.nobaraproject.nobarawelcome
+Categories=GNOME;GTK;Utility;
+Keywords=Gnome;GTK

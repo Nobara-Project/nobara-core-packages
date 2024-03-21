@@ -1,0 +1,36 @@
+{
+  "contribute": [
+    {
+      "id": 0,
+      "title": "contribute-github-title",
+      "subtitle": "contribute-github-subtitle",
+      "icon": "nobara-github",
+      "button": "launch-label",
+      "command": "xdg-open https://github.com/Nobara-Project"
+    },
+    {
+      "id": 1,
+      "title": "contribute-github-ge-title",
+      "subtitle": "contribute-github-ge-subtitle",
+      "icon": "nobara-github",
+      "button": "launch-label",
+      "command": "xdg-open https://github.com/GloriousEggroll"
+    },
+    {
+      "id": 2,
+      "title": "contribute-gitlab-ge-title",
+      "subtitle": "contribute-gitlab-ge-subtitle",
+      "icon": "nobara-gitlab",
+      "button": "launch-label",
+      "command": "xdg-open https://gitlab.com/GloriousEggroll"
+    },
+    {
+      "id": 3,
+      "title": "contribute-design-title",
+      "subtitle": "contribute-design-subtitle",
+      "icon": "nobara-applications-graphics",
+      "button": "launch-label",
+      "command": "xdg-open https://discord.com/channels/110175050006577152/1015154123114549309"
+    }
+  ]
+}

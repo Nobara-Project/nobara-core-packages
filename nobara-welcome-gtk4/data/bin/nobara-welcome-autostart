@@ -1,0 +1,7 @@
+#! /bin/bash
+AUTOSTART=$(gsettings get com.github.nobaraproject.nobarawelcome startup-show)
+DISPLAY_CHECK=$(echo $DISPLAY)
+WHO=$(whoami)
+if [[ "$AUTOSTART" == "true" ]] && [[ $DISPLAY_CHECK ]] && [[ $WHO != "liveuser" ]] && [[ $WHO != "gnome-initial-setup" ]] ; then
+	nobara-welcome
+fi

@@ -1,0 +1,20 @@
+{
+  "troubleshoot": [
+    {
+      "id": 0,
+      "title": "open-nobara-issues-title",
+      "subtitle": "open-nobara-issues-subtitle",
+      "icon": "nobara-emblem-important",
+      "button": "launch-label",
+      "command": "xdg-open https://feed.nobaraproject.org/en"
+    },
+    {
+      "id": 1,
+      "title": "open-nobara-docs-title",
+      "subtitle": "open-nobara-docs-subtitle",
+      "icon": "nobara-emblem-documents",
+      "button": "launch-label",
+      "command": "xdg-open https://nobaraproject.org/docs/"
+    }
+  ]
+}
