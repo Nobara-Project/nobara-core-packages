@@ -5,9 +5,9 @@ all:
 
 install:
 	mkdir -p $(DESTDIR)/usr/bin/
-	#cargo fetch
-	#cargo build --release
-	#cp -vf target/release/nobara-welcome $(DESTDIR)/usr/bin/
+	cargo fetch
+	cargo build --release
+	cp -vf target/release/nobara-welcome $(DESTDIR)/usr/bin/
 	cp -vf target/debug/nobara-welcome $(DESTDIR)/usr/bin/
 	chmod 755 $(DESTDIR)/usr/bin/nobara-welcome
 	cp -vf data/bin/nobara-welcome-autostart $(DESTDIR)/usr/bin/
