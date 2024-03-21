@@ -2,13 +2,10 @@
 
 if [[ $1 == "version" ]]
 then
-	if [[ $2 == "nobara-rocm-meta" ]]
-	then
-		apt-cache show rocm-core | grep Version: | cut -d":" -f2 | head -n1
-	else
-		apt-cache show $2 | grep Version: | cut -d":" -f2 | head -n1
-	fi
+	#apt-cache show $2 | grep Version: | cut -d":" -f2 | head -n1
+	echo "GE PUT A COMMAND HERE THAT GETS THE VERSION OF A DNF PACKAGE (WITHOUT ROOT)"
 elif [[ $1 == "description" ]]
 then
-		apt-cache show $2 | grep 'Description*' | cut -d":" -f2 | head -n1
+	#apt-cache show $2 | grep 'Description*' | cut -d":" -f2 | head -n1
+	echo "GE PUT A COMMAND HERE THAT GETS THE DESCRIPTION OF A DNF PACKAGE (WITHOUT ROOT)"
 fi

@@ -128,7 +128,7 @@ pub fn build_ui(app: &adw::Application) {
 
     println!("Downloading driver DB...");
     let check_internet_connection_cli = Command::new("ping")
-        .arg("iso.nobara-os.com")
+        .arg("iso.pika-os.com")
         .arg("-c 1")
         .output()
         .expect("failed to execute process");
@@ -223,7 +223,7 @@ pub fn build_ui(app: &adw::Application) {
 const DRIVER_MODIFY_PROG: &str = r###"
 #! /bin/bash
 DRIVER="$0"
-/usr/lib/nobara/drivers/modify-driver.sh "${DRIVER}"
+pkexec /usr/lib/nobara/drivers/modify-driver.sh "${DRIVER}"
 "###;
 fn driver_modify(
     log_loop_sender: async_channel::Sender<String>,
@@ -326,8 +326,8 @@ fn get_drivers(
                 let driver_package_removeble = driver.removeble.to_owned();
 
                 gio::spawn_blocking(move || loop {
-                    let command_installed_status = Command::new("dpkg")
-                        .args(["-s", &driver_package_ind2])
+                    let command_installed_status = Command::new("rpm")
+                        .args(["-q", &driver_package_ind2])
                         .output()
                         .unwrap();
                     if command_installed_status.status.success() {
@@ -335,7 +335,7 @@ fn get_drivers(
                     } else {
                         driver_status_loop_sender.send_blocking(false).expect("channel needs to be open")
                     }
-                    thread::sleep(Duration::from_secs(6));
+                    thread::sleep(Duration::from_secs(10));
                 });
 
                 let driver_package_ind = driver.driver.to_owned();
@@ -467,7 +467,7 @@ fn get_drivers(
                     while let Ok(state) = log_status_loop_receiver.recv().await {
                         if state == true {
                             driver_install_dialog.set_response_enabled("driver_install_dialog_ok", true);
-                            if get_current_username().unwrap() == "nobaraos" {
+                            if get_current_username().unwrap() == "liveuser" {
                                 driver_install_dialog.set_response_enabled("driver_install_dialog_reboot", false);
                             } else {
                                 driver_install_dialog.set_response_enabled("driver_install_dialog_reboot", true);

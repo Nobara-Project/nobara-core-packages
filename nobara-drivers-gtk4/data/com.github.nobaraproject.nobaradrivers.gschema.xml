@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <schemalist>
-  <schema id="com.github.nobaraproject.nobaradrivers" path="/com/github/nobaraos-linux/drivers/">
+  <schema id="com.github.nobaraproject.nobaradrivers" path="/com/github/nobaraproject/drivers/">
     <key name="window-width" type="i">
       <default>1200</default>
       <summary>Default window width</summary>
