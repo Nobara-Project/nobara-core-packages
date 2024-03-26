@@ -22,5 +22,8 @@ LayoutName=org.kde.breeze.desktop
 [kwinrc][org.kde.kdecoration2]
 library=org.kde.breeze
 
+[breezerc][Common]
+OutlineIntensity=OutlineOff
+
 [KSplash]
 Theme=org.nobaraproject

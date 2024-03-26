@@ -1,9 +1,11 @@
 // Version 4
 
-import QtQuick 2.0
-import QtQuick.Layouts 1.0
+import QtQuick 2.15
+import QtQuick.Layouts 1.3
 
-Item {
+import org.kde.kcmutils as KCM
+
+KCM.SimpleKCM {
 	id: page
 	Layout.fillWidth: true
 	default property alias _contentChildren: content.data

@@ -1,8 +1,8 @@
 /*
-    SPDX-FileCopyrightText: 2016 David Edmundson <davidedmundson@kde.org>
-
-    SPDX-License-Identifier: LGPL-2.0-or-later
-*/
+ *    SPDX-FileCopyrightText: 2016 David Edmundson <davidedmundson@kde.org>
+ *
+ *    SPDX-License-Identifier: LGPL-2.0-or-later
+ */
 
 import QtQuick 2.15
 import QtQuick.Layouts 1.15
@@ -182,17 +182,17 @@ Item {
                     if (!userListModel.hasOwnProperty("count")
                         || !userListModel.hasOwnProperty("disableAvatarsThreshold")) {
                         return false
-                    }
+                        }
 
-                    if (userListModel.count === 0 ) {
-                        return false
-                    }
+                        if (userListModel.count === 0 ) {
+                            return false
+                        }
 
-                    if (userListModel.hasOwnProperty("containsAllUsers") && !userListModel.containsAllUsers) {
-                        return false
-                    }
+                        if (userListModel.hasOwnProperty("containsAllUsers") && !userListModel.containsAllUsers) {
+                            return false
+                        }
 
-                    return userListModel.count <= userListModel.disableAvatarsThreshold
+                        return userListModel.count <= userListModel.disableAvatarsThreshold
                 }
 
                 notificationMessage: {
@@ -238,10 +238,10 @@ Item {
                         visible: !userListComponent.showUsernamePrompt
                     }]
 
-                onLoginRequest: {
-                    root.notificationMessage = ""
-                    sddm.login(username, password, sessionButton.currentIndex)
-                }
+                    onLoginRequest: {
+                        root.notificationMessage = ""
+                        sddm.login(username, password, sessionButton.currentIndex)
+                    }
             }
 
             Behavior on opacity {
@@ -506,7 +506,7 @@ Item {
                     parent: sessionButton
                     anchors.fill: parent
                     anchors.leftMargin: virtualKeyboardButton.visible || keyboardButton.visible
-                        ? 0 : -footer.anchors.margins
+                    ? 0 : -footer.anchors.margins
                     anchors.bottomMargin: -footer.anchors.margins
                 }
             }

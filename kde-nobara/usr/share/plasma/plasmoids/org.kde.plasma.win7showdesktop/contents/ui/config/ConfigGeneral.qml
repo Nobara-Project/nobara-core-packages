@@ -1,10 +1,8 @@
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.1
 
-import QtQuick 2.0
-import QtQuick.Controls 1.0
-import QtQuick.Layouts 1.0
-import org.kde.plasma.core 2.0 as PlasmaCore
-import org.kde.plasma.components 2.0 as PlasmaComponents
-import org.kde.kirigami 2.3 as Kirigami
+import org.kde.kirigami as Kirigami
 
 import ".."
 import "../lib"
@@ -75,12 +73,12 @@ ConfigPage {
 		}
 	}
 
-	ExclusiveGroup { id: clickGroup }
+	ButtonGroup { id: clickGroup }
 	ConfigSection {
 		title: i18n("Click")
 
 		RadioButton {
-			exclusiveGroup: clickGroup
+			ButtonGroup.group: clickGroup
 			checked: cfg_click_action == 'showdesktop'
 			text: i18nd("plasma_applet_org.kde.plasma.showdesktop", "Show Desktop")
 			onClicked: {
@@ -89,7 +87,7 @@ ConfigPage {
 		}
 
 		RadioButton {
-			exclusiveGroup: clickGroup
+			ButtonGroup.group: clickGroup
 			checked: cfg_click_action == 'minimizeall'
 			text: i18ndc("plasma_applet_org.kde.plasma.showdesktop", "@action", "Minimize All Windows")
 
@@ -100,7 +98,7 @@ ConfigPage {
 
 		RadioButton {
 			id: clickGroup_runcommand
-			exclusiveGroup: clickGroup
+			ButtonGroup.group: clickGroup
 			checked: cfg_click_action == 'run_command'
 			text: i18n("Run Command")
 			onClicked: {
@@ -116,21 +114,21 @@ ConfigPage {
 			}
 		}
 		RadioButton {
-			exclusiveGroup: clickGroup
+			ButtonGroup.group: clickGroup
 			checked: false
 			text: i18nd("kwin_effects", "Toggle Present Windows (All desktops)")
 			property string command: 'qdbus org.kde.kglobalaccel /component/kwin invokeShortcut "ExposeAll"'
 			onClicked: setClickCommand(command)
 		}
 		RadioButton {
-			exclusiveGroup: clickGroup
+			ButtonGroup.group: clickGroup
 			checked: false
 			text: i18nd("kwin_effects", "Toggle Present Windows (Current desktop)")
 			property string command: 'qdbus org.kde.kglobalaccel /component/kwin invokeShortcut "Expose"'
 			onClicked: setClickCommand(command)
 		}
 		RadioButton {
-			exclusiveGroup: clickGroup
+			ButtonGroup.group: clickGroup
 			checked: false
 			text: i18nd("kwin_effects", "Toggle Present Windows (Window class)")
 			property string command: 'qdbus org.kde.kglobalaccel /component/kwin invokeShortcut "ExposeClass"'
@@ -139,14 +137,14 @@ ConfigPage {
 	}
 
 
-	ExclusiveGroup { id: mousewheelGroup }
+	ButtonGroup { id: mousewheelGroup }
 	ConfigSection {
 		title: i18n("Mouse Wheel")
 
 
 		RadioButton {
 			id: mousewheelGroup_runcommands
-			exclusiveGroup: mousewheelGroup
+			ButtonGroup.group: mousewheelGroup
 			checked: cfg_mousewheel_action == 'run_commands'
 			text: i18n("Run Commands")
 			onClicked: {
@@ -177,14 +175,14 @@ ConfigPage {
 		}
 
 		RadioButton {
-			exclusiveGroup: mousewheelGroup
+			ButtonGroup.group: mousewheelGroup
 			checked: false
 			text: i18n("Volume (No UI) (amixer)")
 			onClicked: setMouseWheelCommands('amixer -q sset Master 10%+', 'amixer -q sset Master 10%-')
 		}
 
 		RadioButton {
-			exclusiveGroup: mousewheelGroup
+			ButtonGroup.group: mousewheelGroup
 			checked: false
 			text: i18n("Volume (UI) (qdbus)")
 			property string upCommand:   'qdbus org.kde.kglobalaccel /component/kmix invokeShortcut "increase_volume"'
@@ -193,7 +191,7 @@ ConfigPage {
 		}
 
 		RadioButton {
-			exclusiveGroup: mousewheelGroup
+			ButtonGroup.group: mousewheelGroup
 			checked: false
 			text: i18n("Switch Desktop (qdbus)")
 			property string upCommand:   'qdbus org.kde.kglobalaccel /component/kwin invokeShortcut "Switch One Desktop to the Left"'
@@ -219,7 +217,7 @@ ConfigPage {
 				configKey: 'peekingThreshold'
 				suffix: i18n("ms")
 				stepSize: 50
-				minimumValue: 0
+				from: 0
 			}
 		}
 	}

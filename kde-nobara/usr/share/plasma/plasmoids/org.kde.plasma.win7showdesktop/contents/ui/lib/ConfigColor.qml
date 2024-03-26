@@ -1,11 +1,14 @@
-import QtQuick 2.0
-import QtQuick.Controls 1.0
-import QtQuick.Layouts 1.0
-import QtQuick.Dialogs 1.2
-import QtQuick.Window 2.2
+import QtQuick 2.15
+import QtQuick.Controls 2.12
+import QtQuick.Layouts 1.3
+import QtQuick.Dialogs
+import QtQuick.Window 2.12
 
-import org.kde.plasma.core 2.0 as PlasmaCore
-import org.kde.plasma.components 2.0 as PlasmaComponents
+import org.kde.plasma.core as PlasmaCore
+import org.kde.plasma.components as PlasmaComponents
+import org.kde.kirigami as Kirigami
+
+import org.kde.plasma.plasmoid
 
 import ".."
 
@@ -13,7 +16,7 @@ RowLayout {
 	id: configColor
 	spacing: 2
 	// Layout.fillWidth: true
-	Layout.maximumWidth: 300 * units.devicePixelRatio
+	Layout.maximumWidth: 300
 
 	property alias label: label.text
 	property alias horizontalAlignment: label.horizontalAlignment
@@ -22,7 +25,7 @@ RowLayout {
 	property string defaultColor: ''
 	property string value: {
 		if (configKey) {
-			return plasmoid.configuration[configKey]
+			return Plasmoid.configuration[configKey]
 		} else {
 			return "#000"
 		}
@@ -43,9 +46,9 @@ RowLayout {
 		}
 		if (configKey) {
 			if (value == defaultColorValue) {
-				plasmoid.configuration[configKey] = ""
+				Plasmoid.configuration[configKey] = ""
 			} else {
-				plasmoid.configuration[configKey] = value
+				Plasmoid.configuration[configKey] = value
 			}
 		}
 	}
@@ -73,7 +76,7 @@ RowLayout {
 			anchors.fill: parent
 			color: configColor.valueColor
 			border.width: 2
-			border.color: parent.containsMouse ? theme.highlightColor : "#BB000000"
+			border.color: parent.containsMouse ? Kirigami.Theme.highlightColor : "#BB000000"
 		}
 	}
 
@@ -98,12 +101,10 @@ RowLayout {
 		visible: false
 		modality: Qt.WindowModal
 		title: configColor.label
-		showAlphaChannel: true
-		color: configColor.valueColor
-		onCurrentColorChanged: {
-			if (visible && color != currentColor) {
-				configColor.value = currentColor
-			}
+		flags: ColorDialog.ShowAlphaChannel
+		selectedColor: configColor.valueColor
+		onAccepted: {
+			configColor.value = selectedColor
 		}
 	}
 }

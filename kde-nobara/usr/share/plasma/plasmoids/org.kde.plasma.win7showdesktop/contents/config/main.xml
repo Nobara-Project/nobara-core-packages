@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0 http://www.kde.org/standards/kcfg/1.0/kcfg.xsd" >
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+			xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+			xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+			http://www.kde.org/standards/kcfg/1.0/kcfg.xsd" >
 	<kcfgfile name=""/>
 
 	<group name="General">
@@ -28,13 +31,13 @@
 			<default>1000</default>
 		</entry>
 		<entry name="edgeColor" type="string">
-			<default></default>
+			<default>#66ffffff</default>
 		</entry>
 		<entry name="hoveredColor" type="string">
-			<default></default>
+			<default>#667636f9</default>
 		</entry>
 		<entry name="pressedColor" type="string">
-			<default></default>
+			<default>#667636f9</default>
 		</entry>
 	</group>
 </kcfg>

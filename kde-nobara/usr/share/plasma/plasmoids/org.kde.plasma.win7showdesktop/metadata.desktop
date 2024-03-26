@@ -11,13 +11,12 @@ X-KDE-PluginInfo-Name=org.kde.plasma.win7showdesktop
 X-KDE-PluginInfo-Version=13
 X-KDE-PluginInfo-Website=https://github.com/Zren/plasma-applet-win7showdesktop
 X-KDE-PluginInfo-Category=Windows and Tasks
-X-KDE-PluginInfo-License=GPL
-X-Plasma-MainScript=ui/main.qml
+X-KDE-PluginInfo-License=GPL-2.0+
 X-Plasma-Provides=org.kde.plasma.windowmanagement
 
-X-Plasma-API=declarativeappletscript
-X-KDE-ServiceTypes=Plasma/Applet
+X-Plasma-API-Minimum-Version=6.0
 X-KDE-FormFactors=desktop
+KPackageStructure=Plasma/Applet
 
 
 Name[ar]=أظهر سطح المكتب (Win7)

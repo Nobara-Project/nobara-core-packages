@@ -1,15 +1,15 @@
-import QtQuick 2.0
-import QtQuick.Controls 1.0
-import QtQuick.Layouts 1.0
+import QtQuick 2.15
+import QtQuick.Controls 2.12
+import QtQuick.Layouts 1.3
+
+import org.kde.plasma.plasmoid
 
 RowLayout {
 	id: configSpinBox
 
 	property string configKey: ''
-	property alias decimals: spinBox.decimals
-	property alias horizontalAlignment: spinBox.horizontalAlignment
-	property alias maximumValue: spinBox.maximumValue
-	property alias minimumValue: spinBox.minimumValue
+	property alias to: spinBox.to
+	property alias from: spinBox.from
 	property alias prefix: spinBox.prefix
 	property alias stepSize: spinBox.stepSize
 	property alias suffix: spinBox.suffix
@@ -23,14 +23,21 @@ RowLayout {
 		text: ""
 		visible: text
 	}
-	
+
 	SpinBox {
 		id: spinBox
 
-		value: plasmoid.configuration[configKey]
-		// onValueChanged: plasmoid.configuration[configKey] = value
+		property string prefix
+		property string suffix
+
+		value: Plasmoid.configuration[configKey]
+		// onValueChanged: Plasmoid.configuration[configKey] = value
 		onValueChanged: serializeTimer.start()
-		maximumValue: 2147483647
+		to: 2147483647
+
+		textFromValue: function(value) {
+			return prefix + value + suffix;
+		}
 	}
 
 	Label {
@@ -42,6 +49,6 @@ RowLayout {
 	Timer { // throttle
 		id: serializeTimer
 		interval: 300
-		onTriggered: plasmoid.configuration[configKey] = value
+		onTriggered: Plasmoid.configuration[configKey] = value
 	}
 }
