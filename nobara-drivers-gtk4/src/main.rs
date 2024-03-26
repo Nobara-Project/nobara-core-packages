@@ -7,7 +7,8 @@ use adw::prelude::*;
 use adw::*;
 use gdk::Display;
 use gtk::*;
-use std::env;
+use sys_locale::get_locale;
+
 
 #[derive(PartialEq, Debug, Eq, Hash, Clone, Ord, PartialOrd)]
 pub struct DriverPackage {
@@ -31,11 +32,9 @@ i18n!("locales", fallback = "en_US");
 
 /// main function
 fn main() {
-    let current_locale = match env::var_os("LANG") {
-        Some(v) => v.into_string().unwrap(),
-        None => panic!("$LANG is not set"),
-    };
-    rust_i18n::set_locale(current_locale.strip_suffix(".UTF-8").unwrap());
+    let current_locale = get_locale().unwrap_or_else(|| String::from("en-US")).replace("-", "_");
+
+    rust_i18n::set_locale(&current_locale);
     let application = adw::Application::new(Some(APP_ID), Default::default());
     application.connect_startup(|app| {
         // The CSS "magic" happens here.
