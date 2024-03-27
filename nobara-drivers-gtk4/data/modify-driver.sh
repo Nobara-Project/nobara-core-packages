@@ -12,6 +12,9 @@ then
 		dnf remove -y akmod-nvidia
 		dnf remove -y dkms-nvidia
 		rm -rf /var/lib/dkms/nvidia*
+		# always run akmods and dracut at the end of updates
+		akmods
+		dracut -f --regenerate-all
 	else
 		dnf remove -y nvidia*
 		dnf remove -y kmod-nvidia*
@@ -36,8 +39,12 @@ then
 			nvidia-vaapi-driver \
 			nvidia-gpu-firmware \
 			--refresh
-		systemctl enable --now akmods; akmods
+		systemctl enable --now akmods;
+		# always run akmods and dracut at the end of updates
+		akmods
+		dracut -f --regenerate-all
 	fi
+
 	exit 0
 # Special override for xone
 elif [[ "$1" = "xone" ]]
