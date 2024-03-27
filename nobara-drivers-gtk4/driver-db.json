@@ -2,7 +2,7 @@
   "drivers": [
     {
       "id": 0,
-      "driver": "xone-dkms",
+      "driver": "xone",
       "icon": "input-gaming",
       "experimental": false,
       "removable": true,

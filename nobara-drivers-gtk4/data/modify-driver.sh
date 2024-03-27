@@ -48,8 +48,8 @@ then
 	else
 		dnf install -y "dnf5-command(builddep)"
 		usermod -aG pkg-build $USER && dnf4 install -y lpf-xone-firmware xone xpadneo && dnf4 remove -y xone-firmware
-		lpf reset xone-firmware
-		lpf update xone-firmware
+		sudo -i -u $USER lpf reset xone-firmware
+		sudo -i -u $USER lpf update xone-firmware
 	fi
 	exit 0
 # Standard case
