@@ -1,4 +1,5 @@
 cargo
 gdk-pixbuf2-devel
 gtk4-devel
+gtk3-devel
 libadwaita-devel
