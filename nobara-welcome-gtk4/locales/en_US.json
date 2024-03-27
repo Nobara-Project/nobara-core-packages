@@ -75,5 +75,5 @@
     "open-nobara-steam-fixes-title": "Install Steam Game Fixups",
     "open-nobara-steam-fixes-subtitle": "Install fixups to allow a few native linux Steam games to work (see https://gist.github.com/GloriousEggroll/8a8531a4b0b66317183c58237d1d6aca).",
     "open-protonup-qt-title": "Install Proton-GE",
-    "open-protonup-qt-subtitle": "Compatibility tool for Steam Play based on Wine and additional components made by GloriousEggroll\nthis tool allows steam to run windows games natively on linux.",
+    "open-protonup-qt-subtitle": "Compatibility tool for Steam Play based on Wine and additional components made by GloriousEggroll\nthis tool allows steam to run windows games natively on linux."
 }
