@@ -6,7 +6,7 @@
       "subtitle": "open-nobara-resolve-wizard-subtitle",
       "icon": "nobara-resolve",
       "button": "launch-label",
-      "terminal": false,
+      "terminal": true,
       "command": "/usr/bin/nobara-resolve-wizard &"
     },
     {
@@ -15,7 +15,7 @@
       "subtitle": "open-nobara-steam-fixes-subtitle",
       "icon": "steam",
       "button": "launch-label",
-      "terminal": false,
+      "terminal": true,
       "command": "/usr/bin/nobara-steam-fixes &"
     },
     {
