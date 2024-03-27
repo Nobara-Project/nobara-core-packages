@@ -26,15 +26,6 @@
       "button": "launch-label",
       "terminal": false,
       "command": "/usr/bin/protonup-qt &"
-    },
-    {
-      "id": 2,
-      "title": "open-xone-title",
-      "subtitle": "open-xone-subtitle",
-      "icon": "nobara-input-gaming",
-      "button": "launch-label",
-      "terminal": false,
-      "command": "/usr/bin/nobara-controller-config &"
     }
   ]
 }
