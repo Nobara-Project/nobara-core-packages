@@ -29,6 +29,7 @@ install_no_build:
 	cp data/com.github.nobaraproject.nobarawelcome.gschema.xml $(DESTDIR)/usr/share/glib-2.0/schemas/
 	mkdir -p $(DESTDIR)/usr/share/applications
 	cp -vf data/com.github.nobaraproject.nobarawelcome.desktop  $(DESTDIR)/usr/share/applications/
+	cp -vf data/nobara-sync.desktop $(DESTDIR)/usr/share/applications/
 	mkdir -p $(DESTDIR)/etc/xdg/autostart
 	cp -vf data/nobara-welcome-autostart.desktop  $(DESTDIR)/etc/xdg/autostart/
 	mkdir -p $(DESTDIR)/usr/share/icons/hicolor/scalable/apps
@@ -61,6 +62,7 @@ install:
 	cp data/com.github.nobaraproject.nobarawelcome.gschema.xml $(DESTDIR)/usr/share/glib-2.0/schemas/
 	mkdir -p $(DESTDIR)/usr/share/applications
 	cp -vf data/com.github.nobaraproject.nobarawelcome.desktop  $(DESTDIR)/usr/share/applications/
+	cp -vf data/nobara-sync.desktop $(DESTDIR)/usr/share/applications/
 	mkdir -p $(DESTDIR)/etc/xdg/autostart
 	cp -vf data/nobara-welcome-autostart.desktop  $(DESTDIR)/etc/xdg/autostart/
 	mkdir -p $(DESTDIR)/usr/share/icons/hicolor/scalable/apps
