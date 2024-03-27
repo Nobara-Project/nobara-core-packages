@@ -1,0 +1,4 @@
+cargo
+gdk-pixbuf2-devel
+gtk4-devel
+libadwaita-devel

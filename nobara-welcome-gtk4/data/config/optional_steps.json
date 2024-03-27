@@ -7,7 +7,7 @@
       "icon": "nobara-resolve",
       "button": "launch-label",
       "terminal": false,
-      "command": "/usr/bin/nobara-resolve-wizard"
+      "command": "/usr/bin/nobara-resolve-wizard &"
     },
     {
       "id": 1,
@@ -16,7 +16,7 @@
       "icon": "steam",
       "button": "launch-label",
       "terminal": false,
-      "command": "/usr/bin/nobara-steam-fixes"
+      "command": "/usr/bin/nobara-steam-fixes &"
     },
     {
       "id": 2,
@@ -25,7 +25,16 @@
       "icon": "nobara-net.davidotek.pupgui2",
       "button": "launch-label",
       "terminal": false,
-      "command": "/usr/bin/protonup-qt"
+      "command": "/usr/bin/protonup-qt &"
+    },
+    {
+      "id": 2,
+      "title": "open-xone-title",
+      "subtitle": "open-xone-subtitle",
+      "icon": "nobara-input-gaming",
+      "button": "launch-label",
+      "terminal": false,
+      "command": "/usr/bin/nobara-controller-config &"
     }
   ]
 }

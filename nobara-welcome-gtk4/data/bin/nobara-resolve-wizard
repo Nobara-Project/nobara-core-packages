@@ -1,0 +1,10 @@
+#! /usr/bin/bash
+if [[ ! -f /opt/resolve/bin/resolve ]]; then
+	zenity --error --text='DaVinci Resolve must be installed first.'
+else
+	if [[ ! -z $(ls /opt/resolve/libs | grep libglib-2) ]]; then
+		python3 /usr/lib/nobara/nobara-welcome/scripts/resolve/main.py
+	else
+		zenity --error --text='DaVinci Resolve fixup has already been applied.'
+	fi
+fi

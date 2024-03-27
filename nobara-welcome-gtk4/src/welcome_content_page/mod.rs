@@ -98,7 +98,6 @@ pub fn welcome_content_page(window: &adw::ApplicationWindow, content_box: &gtk::
         .transient_for(window)
         .version(VERSION)
         .hide_on_close(true)
-        .developer_name(t!("app_dev"))
         .developers(dev_json_array)
         .issue_url(APP_GITHUB.to_owned() + "/issues")
         .build();

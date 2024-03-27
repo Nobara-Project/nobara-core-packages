@@ -6,15 +6,17 @@
       "subtitle": "join-discord-subtitle",
       "icon": "nobara-discord",
       "button": "launch-label",
-      "command": "xdg-open https://discord.gg/6y3BdzC"
+      "terminal": false,
+      "command": "xdg-open https://discord.gg/6y3BdzC &"
     },
     {
-      "id": 0,
+      "id": 1,
       "title": "join-reddit-title",
       "subtitle": "join-reddit-subtitle",
       "icon": "nobara-reddit",
       "button": "launch-label",
-      "command": "xdg-open https://www.reddit.com/r/NobaraProject/"
+      "terminal": false,
+      "command": "xdg-open https://reddit.com/r/NobaraProject/ &"
     }
   ]
 }

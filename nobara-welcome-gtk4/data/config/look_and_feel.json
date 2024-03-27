@@ -7,7 +7,8 @@
       "icon": "nobara-emblem-downloads",
       "button": "launch-label",
       "onlyin": "",
-      "command": "xdg-open https://pling.com/"
+      "terminal": false,
+      "command": "xdg-open https://pling.com/ &"
     },
     {
       "id": 1,
@@ -16,7 +17,8 @@
       "icon": "nobara-emblem-readonly",
       "button": "launch-label",
       "onlyin": "",
-      "command": "nobara-login-config"
+      "terminal": false,
+      "command": "nobara-login-config &"
     },
     {
       "id": 2,
@@ -25,7 +27,8 @@
       "icon": "nobara-applications-graphics",
       "button": "launch-label",
       "onlyin": "gnome",
-      "command": "/usr/bin/gnome-tweaks"
+      "terminal": false,
+      "command": "/usr/bin/gnome-tweaks &"
     },
     {
       "id": 3,
@@ -34,7 +37,8 @@
       "icon": "nobara-application-x-addon",
       "button": "launch-label",
       "onlyin": "gnome",
-      "command": "/usr/bin/extension-manager"
+      "terminal": false,
+      "command": "/usr/bin/extension-manager &"
     }
   ]
 }

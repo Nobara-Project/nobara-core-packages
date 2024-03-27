@@ -6,7 +6,8 @@
       "subtitle": "open-nobara-issues-subtitle",
       "icon": "nobara-emblem-important",
       "button": "launch-label",
-      "command": "xdg-open https://feed.nobaraproject.org/en"
+      "terminal": false,
+      "command": "xdg-open https://feed.nobaraproject.org/en &"
     },
     {
       "id": 1,
@@ -14,7 +15,8 @@
       "subtitle": "open-nobara-docs-subtitle",
       "icon": "nobara-emblem-documents",
       "button": "launch-label",
-      "command": "xdg-open https://nobaraproject.org/docs/"
+      "terminal": false,
+      "command": "xdg-open https://nobaraproject.org/docs/ &"
     }
   ]
 }

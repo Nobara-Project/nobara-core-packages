@@ -2,18 +2,14 @@
   "developers": [
     {
       "id": 0,
-      "dev": "Welcome App's coding:\nCosmo & GloriousEggroll"
+      "dev": "Welcome App:\nCosmo, PizzaLovingNerd, & GloriousEggroll"
     },
     {
       "id": 1,
-      "dev": "Welcome App's UI:\nPizzaLovingNerd - risiOS BDFL"
-    },
-    {
-      "id": 2,
       "dev": "Webapps manager:\nThe Linux Mint team"
     },
     {
-      "id": 3,
+      "id": 2,
       "dev": "Standalone gamescope session:\nThe ChimeraOS Team & KyleGospo"
     }
   ]
