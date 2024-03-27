@@ -2,7 +2,7 @@
 if [[ ! -f /opt/resolve/bin/resolve ]]; then
 	echo 'DaVinci Resolve must be installed first.'
 else
-	if [[ ! -z $(ls /opt/resolve/libs | grep libglib-2) ]]; then
+	if [[ ! -f /usr/bin/davinci-resolve ]]; then
 		/usr/lib/nobara/nobara-welcome/scripts/pkexec-resolve.sh
 	else
 		echo "DaVinci Resolve fixup has already been applied."
