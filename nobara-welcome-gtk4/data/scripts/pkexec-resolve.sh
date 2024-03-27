@@ -18,3 +18,5 @@ done
 if [[ -f /usr/share/applications/com.blackmagicdesign.resolve.desktop ]]; then
 	sed -i 's|Exec=/opt/resolve/bin/resolve|Exec=/usr/bin/davinci-resolve|g' /usr/share/applications/com.blackmagicdesign.resolve.desktop
 fi
+
+echo "All done! Run resolve with 'davinci-resolve' command."

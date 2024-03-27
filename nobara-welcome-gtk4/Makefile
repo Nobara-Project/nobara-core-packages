@@ -2,7 +2,7 @@ export PATH := $(PWD):$(PATH)
 
 all:
 	true
-
+#
 build:
 	cargo fetch
 	cargo build --release
@@ -22,14 +22,11 @@ install_no_build:
 	mkdir -p $(DESTDIR)/usr/share/glib-2.0/schemas/
 	mkdir -p $(DESTDIR)/usr/share/
 	mkdir -p $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/updater
-	mkdir -p $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/resolve
 	mkdir -p $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/steam
 	cp -rvf data/scripts/*.sh $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/
 	chmod 755 $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/*.sh
 	cp -rvf data/scripts/updater/* $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/updater/
 	chmod 755 $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/updater/*
-	cp -rvf data/scripts/resolve/* $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/resolve/
-	chmod 755 $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/resolve/*
 	cp -rvf data/scripts/steam/* $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/steam/
 	chmod 755 $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/steam/*
 	cp data/com.github.nobaraproject.nobarawelcome.gschema.xml $(DESTDIR)/usr/share/glib-2.0/schemas/
@@ -60,14 +57,11 @@ install:
 	mkdir -p $(DESTDIR)/usr/share/glib-2.0/schemas/
 	mkdir -p $(DESTDIR)/usr/share/
 	mkdir -p $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/updater
-	mkdir -p $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/resolve
 	mkdir -p $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/steam
 	cp -rvf data/scripts/*.sh $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/
 	chmod 755 $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/*.sh
 	cp -rvf data/scripts/updater/* $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/updater/
 	chmod 755 $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/updater/*
-	cp -rvf data/scripts/resolve/* $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/resolve/
-	chmod 755 $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/resolve/*
 	cp -rvf data/scripts/steam/* $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/steam/
 	chmod 755 $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/steam/*
 	cp data/com.github.nobaraproject.nobarawelcome.gschema.xml $(DESTDIR)/usr/share/glib-2.0/schemas/
