@@ -165,8 +165,8 @@ pub fn optional_steps_page(
                 .build();
     
             let step_step_update_command_log_terminal_scroll = gtk::ScrolledWindow::builder()
-                .width_request(400)
-                .height_request(200)
+                .width_request(800)
+                .height_request(400)
                 .vexpand(true)
                 .hexpand(true)
                 .child(&step_step_update_command_log_terminal)
