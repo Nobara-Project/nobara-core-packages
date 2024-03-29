@@ -3,7 +3,6 @@ if [[ -n $(cat ~/.config/kdedefaults/plasmarc | grep 'name=Nobara') ]]; then
   gsettings set org.gnome.desktop.interface gtk-theme Nobara
   if [[ ! -f $(cat ~/.config/breezerc) ]]; then
     cp /etc/xdg/breezerc ~/.config/
-    lookandfeeltool -a org.nobaraproject.desktop
   fi
 fi
 
