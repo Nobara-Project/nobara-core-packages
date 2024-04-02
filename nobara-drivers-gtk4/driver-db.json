@@ -28,7 +28,7 @@
       "id": 3,
       "driver": "alsa-firmware",
       "icon": "speaker",
-      "experimental": true,
+      "experimental": false,
       "removable": true,
       "detection": "lspci -D | grep -iE 'Audio' | grep -i 'Sound Blaster'"
     }
