@@ -23,6 +23,14 @@
       "experimental": false,
       "removable": true,
       "detection": "lspci -D | grep -iE 'VGA|3D' | grep -i nvidia"
+    },
+    {
+      "id": 3,
+      "driver": "alsa-firmware",
+      "icon": "speaker",
+      "experimental": false,
+      "removable": true,
+      "detection": "lspci -D | grep -iE 'Audio' | grep -i 'Sound Blaster'"
     }
   ]
 }
