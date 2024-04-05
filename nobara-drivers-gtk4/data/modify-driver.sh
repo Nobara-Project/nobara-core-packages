@@ -59,6 +59,15 @@ then
 		sudo -i -u pkg-build lpf update xone-firmware
 	fi
 	exit 0
+elif [[ "$1" = "asusctl" ]]
+then
+	if rpm -q asusctl
+	then
+		pkcon remove -y asusctl asusctl-rog-gui
+	else
+		pkcon install -y asusctl asusctl-rog-gui
+	fi
+	exit 0
 # Standard case
 else
 	if rpm -q "$1"
