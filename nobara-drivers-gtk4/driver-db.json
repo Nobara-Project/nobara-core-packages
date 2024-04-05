@@ -31,6 +31,14 @@
       "experimental": false,
       "removable": true,
       "detection": "lspci -D | grep -iE 'Audio' | grep -i 'Sound Blaster'"
+    },
+    {
+      "id": 4,
+      "driver": "asusctl",
+      "icon": "fan",
+      "experimental": false,
+      "removable": true,
+      "detection": "cat /sys/devices/virtual/dmi/id/product_name | grep -i 'ROG'"
     }
   ]
 }
