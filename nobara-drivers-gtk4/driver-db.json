@@ -35,7 +35,7 @@
     {
       "id": 4,
       "driver": "asusctl",
-      "icon": "fan",
+      "icon": "preferences-desktop",
       "experimental": false,
       "removable": true,
       "detection": "cat /sys/devices/virtual/dmi/id/product_name | grep -i 'ROG'"
