@@ -1,4 +1,7 @@
 #!/usr/bin/bash
+if [[ ! -z $(w | grep $USER | grep "gamescope-session-plus@steam.service") ]]; then
+    unset LD_PRELOAD
+fi
 
 suppress-gtk-warnings() {
     # $1 is the name which should appear on history but is otherwise unused.
@@ -25,7 +28,8 @@ if [[ -n $DISPLAY ]] ; then
       suppress-gtk-warnings exec python3 /usr/lib/nobara/nobara-welcome/scripts/updater/main.py
     else
       if [[ ! -z $(w | grep $USER | grep "gamescope-session-plus@steam.service") ]];then
-        LD_PRELOAD="" konsole -e /bin/bash -c "sudo /usr/lib/nobara/nobara-welcome/scripts/updater/nobara-sync.sh nobara-cli $USER"
+         #konsole -e /bin/bash -c "unset DISPLAY;sudo /usr/lib/nobara/nobara-welcome/scripts/updater/nobara-sync.sh nobara-cli $USER"
+         st -e /bin/bash -c "unset DISPLAY;sudo /usr/lib/nobara/nobara-welcome/scripts/updater/nobara-sync.sh nobara-cli $USER"
       else
         unset DISPLAY
         sudo /usr/lib/nobara/nobara-welcome/scripts/updater/nobara-sync.sh nobara-cli $USER
@@ -34,3 +38,6 @@ if [[ -n $DISPLAY ]] ; then
 else
     sudo /usr/lib/nobara/nobara-welcome/scripts/updater/nobara-sync.sh nobara-cli $USER
 fi
+
+exit 0
+
