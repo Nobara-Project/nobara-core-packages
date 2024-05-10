@@ -3,10 +3,9 @@ if [[ ! -f /opt/resolve/bin/resolve ]]; then
 	echo 'DaVinci Resolve must be installed first.'
 else
 	if [[ ! -f /usr/bin/davinci-resolve ]]; then
-		/usr/lib/nobara/nobara-welcome/scripts/pkexec-resolve.sh
+		/usr/lib/nobara/nobara-welcome/scripts/nobara-resolve.sh
+		echo "Run resolve with 'davinci-resolve' command."
 	else
 		echo "DaVinci Resolve fixup has already been applied."
 	fi
 fi
-
-echo "Run resolve with 'davinci-resolve' command."
