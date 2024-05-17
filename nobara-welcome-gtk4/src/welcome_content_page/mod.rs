@@ -30,38 +30,7 @@ use crate::config::{APP_GITHUB, APP_ICON, APP_ID, VERSION};
 
 pub fn welcome_content_page(window: &adw::ApplicationWindow, content_box: &gtk::Box) {
     let glib_settings = gio::Settings::new(APP_ID);
-    let internet_connected = Rc::new(RefCell::new(false));
-
-    let (internet_loop_sender, internet_loop_receiver) = async_channel::unbounded();
-    let internet_loop_sender = internet_loop_sender.clone();
-    // The long running operation runs now in a separate thread
-    gio::spawn_blocking(move || {
-        loop {
-            //match check_internet_connection() {
-            //    Ok(_) => {
-            //        internet_loop_sender.send_blocking(true).expect("The channel needs to be open.");
-            //    }
-            //    Err(_) => {
-            //        internet_loop_sender.send_blocking(false).expect("The channel needs to be open.");
-            //    }
-            //}
-            let check_internet_connection_cli = Command::new("ping")
-                .arg("iso.pika-os.com")
-                .arg("-c 1")
-                .output()
-                .expect("failed to execute process");
-            if check_internet_connection_cli.status.success() {
-                internet_loop_sender
-                    .send_blocking(true)
-                    .expect("The channel needs to be open.");
-            } else {
-                internet_loop_sender
-                    .send_blocking(false)
-                    .expect("The channel needs to be open.");
-            }
-        }
-    });
-
+    let internet_connected = Rc::new(RefCell::new(true));
     let window_banner = adw::Banner::builder().revealed(false).build();
 
     let window_title_bar = gtk::HeaderBar::builder().show_title_buttons(true).build();
@@ -186,20 +155,6 @@ pub fn welcome_content_page(window: &adw::ApplicationWindow, content_box: &gtk::
 
     startup_switch.connect_toggled(clone!(@weak startup_switch => move |_| {
         let _ = glib_settings.set_boolean("startup-show", startup_switch.is_active());
-    }));
-
-    let internet_connected_status = internet_connected.clone();
-
-    let internet_loop_context = MainContext::default();
-    // The main loop executes the asynchronous block
-    internet_loop_context.spawn_local(clone!(@weak window => async move {
-        while let Ok(state) = internet_loop_receiver.recv().await {
-            if state == true {
-                *internet_connected_status.borrow_mut()=true;
-            } else {
-                *internet_connected_status.borrow_mut()=false;
-            }
-        }
     }));
 
     welcome_page(
