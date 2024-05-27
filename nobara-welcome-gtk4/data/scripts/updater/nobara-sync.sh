@@ -434,6 +434,17 @@ dnf_update() {
 		fi
 	fi
 
+	# Fixup winehq-staging packaging changes
+	if [[ $(dnf list installed | grep winehq-staging | awk '{print $2}' | cut -d ":" -f 2 | cut -d "-" -f 1) < 9.9 ]]; then
+		echo "#####"
+		echo "Upstream wine packaging has changed, fixing conflicts"
+		echo "#####"
+		sudo rpm -e --nodeps winehq-staging
+		sudo rpm -e --nodeps wine-staging64
+		sudo rpm -e --nodeps wine-staging-common
+		sudo dnf5 install -y winehq-staging --refresh
+	fi
+
 	echo "#####"
 	echo "Performing distribution sync to prevent package update mismatches"
 	echo "#####"
