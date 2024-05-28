@@ -541,61 +541,16 @@ dnf_install_progress() {
 
 flatpak_install_progress() {
 	export XDG_DATA_DIRS=$USERHOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share:/var/lib/snapd/desktop
-	if [[ -n $DISPLAY ]]; then
-		if zenity --question --text="Flatpak has been detected! Would like to update all Flatpaks on your system?" 2>/dev/null; then
-			flatpak update --appstream -y
-			flatpak update -y
-			sudo -u $displayuser flatpak update --appstream -y
-			sudo -u $displayuser flatpak update -y
-		else
-			echo "INFO: Skipping flatpak updates."
-		fi
-	else
-		read -rp "QUESTION: Flatpak has been detected! Would like to update all Flatpaks on your system? [y/n] " yn
-		case $yn in
-		y)
-			flatpak update --appstream -y
-			flatpak update -y
-			sudo -u $displayuser flatpak update --appstream -y
-			sudo -u $displayuser flatpak update -y
-			;;
-		n)
-			echo "INFO: Skipping flatpak updates."
-			;;
-		*)
-			flatpak update --appstream -y
-			flatpak update -y
-			sudo -u $displayuser flatpak update --appstream -y
-			sudo -u $displayuser flatpak update -y
-			;;
-		esac
-	fi
+
+	flatpak update --appstream -y
+	flatpak update -y
+	sudo -u $displayuser flatpak update --appstream -y
+	sudo -u $displayuser flatpak update -y
 }
 
 snap_install_progress() {
-	if [[ -n $DISPLAY ]]; then
-		if zenity --question --text="Snap has been detected! Would like to update all Snaps on your system?" 2>/dev/null; then
-			snap refresh
-			sudo -u $displayuser snap refresh
-		else
-			echo "INFO: Skipping snap updates."
-		fi
-	else
-		read -rp "QUESTION: Snap has been detected! Would like to update all Snaps on your system? [y/n] " yn
-		case $yn in
-		y)
-			snap refresh
-			sudo -u $displayuser snap refresh
-			;;
-		n)
-			echo "INFO: Skipping snap updates."
-			;;
-		*)
-			snap refresh
-			sudo -u $displayuser snap refresh
-			;;
-		esac
-	fi
+	snap refresh
+	sudo -u $displayuser snap refresh
 }
 
 internet_check
@@ -607,11 +562,13 @@ fi
 
 ### Flatpak UPGRADE
 if [[ $INTERNET == yes ]] && [[ -x "$(command -v flatpak)" ]]; then
+	echo "Flatpak has been detected, updating Flatpaks in your system"
 	flatpak_install_progress
 fi
 
 ### Snap UPGRADE
 if [[ $INTERNET == yes ]] && [[ -x "$(command -v snap)" ]]; then
+	echo "Snap has been detected, updating Snaps in your system"
 	snap_install_progress
 fi
 
