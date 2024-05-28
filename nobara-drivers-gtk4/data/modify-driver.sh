@@ -51,7 +51,7 @@ elif [[ "$1" = "xone" ]]
 then
 	if rpm -q xone
 	then
-		pkcon remove -y lpf-xone-firmware xone xpadneo xone-firmware
+		dnf remove -y lpf-xone-firmware xone xpadneo xone-firmware
 	else
 		dnf install -y "dnf5-command(builddep)"
 		usermod -aG pkg-build $USER && dnf4 install -y lpf-xone-firmware xone xpadneo && dnf4 remove -y xone-firmware
@@ -59,13 +59,23 @@ then
 		sudo -i -u pkg-build lpf update xone-firmware
 	fi
 	exit 0
+# Special override for asusctl
+elif [[ "$1" = "asusctl" ]]
+then
+	if rpm -q asusctl
+	then
+		dnf remove -y asusctl asusctl-rog-gui
+	else
+		dnf install -y asusctl asusctl-rog-gui
+	fi
+	exit 0
 # Standard case
 else
 	if rpm -q "$1"
 	then
-		pkcon remove -y "$1"
+		dnf remove -y "$1"
 	else
-		pkcon install -y "$1"
+		dnf install -y "$1"
 	fi
 	exit 0
 fi
