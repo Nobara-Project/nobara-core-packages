@@ -2,8 +2,6 @@
     "app_name": "Nobara Driver Manager",
     "app_dev": "Cosmo",
     "loading_label_label": "Downloading driver database...",
-    "loading_no_internet_box_text_title": "Network Error!",
-    "loading_no_internet_box_text_description": "An Internet Connection is needed to download the driver database.",
     "device_label_label_prefix": "Device: ",
     "driver_install_button_label": "Install",
     "driver_install_button_tooltip_text": "Install the driver package.",
