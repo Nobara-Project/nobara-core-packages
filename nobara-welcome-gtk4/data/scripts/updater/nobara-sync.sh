@@ -445,6 +445,55 @@ dnf_update() {
 		sudo dnf5 install -y winehq-staging --refresh
 	fi
 
+	# This is to clean up some packages from N39 that are no longer in N40
+	N40_CLEANUP=""
+	if [[ -n $(rpm -qa | grep kf5-baloo-file) ]]; then
+		N40_CLEANUP+="kf5-baloo-file "
+	fi
+
+	if [[ -n $(rpm -qa | grep supergfxctl-plasmoid) ]]; then
+		N40_CLEANUP+="supergfxctl-plasmoid "
+	fi
+
+	if [[ -n $(rpm -qa | grep layer-shell-qt5) ]]; then
+		N40_CLEANUP+="layer-shell-qt5 "
+	fi
+
+	if [[ -n $(rpm -qa | grep herqq) ]]; then
+		N40_CLEANUP+="herqq "
+	fi
+
+	if [[ -n $(rpm -qa | grep hfsutils) ]]; then
+		N40_CLEANUP+="hfsutils "
+	fi
+
+	if [[ -n $(rpm -qa | grep phonon-qt4) ]]; then
+		N40_CLEANUP+="phonon-qt4 "
+	fi
+
+	if [[ -n $(rpm -qa | grep okular5-libs) ]]; then
+		N40_CLEANUP+="okular5-libs "
+	fi
+
+	if [[ -n $(rpm -qa | grep fedora-workstation-repositories) ]]; then
+		N40_CLEANUP+="fedora-workstation-repositories "
+	fi
+
+	if [[ -n $(rpm -qa | grep gnome-shell-extension-supergfxctl-gex) ]]; then
+		N40_CLEANUP+="gnome-shell-extension-supergfxctl-gex "
+	fi
+
+	if [[ -n $(rpm -qa | grep mesa-demos) ]]; then
+		N40_CLEANUP+="mesa-demos "
+	fi
+
+	if [[ "$N40_CLEANUP" != "" ]]; then
+		echo "#####"
+		echo "Cleaning up some deprecated Nobara 39 packages"
+		echo "#####"
+		sudo dnf5 remove -y $N40_CLEANUP
+	fi
+
 	echo "#####"
 	echo "Performing distribution sync to prevent package update mismatches"
 	echo "#####"
