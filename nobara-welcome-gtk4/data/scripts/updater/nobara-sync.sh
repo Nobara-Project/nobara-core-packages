@@ -548,11 +548,6 @@ flatpak_install_progress() {
 	sudo -u $displayuser flatpak update -y
 }
 
-snap_install_progress() {
-	snap refresh
-	sudo -u $displayuser snap refresh
-}
-
 internet_check
 
 ### DNF UPGRADE
@@ -566,12 +561,6 @@ if [[ $INTERNET == yes ]] && [[ -x "$(command -v flatpak)" ]]; then
 	flatpak_install_progress
 fi
 
-### Snap UPGRADE
-if [[ $INTERNET == yes ]] && [[ -x "$(command -v snap)" ]]; then
-	echo "Snap has been detected, updating Snaps in your system"
-	snap_install_progress
-fi
-
 ### Final dialog
 if cat /tmp/dnf.sync.success; then
 	if [[ $DNF_STATE_STAGE == true ]]; then
@@ -582,6 +571,9 @@ if cat /tmp/dnf.sync.success; then
 		echo "INFO: Update Complete!"
 		echo "INFO: Log can be found at $loglocation."
 		if [[ -n $DISPLAY ]]; then
+			if [[ -n $(systemctl --user status yumex-updater-systray | grep -i running) ]]; then
+				sudo -u $displayuser DISPLAY=$DISPLAY dbus-send --session --dest=com.yumex.UpdateService --type=method_call /com/yumex/UpdateService com.yumex.UpdateService.RefreshUpdates
+			fi
 			if zenity --question --title='Update my system' --text='It is recommended to reboot for changes to apply properly. Reboot now?' 2>/dev/null; then
 				echo INFO: Rebooting...
 				dnf_sync_log_remove
