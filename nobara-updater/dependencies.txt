@@ -1,0 +1,17 @@
+Requires: python3
+Requires: python3-gobject
+Requires: python3-psutil
+Requires: python3-requests
+Requires: python3-dnf
+Requires: python3-libdnf5
+Requires: python3-packaging
+Requires: flatpak
+Requires: gtk3
+
+Requires: akmods
+Requires: dracut
+Requires: rpm
+Requires: systemd
+Requires: xdg-utils
+Requires: util-linux
+Requires: yumex
