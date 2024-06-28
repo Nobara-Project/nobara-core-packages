@@ -11,9 +11,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("GLib", "2.0")
 gi.require_version("Flatpak", "1.0")
 
-# For now we are intentionally forcing DNF5
-#from yumex.constants import BACKEND  # type: ignore[import]
-BACKEND = "DNF5"
+from yumex.constants import BACKEND  # type: ignore[import]
+
 if BACKEND == "DNF5":
     from dnf5 import PackageUpdater, updatechecker  # type: ignore[import]
 else:

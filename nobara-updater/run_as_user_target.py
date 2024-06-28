@@ -19,6 +19,7 @@ def run_as_user_target(
     func_name: str,
     log_queue_data: list[Any],
     update_queue_data: list[Any],
+    option: str = "",
     *args: Any,
 ) -> None:
     os.setgid(gid)
@@ -59,7 +60,7 @@ def run_as_user_target(
 
     # Import the function dynamically from shared_functions
     func = getattr(shared_functions, func_name)
-    result = func(uid, gid, log_queue, update_queue, *args)
+    result = func(uid, gid, log_queue, update_queue, option, *args)
 
     # Collect the queue data to return
     log_queue_data = []
@@ -88,5 +89,6 @@ if __name__ == "__main__":
     func_name = sys.argv[3]
     log_queue_data = json.loads(sys.argv[4])
     update_queue_data = json.loads(sys.argv[5])
-    args = sys.argv[6:]
-    run_as_user_target(uid, gid, func_name, log_queue_data, update_queue_data, *args)
+    option = str(sys.argv[6])
+    args = sys.argv[7:]
+    run_as_user_target(uid, gid, func_name, log_queue_data, update_queue_data, option, *args)

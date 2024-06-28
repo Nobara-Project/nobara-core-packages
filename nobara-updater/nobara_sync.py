@@ -28,10 +28,9 @@ gi.require_version("Flatpak", "1.0")
 from typing import Any
 
 from gi.repository import Flatpak, GLib, Gtk  # type: ignore[import]
-# For now we are intentionally forcing DNF5
-#from yumex.constants import BACKEND  # type: ignore[import]
+from yumex.constants import BACKEND  # type: ignore[import]
 from yumex.utils.dbus import sync_updates  # type: ignore[import]
-BACKEND = "DNF5"
+
 if BACKEND == "DNF5":
     from dnf5 import (  # type: ignore[import]
         AttributeDict,
@@ -212,7 +211,7 @@ def is_running_with_sudo_or_pkexec() -> int:
     return 0
 
 def run_as_user(
-    uid: int, gid: int, func_name: str, *args: Any
+    uid: int, gid: int, func_name: str, option: str = "", *args: Any
 ) -> list[str] | None:
     # Determine the real directory of the main script
     script_dir = Path(SCRIPT_FILE).resolve().parent
@@ -236,10 +235,12 @@ def run_as_user(
         func_name,
         json.dumps(log_queue_data),
         json.dumps(update_queue_data),
+        str(option),
         *args,
     ]
 
     result = subprocess.run(command, capture_output=True, text=True)
+
     if result.returncode == 0 and result.stdout is not None:
         try:
             output = json.loads(result.stdout.strip())
@@ -685,7 +686,7 @@ def install_updates() -> None:
     # Perform akmods and dracut if kmods or kernel were updated.
     if perform_kernel_actions == 1:
         logger.info(
-            "Kernel or akmod package updates were performed. Running required 'akmods' and 'dracut -f'...\n"
+            "Kernel or kernel module updates were performed. Running required 'akmods' and 'dracut -f'...\n"
         )
 
         # Run the commands
@@ -720,7 +721,7 @@ def install_updates() -> None:
             logger.error("Error: %s", e.strerror)
 
     if perform_reboot_request == 1:
-        logger.info("Kernel or Kernel Module update performed. Reboot required.")
+        logger.info("Kernel, kernel module, or desktop compositor update performed. Reboot required.")
         prompt_reboot()
 
 
@@ -1123,6 +1124,10 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         self.open_log_button_dir = Gtk.Button(label="Open Log Directory")
         self.open_log_button_dir.connect("clicked", self.on_open_log_button_dir_clicked)
 
+        # Create the button to open the package manager
+        self.open_package_man_button = Gtk.Button(label="Open Package Manager")
+        self.open_package_man_button.connect("clicked", self.on_open_package_man_button_clicked)
+
         # Create a grid to arrange the labels, text views
         grid = Gtk.Grid()
         grid.set_column_spacing(6)
@@ -1160,6 +1165,10 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         # Column 0, Row 8, spanning 3 columns
         grid.attach(
             self.open_log_button_dir, 0, 8, 3, 1
+        )
+        # Column 0, Row 9, spanning 3 columns
+        grid.attach(
+            self.open_package_man_button, 0, 9, 3, 1
         )
 
         self.add(grid)
@@ -1248,21 +1257,19 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
     def on_fixups_button_clicked(self, widget):
         threading.Thread(target=self.on_fixups_updates_button_clicked_async).start()
 
-    def on_open_log_button_clicked_async(self):
-        run_as_user(
-            self.orig_user_uid, self.orig_user_gid, "on_open_log_button_clicked"
-        )
-
     def on_open_log_button_clicked(self, widget):
-        threading.Thread(target=self.on_open_log_button_clicked_async).start()
-
-    def on_open_log_button_dir_clicked_async(self):
-        run_as_user(
-            self.orig_user_uid, self.orig_user_gid, "on_open_log_button_dir_clicked"
-        )
+        threading.Thread(target=self.button_popen_async, args=("log_file",)).start()
 
     def on_open_log_button_dir_clicked(self, widget):
-        threading.Thread(target=self.on_open_log_button_dir_clicked_async).start()
+        threading.Thread(target=self.button_popen_async, args=("log_dir",)).start()
+
+    def on_open_package_man_button_clicked(self, widget):
+        threading.Thread(target=self.button_popen_async, args=("pac_man",)).start()
+
+    def button_popen_async(self, option: str) -> None:
+        run_as_user(
+            self.orig_user_uid, self.orig_user_gid, "on_button_popen_async", option
+        )
 
     def on_status_text_inserted(self, buffer, iter, text, length):
         # Create a mark at the end of the buffer
