@@ -152,6 +152,11 @@ dnf_update() {
 		fi
 	fi
 
+	# Don't allow kde discover to manage system packages or updates
+	if [[ ! -z $(rpm -qa | grep plasma-discover-packagekit) ]]; then
+		dnf5 remove -y plasma-discover-packagekit
+	fi
+
 	# Check for non-fedora shipped codec/multimedia packages. If they are installed, trigger media fixup to reset them
 	MEDIAFIXUP=0
 
