@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import shared_functions  # type: ignore[import]
+import nobara_updater.shared_functions as shared_functions  # type: ignore[import]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

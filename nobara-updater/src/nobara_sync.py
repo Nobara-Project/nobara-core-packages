@@ -19,7 +19,8 @@ from pathlib import Path
 import gi  # type: ignore[import]
 import psutil
 import requests
-from quirks import QuirkFixup  # type: ignore[import]
+from nobara_updater.quirks import QuirkFixup  # type: ignore[import]
+from nobara_updater.run_as import run_as_user
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("GLib", "2.0")
@@ -32,21 +33,19 @@ from yumex.constants import BACKEND  # type: ignore[import]
 from yumex.utils.dbus import sync_updates  # type: ignore[import]
 
 if BACKEND == "DNF5":
-    from dnf5 import (  # type: ignore[import]
+    from nobara_updater.dnf5 import (  # type: ignore[import]
         AttributeDict,
         PackageUpdater,
         repoindex,
         updatechecker,
     )
 else:
-    from dnf4 import (  # type: ignore[import]
+    from nobara_updater.dnf4 import (  # type: ignore[import]
         AttributeDict,
         PackageUpdater,
         repoindex,
         updatechecker,
     )
-
-SCRIPT_FILE = __file__
 
 package_names = updatechecker()
 
@@ -210,55 +209,6 @@ def is_running_with_sudo_or_pkexec() -> int:
 
     return 0
 
-def run_as_user(
-    uid: int, gid: int, func_name: str, option: str = "", *args: Any
-) -> list[str] | None:
-    # Determine the real directory of the main script
-    script_dir = Path(SCRIPT_FILE).resolve().parent
-    # Construct the path to run_as_user_target.py
-    target_script = script_dir / "run_as_user_target.py"
-
-    # Create a manager for shared queues
-    manager = multiprocessing.Manager()
-    log_queue = manager.Queue()
-    update_queue = manager.Queue()
-
-    # Serialize the queue data
-    log_queue_data: list[Any] = []
-    update_queue_data: list[Any] = []
-
-    command = [
-        sys.executable,
-        target_script,
-        str(uid),
-        str(gid),
-        func_name,
-        json.dumps(log_queue_data),
-        json.dumps(update_queue_data),
-        str(option),
-        *args,
-    ]
-
-    result = subprocess.run(command, capture_output=True, text=True)
-
-    if result.returncode == 0 and result.stdout is not None:
-        try:
-            output = json.loads(result.stdout.strip())
-            # Deserialize the queue data
-            for item in output["log_queue"]:
-                log_queue.put(item)
-            for item in output["update_queue"]:
-                update_queue.put(item)
-            # Process logs
-            while not log_queue.empty():
-                log_message = log_queue.get()
-                logger.info(log_message)
-            return output["result"]
-        except json.JSONDecodeError:
-            logger.error("Failed to decode JSON output from subprocess")
-            return None
-    else:
-        return None
 
 # Read VERSION_ID from /etc/os-release
 def get_os_release_version() -> str:
@@ -646,7 +596,7 @@ def install_fixups() -> None:
         try:
             logger.info("Running quirk fixup -- second pass")
             # Reload the quirks module to apply any changes made to quirks.py
-            import quirks
+            import nobara_updater.quirks
 
             importlib.reload(quirks)
 

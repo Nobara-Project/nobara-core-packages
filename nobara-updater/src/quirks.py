@@ -14,9 +14,9 @@ gi.require_version("Flatpak", "1.0")
 from yumex.constants import BACKEND  # type: ignore[import]
 
 if BACKEND == "DNF5":
-    from dnf5 import PackageUpdater, updatechecker  # type: ignore[import]
+    from nobara_updater.dnf5 import PackageUpdater, updatechecker  # type: ignore[import]
 else:
-    from dnf4 import PackageUpdater, updatechecker  # type: ignore[import]
+    from nobara_updater.dnf4 import PackageUpdater, updatechecker  # type: ignore[import]
 
 
 class QuirkFixup:
@@ -31,10 +31,16 @@ class QuirkFixup:
         perform_refresh = 0
 
         # QUIRK 1: Make sure to update the updater itself and refresh before anything
-        if "nobara-welcome" in package_names:
-            updater_name = ["nobara-welcome"]
-            log_message = "An update for the Update System app has been detected, updating 'nobara-welcome'...\n"
-            self.update_core_packages(updater_name, action, log_message)
+        update_self = [
+            "nobara-welcome",
+            "nobara-updater",
+        ]
+        if any(pkg in package_names for pkg in update_self):
+            update_self = [
+                pkg for pkg in package_names if "nobara-welcome" in pkg or "nobara-updater" in pkg
+            ]
+            log_message = "An update for the Update System app has been detected, updating self...\n"
+            self.update_core_packages(update_self, action, log_message)
             perform_refresh = 1
 
         # QUIRK 2: Make sure to refresh the repositories and gpg-keys before anything

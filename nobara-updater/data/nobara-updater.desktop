@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Update System
-Exec=/usr/bin/nobara-sync
+Exec=/usr/bin/nobara-updater
 Icon=system-software-update
 Terminal=false
 Type=Application

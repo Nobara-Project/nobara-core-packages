@@ -13,23 +13,18 @@ install_no_build:
 	chmod 755 $(DESTDIR)/usr/bin/nobara-welcome
 	cp -vf data/bin/nobara-welcome-autostart $(DESTDIR)/usr/bin/
 	chmod 755 $(DESTDIR)/usr/bin/nobara-welcome-autostart
-	cp -vf data/bin/nobara-sync $(DESTDIR)/usr/bin/
-	chmod 755 $(DESTDIR)/usr/bin/nobara-sync
 	cp -vf data/bin/nobara-resolve-wizard $(DESTDIR)/usr/bin/
 	chmod 755 $(DESTDIR)/usr/bin/nobara-resolve-wizard
 	cp -vf data/bin/nobara-steam-fixes $(DESTDIR)/usr/bin/
 	chmod 755 $(DESTDIR)/usr/bin/nobara-steam-fixes
 	mkdir -p $(DESTDIR)/usr/share/glib-2.0/schemas/
 	mkdir -p $(DESTDIR)/usr/share/
-	mkdir -p $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/updater
-	cp -rvf data/scripts/*.sh $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/
+	mkdir -p $(DESTDIR)/usr/lib/nobara/nobara-welcome/
+	cp -rvf data/scripts $(DESTDIR)/usr/lib/nobara/nobara-welcome/
 	chmod 755 $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/*.sh
-	cp -rvf data/scripts/updater/* $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/updater/
-	chmod 755 $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/updater/*
 	cp data/com.github.nobaraproject.nobarawelcome.gschema.xml $(DESTDIR)/usr/share/glib-2.0/schemas/
 	mkdir -p $(DESTDIR)/usr/share/applications
 	cp -vf data/com.github.nobaraproject.nobarawelcome.desktop  $(DESTDIR)/usr/share/applications/
-	cp -vf data/nobara-sync.desktop $(DESTDIR)/usr/share/applications/
 	mkdir -p $(DESTDIR)/etc/xdg/autostart
 	cp -vf data/nobara-welcome-autostart.desktop  $(DESTDIR)/etc/xdg/autostart/
 	mkdir -p $(DESTDIR)/usr/share/icons/hicolor/scalable/apps
@@ -46,23 +41,18 @@ install:
 	chmod 755 $(DESTDIR)/usr/bin/nobara-welcome
 	cp -vf data/bin/nobara-welcome-autostart $(DESTDIR)/usr/bin/
 	chmod 755 $(DESTDIR)/usr/bin/nobara-welcome-autostart
-	cp -vf data/bin/nobara-sync $(DESTDIR)/usr/bin/
-	chmod 755 $(DESTDIR)/usr/bin/nobara-sync
 	cp -vf data/bin/nobara-resolve-wizard $(DESTDIR)/usr/bin/
 	chmod 755 $(DESTDIR)/usr/bin/nobara-resolve-wizard
 	cp -vf data/bin/nobara-steam-fixes $(DESTDIR)/usr/bin/
 	chmod 755 $(DESTDIR)/usr/bin/nobara-steam-fixes
 	mkdir -p $(DESTDIR)/usr/share/glib-2.0/schemas/
 	mkdir -p $(DESTDIR)/usr/share/
-	mkdir -p $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/updater
-	cp -rvf data/scripts/*.sh $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/
+	mkdir -p $(DESTDIR)/usr/lib/nobara/nobara-welcome/
+	cp -rvf data/scripts $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/
 	chmod 755 $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/*.sh
-	cp -rvf data/scripts/updater/* $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/updater/
-	chmod 755 $(DESTDIR)/usr/lib/nobara/nobara-welcome/scripts/updater/*
 	cp data/com.github.nobaraproject.nobarawelcome.gschema.xml $(DESTDIR)/usr/share/glib-2.0/schemas/
 	mkdir -p $(DESTDIR)/usr/share/applications
 	cp -vf data/com.github.nobaraproject.nobarawelcome.desktop  $(DESTDIR)/usr/share/applications/
-	cp -vf data/nobara-sync.desktop $(DESTDIR)/usr/share/applications/
 	mkdir -p $(DESTDIR)/etc/xdg/autostart
 	cp -vf data/nobara-welcome-autostart.desktop  $(DESTDIR)/etc/xdg/autostart/
 	mkdir -p $(DESTDIR)/usr/share/icons/hicolor/scalable/apps
