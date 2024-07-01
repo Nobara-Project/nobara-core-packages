@@ -30,7 +30,6 @@ from typing import Any
 
 from gi.repository import Flatpak, GLib, Gtk  # type: ignore[import]
 from yumex.constants import BACKEND  # type: ignore[import]
-from yumex.utils.dbus import sync_updates  # type: ignore[import]
 
 if BACKEND == "DNF5":
     from nobara_updater.dnf5 import (  # type: ignore[import]
@@ -598,10 +597,10 @@ def install_fixups() -> None:
             # Reload the quirks module to apply any changes made to quirks.py
             import nobara_updater.quirks
 
-            importlib.reload(quirks)
+            importlib.reload(nobara_updater.quirks)
 
             # Create a new instance of QuirkFixup after reloading the module
-            quirk_fixup = quirks.QuirkFixup(logger)
+            quirk_fixup = nobara_updater.quirks.QuirkFixup(logger)
             (
                 perform_kernel_actions,
                 perform_reboot_request,
@@ -616,23 +615,29 @@ def install_fixups() -> None:
         logger.info("Problems with Media Packages detected, asking user for repair...")
         prompt_media_fixup()
 
+    # Get the original user's UID and GID
+    orig_user = os.environ.get("ORIG_USER")
+    if orig_user is None:
+        raise ValueError("ORIG_USER environment variable is not set.")
+    orig_user_uid = int(orig_user)
+    pw_record = pwd.getpwuid(orig_user_uid)
+    orig_user_gid = pw_record.pw_gid
+
     # Send update refresh request to systray service
-    sync_updates()
+    run_as_user(
+        orig_user_uid, orig_user_gid, "yumex_sync_updates"
+    )
 
 def install_updates() -> None:
     global perform_kernel_actions
     global perform_reboot_request
+    global package_names
 
     logger.info("Starting package updates, please do not turn off your computer...\n")
     action = "upgrade"
-
-    # Now update our system packages
-    updater_thread = threading.Thread(
-        target=run_package_updater, args=(package_names, action)
-    )
-    updater_thread.start()
-    updater_thread.join()  # Wait for the updater thread to finish
-
+    if package_names:
+        # Now update our system packages
+        PackageUpdater(package_names, action, None, logger)
     # Perform akmods and dracut if kmods or kernel were updated.
     if perform_kernel_actions == 1:
         logger.info(
@@ -660,7 +665,9 @@ def install_updates() -> None:
     )
 
     # Send update refresh request to systray service
-    sync_updates()
+    run_as_user(
+        orig_user_uid, orig_user_gid, "yumex_sync_updates"
+    )
 
     # Remove newinstall needs-update tracker
     if Path.exists(Path("/etc/nobara/newinstall")):
@@ -744,8 +751,8 @@ def media_fixup() -> None:
 
     action_log_string = "Purging media packages for a clean slate..."
     combined_removal = hard_removal + soft_removal
-    logger.info("%s\n%s", action_log_string, chr(10).join(combined_removal))
-
+    indented_combined_removal = ["    " + line for line in combined_removal]
+    logger.info("%s\n\n%s\n", action_log_string, chr(10).join(indented_combined_removal))
     for package in hard_removal:
         subprocess.run(
             ["rpm", "-e", "--nodeps", package], capture_output=True, text=True
@@ -758,7 +765,7 @@ def media_fixup() -> None:
         )
         if removal_check.returncode == 0:
             soft_removal_list.append(package)
-    if soft_removal_list != []:
+    if soft_removal_list:
         PackageUpdater(soft_removal_list, "remove", None)
 
     install = [
@@ -792,10 +799,19 @@ def media_fixup() -> None:
         "libavcodec-freeworld.x86_64",
         "libavcodec-freeworld.i686",
     ]
-    action_log_string = "Performing clean media package installation..."
-    logger.info("%s\n%s", action_log_string, chr(10).join(install))
 
-    PackageUpdater(install, "install", None)
+    action_log_string = "Performing clean media package installation..."
+    indented_install = ["    " + line for line in install]
+    logger.info("%s\n\n%s\n", action_log_string, chr(10).join(indented_install))
+    install_list = []
+    for package in install:
+        install_check = subprocess.run(
+            ["rpm", "-q", package], capture_output=True, text=True
+        )
+        if install_check.returncode != 0:
+            install_list.append(package)
+    if install_list:
+        PackageUpdater(install_list, "install", None)
     fixups_available = 0
 
 def prompt_reboot() -> None:
@@ -832,14 +848,6 @@ def prompt_reboot() -> None:
                 logger.info("User chose to reboot later.")
                 break
             logger.error("Invalid input. Please enter 'y' or 'yes' or 'n' or 'no'.")
-
-
-def run_package_updater(package_names: list[str], action: str) -> None:
-    # Initialize the PackageUpdater
-    updater = PackageUpdater(package_names, action, None, logger)
-    # Wait for the updater thread to complete
-    updater.thread.join()
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Update System")
@@ -943,11 +951,12 @@ def main() -> None:
             request_update_status()
             exit(0)
         if args.command == "install-fixups":
+            check_updates()
             install_fixups()
+            check_updates()
             request_update_status()
             exit(0)
         if args.command == "check-updates":
-            check_repos()
             check_updates()
             request_update_status()
             exit(0)
@@ -1165,7 +1174,6 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
     def on_install_button_clicked_async(self):
         toggle_refresh()
         GLib.idle_add(self.toggle_buttons_during_refresh)
-        check_repos()
         self.status_label_updates("Starting package updates, please do not turn off your computer...")
         self.textview_updates()
         install_updates()
@@ -1181,7 +1189,6 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
     def on_check_updates_button_clicked_async(self):
         toggle_refresh()
         GLib.idle_add(self.toggle_buttons_during_refresh)
-        check_repos()
         self.textview_updates()
         install_fixups()
         self.textview_updates()

@@ -2,9 +2,10 @@ import logging
 import queue
 import threading
 import time
+import sys
 from logging.handlers import QueueHandler
 from typing import Any
-
+import inspect
 import dnf  # type: ignore[import]
 import gi  # type: ignore[import]
 
@@ -12,6 +13,7 @@ gi.require_version("Gtk", "3.0")
 
 from gi.repository import Gtk  # type: ignore[import]
 
+logger = logging.getLogger()
 
 class AttributeDict(dict[str, Any]):
     def __init__(self, id: str, metalink: Any, mirrorlist: Any, baseurl: Any) -> None:
@@ -43,7 +45,6 @@ class AttributeDict(dict[str, Any]):
 
 def repoindex(retries: int = 3, delay: int = 5) -> list[AttributeDict]:
     attempt = 0
-    logger = logging.getLogger()
     while attempt < retries:
         base = dnf.Base()
         try:
@@ -104,7 +105,6 @@ def repoindex(retries: int = 3, delay: int = 5) -> list[AttributeDict]:
 
 def updatechecker(retries: int = 3, delay: int = 5) -> list[str]:
     attempt = 0
-    logger = logging.getLogger()
     while attempt < retries:
         base = dnf.Base()
         try:
@@ -164,6 +164,72 @@ def updatechecker(retries: int = 3, delay: int = 5) -> list[str]:
     raise Exception("Failed to complete operation after %d attempts" % retries)
 
 
+class CustomTransactionDisplay(dnf.yum.rpmtrans.LoggingTransactionDisplay):
+    def __init__(self, total_packages):
+        super().__init__()
+        self.logger = logging.getLogger(__name__)
+        self.scriptlet_progress = {}
+        self.performing_cleanup = 0
+        self.performing_upgrade = 0
+        self.starting_line = 0
+        self.total_packages = total_packages
+        self.package = ""
+
+    def progress(self, package, action, ti_done, ti_total, ts_done, ts_total):
+        super().progress(package, action, ti_done, ti_total, ts_done, ts_total)
+        action_str = self._get_action_str(action)
+        package_name = str(package)
+
+        match action_str:
+            case "Upgraded:" | "Preparing:" | "Reinstalled:" | "Downgraded:" | "Obsoleted:" | "Cleanup:":
+                return  # Skip logging for these actions
+
+        if action_str == "Running scriptlet:":
+            if self.performing_cleanup == 0:
+                self.logger.info("Cleanup...")
+                self.performing_cleanup = 1
+            else:
+                return
+        else:
+            if self.performing_upgrade == 0:
+                if action_str == "Upgrading:":
+                    self.logger.info("Upgrading...")
+                if action_str == "Removing:":
+                    self.logger.info("Removing...")
+                if action_str == "Downgrading:":
+                    self.logger.info("Downgrading...")
+                if action_str == "Installing:":
+                    self.logger.info("Installing...")
+
+                self.performing_upgrade = 1
+            
+            if self.package != package_name:
+                self.starting_line += 1
+                if self.starting_line <= self.total_packages:
+                    self.package = package_name
+                    self.logger.info(f"    ({self.starting_line}/{self.total_packages}) {action_str} {package_name}")
+                else:
+                    return
+
+    def _get_action_str(self, action):
+        action_map = {
+            dnf.transaction.PKG_DOWNGRADE: 'Downgrading:',
+            dnf.transaction.PKG_DOWNGRADED: 'Downgraded:',
+            dnf.transaction.PKG_INSTALL: 'Installing:',
+            dnf.transaction.PKG_OBSOLETE: 'Obsoleting:',
+            dnf.transaction.PKG_OBSOLETED: 'Obsoleted:',
+            dnf.transaction.PKG_REINSTALL: 'Reinstalling:',
+            dnf.transaction.PKG_REINSTALLED: 'Reinstalled:',
+            dnf.transaction.PKG_REMOVE: 'Removing:',
+            dnf.transaction.PKG_UPGRADE: 'Upgrading:',
+            dnf.transaction.PKG_UPGRADED: 'Upgraded:',
+            dnf.transaction.PKG_CLEANUP: 'Cleanup:',
+            dnf.transaction.PKG_VERIFY: 'Verified:',
+            dnf.transaction.PKG_SCRIPTLET: 'Running scriptlet:',
+            dnf.transaction.TRANS_PREPARATION: 'Preparing:',
+        }
+        return action_map.get(action, action)
+
 class PackageUpdater:
     def __init__(
         self,
@@ -179,8 +245,7 @@ class PackageUpdater:
         self.logger = logger if logger is not None else logging.getLogger()
         self.logger.addHandler(self.queue_handler)
         self.logger.setLevel(logging.INFO)
-        self.thread = threading.Thread(target=self.update_packages, args=(action,))
-        self.thread.start()
+        self.update_packages(action)
 
     def update_packages(self, action: str, retries: int = 3, delay: int = 5) -> None:
         attempt = 0
@@ -216,8 +281,8 @@ class PackageUpdater:
 
                     # Perform the transaction
                     self.logger.info("Starting transaction")
-                    base.do_transaction()
-                    self.logger.info("Performed transaction")
+                    display = [CustomTransactionDisplay(len(self.package_names))]
+                    base.do_transaction(display)
 
                     self.logger.info("Successfully updated packages!")
                     return  # Exit the loop on success
@@ -234,6 +299,7 @@ class PackageUpdater:
                 finally:
                     try:
                         base.close()
+                        attempt = 3
                     except Exception as e:
                         self.logger.error("Failed to close base: %s", e)
         raise Exception("Failed to complete operation after %d attempts" % retries)

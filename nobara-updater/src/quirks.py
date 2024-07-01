@@ -134,14 +134,17 @@ class QuirkFixup:
 
         # QUIRK 7: Install HHD for Legion Go and ROG Ally, cleanup old packages
         check_legion = subprocess.run(
-            ["dmesg", "|", "grep", "'Legion Go'"], capture_output=True, text=True
+            "dmesg | grep 'Legion Go'", capture_output=True, text=True, shell=True
         )
         check_ally = subprocess.run(
-            ["dmesg", "|", "grep", "'ROG Ally'"], capture_output=True, text=True
+            "dmesg | grep 'ROG Ally'", capture_output=True, text=True, shell=True
         )
-        if (
-            check_legion.returncode != 0 or check_ally.returncode != 0
-        ) and check_hhd.returncode != 0:  # Check if the package is installed
+
+        legion_detected = check_legion.returncode == 0
+        ally_detected = check_ally.returncode == 0
+        hhd_installed = check_hhd.returncode != 0
+
+        if (legion_detected or ally_detected) and hhd_installed:
             self.logger.info(
                 "Found Legion Go or ROG Ally, performing old package cleanup and installing hhd (Handheld Daemon)"
             )
@@ -214,7 +217,6 @@ class QuirkFixup:
             "layer-shell-qt5",
             "herqq",
             "hfsutils",
-            "phonon-qt4",
             "okular5-libs",
             "fedora-workstation-repositories",
             "gnome-shell-extension-supergfxctl-gex",
@@ -374,6 +376,5 @@ class QuirkFixup:
 
     def run_package_updater(self, package_names: list[str], action: str) -> None:
         # Initialize the PackageUpdater
-        updater = PackageUpdater(package_names, action, None)
-        # Wait for the updater thread to complete
-        updater.thread.join()
+        PackageUpdater(package_names, action, None)
+

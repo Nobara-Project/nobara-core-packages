@@ -43,8 +43,6 @@ def run_as_user(
 
     result = subprocess.run(command, capture_output=True, text=True)
     # Enable these for debugging run_as_user_target.py
-    #print(result.stdout)
-    #print(result.stderr)
     if result.returncode == 0 and result.stdout is not None:
         try:
             output = json.loads(result.stdout.strip())
