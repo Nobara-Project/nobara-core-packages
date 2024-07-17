@@ -60,6 +60,31 @@ def fp_get_user_updates(
         return update_list
     return []
 
+def is_service_enabled(service_name):
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-enabled", service_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        return result.stdout.strip() == "enabled"
+    except Exception as e:
+        print(f"An error occurred while checking if the service is enabled: {e}")
+        return False
+
+def is_service_active(service_name):
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-active", service_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        return result.stdout.strip() == "active"
+    except Exception as e:
+        print(f"An error occurred while checking if the service is active: {e}")
+        return False
 
 def yumex_sync_updates(
     uid: int, gid: int, log_queue: Any, update_queue: Any, option: str = "",
@@ -92,11 +117,13 @@ def yumex_sync_updates(
         runtime_dir.mkdir(parents=True)
         os.chown(runtime_dir, uid, gid)
 
-    subprocess.Popen(
-        ["systemctl", "--user", "restart", "yumex-updater-systray.service"],
-        stdout=subprocess.DEVNULL,  # Suppress standard output
-        stderr=subprocess.DEVNULL   # Suppress standard error
-    )
+    service_name = "yumex-updater-systray.service"
+    if is_service_enabled(service_name) and is_service_active(service_name):
+        subprocess.Popen(
+            ["systemctl", "--user", "restart", service_name],
+            stdout=subprocess.DEVNULL,  # Suppress standard output
+            stderr=subprocess.DEVNULL   # Suppress standard error
+        )
 
 
 def install_user_flatpak_updates(

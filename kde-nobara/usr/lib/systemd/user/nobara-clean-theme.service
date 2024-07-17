@@ -1,0 +1,7 @@
+[Unit]
+Description=Run Nobara Clean Theme Script on Login and Logout
+
+[Service]
+Type=oneshot
+ExecStart=/usr/share/plasma/look-and-feel/org.nobaraproject.desktop/nobara-clean-theme.sh
+RemainAfterExit=true

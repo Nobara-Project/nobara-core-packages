@@ -132,6 +132,11 @@ class QuirkFixup:
             ["rpm", "-q", hhd_name], capture_output=True, text=True
         )
 
+        gamescope_hh = "gamescope-handheld-common"
+        check_gamescope_hh = subprocess.run(
+            ["rpm", "-q", gamescope_hh], capture_output=True, text=True
+        )
+
         # QUIRK 7: Install HHD for Legion Go and ROG Ally, cleanup old packages
         check_legion = subprocess.run(
             "dmesg | grep 'Legion Go'", capture_output=True, text=True, shell=True
@@ -143,6 +148,7 @@ class QuirkFixup:
         legion_detected = check_legion.returncode == 0
         ally_detected = check_ally.returncode == 0
         hhd_installed = check_hhd.returncode != 0
+        gamescope_hh_installed = check_gamescope_hh.returncode != 0
 
         if (legion_detected or ally_detected) and hhd_installed:
             self.logger.info(
@@ -176,7 +182,62 @@ class QuirkFixup:
             if remove_names:
                 PackageUpdater(remove_names, "remove", None)
 
-            PackageUpdater([hhd_name], "install", None)
+            updatelist  = []
+            updatelist.append(hhd_name)
+
+            if gamescope_hh_installed:
+                updatelist.append(gamescope_hh)
+
+            PackageUpdater(updatelist, "install", None)
+
+        # Also check if device is steamdeck, if so install jupiter packages
+        check_galileo = subprocess.run(
+            "dmesg | grep 'Galileo'", capture_output=True, text=True, shell=True
+        )
+        check_jupiter = subprocess.run(
+            "dmesg | grep 'Jupiter'", capture_output=True, text=True, shell=True
+        )
+
+        jupiter_hw = "jupiter-hw-support"
+        check_jupiter_hw = subprocess.run(
+            ["rpm", "-q", jupiter_hw], capture_output=True, text=True
+        )
+
+        jupiter_fan = "jupiter-fan-control"
+        check_jupiter_fan = subprocess.run(
+            ["rpm", "-q", jupiter_fan], capture_output=True, text=True
+        )
+
+        steamdeck_dsp = "steamdeck-dsp"
+        check_steamdeck_dsp = subprocess.run(
+            ["rpm", "-q", steamdeck_dsp], capture_output=True, text=True
+        )
+
+        steamdeck_firmware = "steamdeck-firmware"
+        check_steamdeck_firmware = subprocess.run(
+            ["rpm", "-q", steamdeck_firmware], capture_output=True, text=True
+        )
+
+        galileo_detected = check_legion.returncode == 0
+        jupiter_detected = check_ally.returncode == 0
+        jupiter_hw_installed = check_jupiter_hw.returncode != 0
+        jupiter_fan_installed = check_jupiter_fan.returncode != 0
+        steamdeck_dsp_installed = check_steamdeck_dsp.returncode != 0
+        steamdeck_firmware_installed = check_steamdeck_firmware.returncode != 0
+
+        jupiter_install = []
+        if (galileo_detected or jupiter_detected):
+
+            if jupiter_hw_installed:
+                jupiter_install.append(jupiter_hw)
+            if jupiter_fan_installed:
+                jupiter_install.append(jupiter_fan)
+            if steamdeck_dsp_installed:
+                jupiter_install.append(steamdeck_dsp)
+            if steamdeck_firmware_installed:
+                jupiter_install.append(steamdeck_firmware)
+
+            PackageUpdater(jupiter_install, "install", None)
 
         # QUIRK 8: winehq-staging packaging changed in version 9.9. We need to completely remove older versions first.
         result = subprocess.run(
@@ -221,6 +282,7 @@ class QuirkFixup:
             "fedora-workstation-repositories",
             "gnome-shell-extension-supergfxctl-gex",
             "mesa-demos",
+            "okular5-part",
         ]
         obsolete_names = []
         for package in obsolete:
@@ -321,6 +383,14 @@ class QuirkFixup:
                 if media_fixup_check.returncode == 0:
                     media_fixup = 1
                     break
+
+        # Remove newinstall needs-update tracker
+        if Path.exists(Path("/etc/nobara/newinstall")):
+            try:
+                # Remove the file
+                Path("/etc/nobara/newinstall").unlink()
+            except OSError as e:
+                logger.error("Error: %s", e.strerror)
 
         return (
             perform_kernel_actions,

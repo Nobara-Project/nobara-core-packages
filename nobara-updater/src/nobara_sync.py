@@ -185,27 +185,6 @@ def is_running_with_sudo_or_pkexec() -> int:
     if "PKEXEC_UID" in os.environ:
         return 2
 
-    # Get the current process
-    current_process = psutil.Process(os.getpid())
-
-    # Traverse up the process tree
-    while current_process:
-        try:
-            parent_process = current_process.parent()
-            if parent_process is None:
-                break
-
-            # Check the command line of the parent process
-            cmdline = parent_process.cmdline()
-            if "sudo" in cmdline:
-                return 1
-            if "pkexec" in cmdline:
-                return 2
-
-            current_process = parent_process
-        except psutil.AccessDenied:
-            break
-
     return 0
 
 
@@ -486,6 +465,18 @@ def check_updates(return_texts: bool = False) -> None | tuple[str | None, str | 
         updates_available = 1
         sys_update_text = "\n".join(package_names)
 
+    if is_running_with_sudo_or_pkexec() == 1:
+        sudo_user = os.environ.get('SUDO_USER', '')
+        if sudo_user and not sudo_user.isdigit():
+            try:
+                orig_user_uid = pwd.getpwnam(sudo_user).pw_uid
+                os.environ['ORIG_USER'] = str(orig_user_uid)
+
+                original_user_home = pwd.getpwnam(sudo_user).pw_dir
+                os.environ['ORIGINAL_USER_HOME'] = str(original_user_home)
+            except KeyError:
+                print(f"User {sudo_user} not found")
+
     # Get the original user's UID and GID
     orig_user = os.environ.get("ORIG_USER")
     if orig_user is None:
@@ -513,7 +504,7 @@ def check_updates(return_texts: bool = False) -> None | tuple[str | None, str | 
         ]
         fp_sys_update_text = "\n".join(fp_sys_update_texts)
 
-    if is_running_with_sudo_or_pkexec() == 0:
+    if is_running_with_sudo_or_pkexec() == 1:
         if sys_update_text:
             logger.info("")
             logger.info("System Updates:")
@@ -615,6 +606,18 @@ def install_fixups() -> None:
         logger.info("Problems with Media Packages detected, asking user for repair...")
         prompt_media_fixup()
 
+    if is_running_with_sudo_or_pkexec() == 1:
+        sudo_user = os.environ.get('SUDO_USER', '')
+        if sudo_user and not sudo_user.isdigit():
+            try:
+                orig_user_uid = pwd.getpwnam(sudo_user).pw_uid
+                os.environ['ORIG_USER'] = str(orig_user_uid)
+
+                original_user_home = pwd.getpwnam(sudo_user).pw_dir
+                os.environ['ORIGINAL_USER_HOME'] = str(original_user_home)
+            except KeyError:
+                print(f"User {sudo_user} not found")
+
     # Get the original user's UID and GID
     orig_user = os.environ.get("ORIG_USER")
     if orig_user is None:
@@ -647,6 +650,18 @@ def install_updates() -> None:
         # Run the commands
         subprocess.run(["akmods"], check=True)
         subprocess.run(["dracut", "-f"], check=True)
+
+    if is_running_with_sudo_or_pkexec() == 1:
+        sudo_user = os.environ.get('SUDO_USER', '')
+        if sudo_user and not sudo_user.isdigit():
+            try:
+                orig_user_uid = pwd.getpwnam(sudo_user).pw_uid
+                os.environ['ORIG_USER'] = str(orig_user_uid)
+
+                original_user_home = pwd.getpwnam(sudo_user).pw_dir
+                os.environ['ORIGINAL_USER_HOME'] = str(original_user_home)
+            except KeyError:
+                print(f"User {sudo_user} not found")
 
     # Get the original user's UID and GID
     orig_user = os.environ.get("ORIG_USER")
@@ -873,6 +888,7 @@ def check_root_privileges(args: Namespace) -> None:
         # Relaunch the script with pkexec or sudo
         script_path = Path(__file__).resolve()
         if "DISPLAY" not in os.environ or args.command is not None:
+            ouid = os.getuid()
             os.execvp(
                 "sudo",
                 [
@@ -881,8 +897,8 @@ def check_root_privileges(args: Namespace) -> None:
                     "env",
                     f"XAUTHORITY={os.environ.get('XAUTHORITY', '')}",
                     f"ORIGINAL_USER_HOME={Path('~').expanduser()!s}",
-                    f"ORIG_USER={os.getuid()!s}",
-                    f"SUDO_USER={os.getuid()!s}",
+                    f"ORIG_USER={int(ouid)}",
+                    f"SUDO_USER={int(ouid)}",
                     sys.executable,
                     str(script_path),
                 ]
@@ -981,6 +997,18 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         super().__init__(title="Update System")
 
         if os.geteuid() == 0:
+            if is_running_with_sudo_or_pkexec() == 1:
+                sudo_user = os.environ.get('SUDO_USER', '')
+                if sudo_user and not sudo_user.isdigit():
+                    try:
+                        orig_user_uid = pwd.getpwnam(sudo_user).pw_uid
+                        os.environ['ORIG_USER'] = str(orig_user_uid)
+
+                        original_user_home = pwd.getpwnam(sudo_user).pw_dir
+                        os.environ['ORIGINAL_USER_HOME'] = str(original_user_home)
+                    except KeyError:
+                        print(f"User {sudo_user} not found")
+
             # Get the original user's UID and GID to pass to root mode
             self.orig_user = os.environ.get("ORIG_USER")
             self.orig_user_uid = os.getuid() if self.orig_user is None else int(self.orig_user)

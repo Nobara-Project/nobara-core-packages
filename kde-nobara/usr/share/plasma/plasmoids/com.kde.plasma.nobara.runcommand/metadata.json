@@ -1,0 +1,25 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "info@himdek.com",
+                "Name": "Himprakash Deka"
+            }
+        ],
+        "Category": "Utilities",
+        "ServiceTypes": [
+            "Plasma/Applet"
+        ],
+        "EnabledByDefault": true,
+        "Name": "Run Command",
+        "Description": "Butchered version of Run Command plasmoid for Nobara theming",
+        "Id": "com.kde.plasma.nobara.runcommand",
+        "Icon": "new-command-alarm",
+        "Version": 1.2,
+        "License": "GPL-3.0-or-later",
+        "BugReportUrl": "https://github.com/HimDek/Run-Command-Widget-for-Plasma/issues/new",
+        "Website": "https://himdek.com/Run-Command-Widget-for-Plasma/"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Nobara Clean Theme Script on Login
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/share/plasma/look-and-feel/org.nobaraproject.desktop/nobara-clean-theme.sh
+
+[Install]
+WantedBy=default.target
