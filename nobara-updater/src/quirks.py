@@ -1,7 +1,12 @@
 #!/usr/bin/python3
 import logging
-import subprocess
 import threading
+import os
+import subprocess
+import shutil
+import pwd
+import re
+from datetime import datetime
 from pathlib import Path
 
 import gi  # type: ignore[import]
@@ -127,17 +132,27 @@ class QuirkFixup:
         if de_update_packages:
             perform_reboot_request = 1
 
-        hhd_name = "hhd"
-        check_hhd = subprocess.run(
-            ["rpm", "-q", hhd_name], capture_output=True, text=True
-        )
-
+        # QUIRK 7: Install HHD or InputPlumber and handheld packages for Legion Go and ROG Ally, cleanup old packages
         gamescope_hh = "gamescope-handheld-common"
         check_gamescope_hh = subprocess.run(
             ["rpm", "-q", gamescope_hh], capture_output=True, text=True
         )
 
-        # QUIRK 7: Install HHD for Legion Go and ROG Ally, cleanup old packages
+        hhd_name = "hhd"
+        check_hhd = subprocess.run(
+            ["rpm", "-q", hhd_name], capture_output=True, text=True
+        )
+
+        ip_name = "inputplumber"
+        check_ip = subprocess.run(
+            ["rpm", "-q", ip_name], capture_output=True, text=True
+        )
+
+        rogfw_name = "rogally-firmware"
+        check_rogfw = subprocess.run(
+            ["rpm", "-q", rogfw_name], capture_output=True, text=True
+        )
+
         check_legion = subprocess.run(
             "dmesg | grep 'Legion Go'", capture_output=True, text=True, shell=True
         )
@@ -147,14 +162,18 @@ class QuirkFixup:
 
         legion_detected = check_legion.returncode == 0
         ally_detected = check_ally.returncode == 0
-        hhd_installed = check_hhd.returncode != 0
-        gamescope_hh_installed = check_gamescope_hh.returncode != 0
 
-        if (legion_detected or ally_detected) and hhd_installed:
+        hhd_notinstalled = check_hhd.returncode != 0
+        ip_notinstalled = check_ip.returncode != 0
+        rogfw_notinstalled = check_rogfw.returncode != 0
+        gamescope_hh_notinstalled = check_gamescope_hh.returncode != 0
+
+        if legion_detected or ally_detected:
             self.logger.info(
                 "Found Legion Go or ROG Ally, performing old package cleanup and installing hhd (Handheld Daemon)"
             )
             remove_names = []
+            updatelist  = []
 
             check_handygccs = subprocess.run(
                 ["rpm", "-q", "HandyGCCS"], capture_output=True, text=True
@@ -179,16 +198,26 @@ class QuirkFixup:
             if check_rogue_enemy.returncode == 0:
                 remove_names.append("rogue-enemy")
 
+            if legion_detected:
+                if hhd_notinstalled:
+                    updatelist.append(hhd_name)
+
+            if ally_detected:
+                if not hhd_notinstalled:
+                    remove_names.append(hhd_name)
+                if ip_notinstalled:
+                    updatelist.append(ip_name)
+                if rogfw_notinstalled:
+                    updatelist.append(rogfw_name)
+
+            if gamescope_hh_notinstalled:
+                updatelist.append(gamescope_hh)
+
             if remove_names:
                 PackageUpdater(remove_names, "remove", None)
 
-            updatelist  = []
-            updatelist.append(hhd_name)
-
-            if gamescope_hh_installed:
-                updatelist.append(gamescope_hh)
-
-            PackageUpdater(updatelist, "install", None)
+            if updatelist:
+                PackageUpdater(updatelist, "install", None)
 
         # Also check if device is steamdeck, if so install jupiter packages
         check_galileo = subprocess.run(
@@ -218,8 +247,8 @@ class QuirkFixup:
             ["rpm", "-q", steamdeck_firmware], capture_output=True, text=True
         )
 
-        galileo_detected = check_legion.returncode == 0
-        jupiter_detected = check_ally.returncode == 0
+        galileo_detected = check_galileo.returncode == 0
+        jupiter_detected = check_jupiter.returncode == 0
         jupiter_hw_installed = check_jupiter_hw.returncode != 0
         jupiter_fan_installed = check_jupiter_fan.returncode != 0
         steamdeck_dsp_installed = check_steamdeck_dsp.returncode != 0
@@ -319,7 +348,37 @@ class QuirkFixup:
             self.logger.info("Found problematic packages, removing...")
             PackageUpdater(problematic_names, "remove", None)
 
-        # QUIRK 11: Media fixup
+        # QUIRK 11: Cleanup incompatible package versions from n39 kde6:
+        incompat = [
+            "kf5-kxmlgui-5.116.0-2.fc39.x86_64",
+            "kf5-kirigami2-5.116.0-2.fc39.x86_64",
+            "kf5-kiconthemes-5.116.0-2.fc39.x86_64",
+            "kf5-ki18n-5.116.0-2.fc39.x86_64"
+        ]
+        incompat_names = []
+        for package in incompat:
+            incompat_check = subprocess.run(
+                ["rpm", "-q", package], capture_output=True, text=True
+            )
+            if incompat_check.returncode == 0:
+                incompat_names.append(package.replace("-5.116.0-2.fc39.x86_64", ""))
+        if incompat_names != []:
+            self.logger.info("Found incompatible package versions, fixing them...")
+            for package in incompat:
+                incompat_check = subprocess.run(
+                    ["rpm", "-e", "--nodeps", package], capture_output=True, text=True
+                )
+        reinstall = []
+        for package in incompat:
+            incompat_check = subprocess.run(
+                ["rpm", "-q", package.replace("-5.116.0-2.fc39.x86_64", "")], capture_output=True, text=True
+            )
+            if incompat_check.returncode != 0:
+                reinstall.append(package.replace("-5.116.0-2.fc39.x86_64", ""))
+        if reinstall != []:
+            PackageUpdater(reinstall, "install", None)
+
+        # QUIRK 12: Media fixup
         media = [
             "ffmpeg-libs.x86_64",
             "ffmpeg-libs.i686",
@@ -398,6 +457,68 @@ class QuirkFixup:
             media_fixup,
             perform_refresh,
         )
+
+        # QUIRK 13: Clear plasmashell cache if a plasma-workspace update is available
+        # Function to run the rpm command and get the output
+        def get_rpm_info():
+            try:
+                result = subprocess.run(['rpm', '-qi', 'plasma-workspace'], capture_output=True, text=True, check=True)
+                return result.stdout
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to run rpm command: {e}")
+                return None
+
+        # Function to parse the rpm output
+        def parse_rpm_info(rpm_output):
+            version_pattern = re.compile(r"Version\s+:\s+(\d+\.\d+\.\d+)")
+            install_date_pattern = re.compile(r"Install Date\s+:\s+(.+)")
+            
+            version_match = version_pattern.search(rpm_output)
+            install_date_match = install_date_pattern.search(rpm_output)
+            
+            if version_match and install_date_match:
+                version = version_match.group(1)
+                install_date_str = install_date_match.group(1)
+                install_date = datetime.strptime(install_date_str, "%a %d %b %Y %I:%M:%S %p %Z")
+                return version, install_date
+            else:
+                return None, None
+
+        # Function to get the list of all user home directories
+        def get_all_user_home_directories():
+            home_directories = []
+            for user in pwd.getpwall():
+                if user.pw_uid >= 1000:  # Filter out system users
+                    home_directories.append(user.pw_dir)
+            return home_directories
+
+        # Function to check and delete qmlcache folder if older than install date
+        def check_and_delete_qmlcache(home_dir, install_date):
+            qmlcache_dir = os.path.join(home_dir, ".cache", "plasmashell", "qmlcache")
+            if os.path.exists(qmlcache_dir):
+                qmlcache_mtime = datetime.fromtimestamp(os.path.getmtime(qmlcache_dir))
+                if qmlcache_mtime < install_date:
+                    try:
+                        shutil.rmtree(qmlcache_dir)
+                        print(f"Deleted '{qmlcache_dir}' directory successfully")
+                    except Exception as e:
+                        print(f"Failed to delete '{qmlcache_dir}': {e}")
+                else:
+                    print(f"'{qmlcache_dir}' is not older than the install date")
+            else:
+                print(f"Directory '{qmlcache_dir}' does not exist")
+
+        # Main script execution
+        rpm_output = get_rpm_info()
+        if rpm_output:
+            version, install_date = parse_rpm_info(rpm_output)
+            if version == "6.1.3" and install_date:
+                for home_dir in get_all_user_home_directories():
+                    check_and_delete_qmlcache(home_dir, install_date)
+            else:
+                print("Version is not 6.1.3 or failed to parse install date")
+        else:
+            print("Failed to get rpm info")
 
     def update_core_packages(
         self, package_list: list[str], action: str, log_message: str

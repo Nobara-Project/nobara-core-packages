@@ -22,9 +22,9 @@ then
 		dnf remove -y dkms-nvidia
 		rm -rf /var/lib/dkms/nvidia*
 		dnf install -y akmod-nvidia \
-			nvidia-driver nvidia-driver-NVML \
-			nvidia-driver-NVML.i686 \
-			nvidia-driver-NvFBCOpenGL \
+			nvidia-driver libnvidia-ml \
+			libnvidia-ml.i686 \
+			libnvidia-fbc \
 			nvidia-driver-cuda \
 			nvidia-driver-cuda-libs \
 			nvidia-driver-cuda-libs.i686 \
@@ -38,6 +38,7 @@ then
 			nvidia-xconfig \
 			nvidia-vaapi-driver \
 			nvidia-gpu-firmware \
+			libnvidia-cfg \
 			--refresh
 		systemctl enable --now akmods;
 		# always run akmods and dracut at the end of updates
