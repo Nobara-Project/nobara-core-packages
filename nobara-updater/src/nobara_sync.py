@@ -830,6 +830,8 @@ def media_fixup() -> None:
     fixups_available = 0
 
 def prompt_reboot() -> None:
+    if "gamescope" in os.environ.get('XDG_CURRENT_DESKTOP', '').lower():
+        subprocess.run(["reboot"], check=True)
     if is_running_with_sudo_or_pkexec() == 2:
         dialog = Gtk.MessageDialog(
             modal=True,
@@ -877,13 +879,45 @@ def parse_args() -> argparse.Namespace:
     subparsers.add_parser(
         "install-fixups", help="Performs a series of known problem fixes."
     )
-    subparsers.add_parser("cli", help="Run in CLI mode, defaults to install-updates")
+    cli_parser = subparsers.add_parser("cli", help="Run in CLI mode, defaults to install-updates")
+    cli_parser.add_argument("username", help="Specify the username", nargs='?')  # Optional positional argument
     subparsers.add_parser("check-repos", help="list enabled repo information")
 
     return parser.parse_args()
 
-
 def check_root_privileges(args: Namespace) -> None:
+    if args.command == "cli" and args.username:
+        try:
+            # Get the parent process ID (PPID)
+            ppid = os.getppid()
+
+            # Get the parent process using psutil
+            parent_process = psutil.Process(ppid)
+
+            # Log the parent process information for debugging
+            logger.info(f"Parent process info: {parent_process}")
+
+            # Get the executable path of the parent process
+            parent_cmdline = parent_process.cmdline()
+
+            # Log the command line for debugging
+            logger.info(f"Parent process command line: {parent_cmdline}")
+
+            # Check if the command line contains /usr/bin/nobara-updater-gamescope-gui
+            if any("/usr/bin/nobara-updater-gamescope-gui" in arg for arg in parent_cmdline):
+                # Get user information using the pwd module
+                user_info = pwd.getpwnam(args.username)
+                os.environ['ORIGINAL_USER_HOME'] = user_info.pw_dir  # User's home directory
+                os.environ['ORIG_USER'] = str(user_info.pw_uid)      # User's UID
+                os.environ['SUDO_USER'] = str(user_info.pw_uid)      # User's UID (as SUDO_USER)
+                os.environ['XDG_CURRENT_DESKTOP'] = "gamescope"      # User's UID (as SUDO_USER)
+        except psutil.NoSuchProcess:
+            logger.info("Error: Process does not exist.")
+            sys.exit(1)
+        except Exception as e:
+            logger.info(f"Error: {e}")
+            sys.exit(1)
+
     if is_running_with_sudo_or_pkexec() == 0:
         # Relaunch the script with pkexec or sudo
         script_path = Path(__file__).resolve()
@@ -979,6 +1013,9 @@ def main() -> None:
         if args.command == "check-repos":
             check_repos()
             exit(0)
+        if args.command and os.geteuid() == 0:
+            initialize_logging()
+            logger.info("Running CLI mode...")
     elif "DISPLAY" in os.environ and os.geteuid() == 0:
         update_window = UpdateWindow()
         update_window.connect("destroy", Gtk.main_quit)
