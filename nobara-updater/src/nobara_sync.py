@@ -46,8 +46,6 @@ else:
         updatechecker,
     )
 
-package_names = updatechecker()
-
 original_user_home = Path("~").expanduser()
 
 if "ORIGINAL_USER_HOME" in os.environ:
@@ -451,7 +449,6 @@ def get_fixups_available() -> int:
 
 def check_updates(return_texts: bool = False) -> None | tuple[str | None, str | None, str | None]:
     global updates_available
-    global package_names
 
     updates_available = 0
 
@@ -634,7 +631,8 @@ def install_fixups() -> None:
 def install_updates() -> None:
     global perform_kernel_actions
     global perform_reboot_request
-    global package_names
+
+    package_names = updatechecker()
 
     logger.info("Starting package updates, please do not turn off your computer...\n")
     action = "upgrade"
