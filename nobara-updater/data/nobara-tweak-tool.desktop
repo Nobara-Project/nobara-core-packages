@@ -1,0 +1,9 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Name=Nobara Tweak Tool
+Exec=/usr/bin/nobara-tweak-tool
+Icon=com.github.nobaraproject.nobarawelcome
+Terminal=false
+Type=Application
+Categories=System;
+Terminal=false

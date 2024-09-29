@@ -706,7 +706,7 @@ def prompt_media_fixup() -> None:
             destroy_with_parent=True,
             message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.YES_NO,
-            text="Problems with Media Packages detected. Do you want to repair them now?",
+            text="We have found some missing optional video and/or audio codec packages. Do you want to install them now (recommended)?",
         )
         response = dialog.run()
         dialog.destroy()  # Close the dialog immediately after getting the response
@@ -721,7 +721,7 @@ def prompt_media_fixup() -> None:
         while True:
             response = (
                 input(
-                    "Problems with Media Packages detected. Do you want to repair them now? (yes/no): "
+                    "We have found some missing optional video and/or audio codec packages. Do you want to install them now (recommended)? (yes/no): "
                 )
                 .strip()
                 .lower()

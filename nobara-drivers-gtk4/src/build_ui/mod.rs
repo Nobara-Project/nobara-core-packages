@@ -204,7 +204,14 @@ pub fn build_ui(app: &adw::Application) {
 const DRIVER_MODIFY_PROG: &str = r###"
 #! /bin/bash
 DRIVER="$0"
-pkexec /usr/lib/nobara/drivers/modify-driver.sh "${DRIVER}"
+export SUDO_USER=$USER
+pkexec env SUDO_USER=$SUDO_USER /usr/lib/nobara/drivers/modify-driver.sh "${DRIVER}"
+if [[ $DRIVER == "xone" ]]; then
+    newgrp pkg-build <<EOF
+lpf reset xone-firmware
+lpf update xone-firmware
+EOF
+fi
 "###;
 fn driver_modify(
     log_loop_sender: async_channel::Sender<String>,

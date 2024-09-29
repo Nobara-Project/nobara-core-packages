@@ -36,7 +36,7 @@ class QuirkFixup:
         perform_refresh = 0
         # START QUIRKS LIST
         # QUIRK 1: Make sure to update the updater itself and refresh before anything
-        self.logger.info("QUIRK 1/12: Make sure to update the updater itself and refresh before anything.")
+        self.logger.info("QUIRK: Make sure to update the updater itself and refresh before anything.")
         update_self = [
             "nobara-welcome",
             "nobara-updater",
@@ -50,7 +50,7 @@ class QuirkFixup:
             perform_refresh = 1
 
         # QUIRK 2: Make sure to refresh the repositories and gpg-keys before anything
-        self.logger.info("QUIRK 2/12: Make sure to refresh the repositories and gpg-keys before anything.")
+        self.logger.info("QUIRK: Make sure to refresh the repositories and gpg-keys before anything.")
         critical_packages = [
             "fedora-gpg-keys",
             "nobara-gpg-keys",
@@ -68,7 +68,7 @@ class QuirkFixup:
             perform_refresh = 1
 
         # QUIRK 3: Make sure to reinstall rpmfusion repos if they do not exist
-        self.logger.info("QUIRK 3/12: Make sure to reinstall rpmfusion repos if they do not exist.")
+        self.logger.info("QUIRK: Make sure to reinstall rpmfusion repos if they do not exist.")
         if (
             self.check_and_install_rpmfusion(
                 "/etc/yum.repos.d/rpmfusion-free.repo", "rpmfusion-free-release"
@@ -100,7 +100,7 @@ class QuirkFixup:
             perform_refresh = 1
 
         # QUIRK 4: Don't allow kde discover to manage system packages or updates
-        self.logger.info("QUIRK 4/12: Don't allow kde discover to manage system packages or updates.")
+        self.logger.info("QUIRK: Don't allow kde discover to manage system packages or updates.")
         # Check if the specified package is installed
         discover_packagekit_name = "plasma-discover-packagekit"
         result = subprocess.run(
@@ -121,7 +121,7 @@ class QuirkFixup:
             updater_thread.join()
 
         # QUIRK 5: Make sure to run both dracut and akmods if any kmods  or kernel packages were updated.
-        self.logger.info("QUIRK 5/12: Make sure to run both dracut and akmods if any kmods  or kernel packages were updated.")
+        self.logger.info("QUIRK: Make sure to run both dracut and akmods if any kmods  or kernel packages were updated.")
         # Check if any packages contain "kernel" or "akmod"
         kernel_kmod_packages = [
             pkg for pkg in package_names if "kernel" in pkg or "akmod" in pkg
@@ -131,67 +131,100 @@ class QuirkFixup:
             perform_reboot_request = 1
 
         # QUIRK 6: If kwin or mutter are being updated, ask for a reboot.
-        self.logger.info("QUIRK 6/12: If kwin or mutter are being updated, ask for a reboot.")
+        self.logger.info("QUIRK: If kwin or mutter are being updated, ask for a reboot.")
         de_update_packages = [
             pkg for pkg in package_names if "kwin" in pkg or "mutter" in pkg
         ]
         if de_update_packages:
             perform_reboot_request = 1
 
-        # QUIRK 7: Install InputPlumber and handheld packages for Legion Go and ROG Ally, install steam firmware for steamdecks. Cleanup old packages.
-        self.logger.info("QUIRK 7/12: Install InputPlumber and handheld packages for Legion Go and ROG Ally, install steam firmware for steamdecks. Cleanup old packages.")
-
+        # QUIRK 7: Install HHD for Controller input, install steam firmware for steamdecks. Cleanup old packages.
         remove_names = []
         updatelist  = []
+        controller_update_config_path = '/etc/nobara/handheld_packages/autoupdate.conf'
+        controller_update_config = True
 
-        # Remove any deprecated controller input handlers
-        check_handygccs = subprocess.run(
-            ["rpm", "-q", "HandyGCCS"], capture_output=True, text=True
-        )
-        if check_handygccs.returncode == 0:
-            subprocess.run(
-                ["systemctl", "disable", "--now", "handycon"],
-                capture_output=True,
-                text=True,
+        # Check if the file exists
+        if os.path.exists(controller_update_config_path):
+            try:
+                # Open the file and read its contents
+                with open(controller_update_config_path, 'r') as file:
+                    content = file.read().strip()
+                    if content == "disabled":
+                        controller_update_config = False
+            except Exception as e:
+                self.logger.info(f"An error occurred while reading the file: {e}")
+
+        if controller_update_config == True:
+            self.logger.info("QUIRK: Install HHD for Controller input, install steam firmware for steamdecks. Cleanup old packages.")
+
+            # Remove any deprecated controller input handlers
+            check_handygccs = subprocess.run(
+                ["rpm", "-q", "HandyGCCS"], capture_output=True, text=True
             )
-            remove_names.append("HandyGCCS")
+            if check_handygccs.returncode == 0:
+                subprocess.run(
+                    ["systemctl", "disable", "--now", "handycon"],
+                    capture_output=True,
+                    text=True,
+                )
+                remove_names.append("HandyGCCS")
 
-        check_lgcd = subprocess.run(
-            ["rpm", "-q", "lgcd"], capture_output=True, text=True
-        )
-        if check_lgcd.returncode == 0:
-            remove_names.append("lgcd")
+            check_lgcd = subprocess.run(
+                ["rpm", "-q", "lgcd"], capture_output=True, text=True
+            )
+            if check_lgcd.returncode == 0:
+                remove_names.append("lgcd")
 
-        check_rogue_enemy = subprocess.run(
-            ["rpm", "-q", "rogue-enemy"], capture_output=True, text=True
-        )
-        if check_rogue_enemy.returncode == 0:
-            remove_names.append("rogue-enemy")
+            check_rogue_enemy = subprocess.run(
+                ["rpm", "-q", "rogue-enemy"], capture_output=True, text=True
+            )
+            if check_rogue_enemy.returncode == 0:
+                remove_names.append("rogue-enemy")
 
-        check_hhd = subprocess.run(
-            ["rpm", "-q", "hhd"], capture_output=True, text=True
-        )
-        if check_hhd.returncode == 0:
-            remove_names.append("hhd")
+            check_ip = subprocess.run(
+                ["rpm", "-q", "inputplumber"], capture_output=True, text=True
+            )
+            if check_ip.returncode == 0:
+                remove_names.append("inputplumber")
 
-        check_hhd_ui = subprocess.run(
-            ["rpm", "-q", "hhd-ui"], capture_output=True, text=True
-        )
-        if check_hhd_ui.returncode == 0:
-            remove_names.append("hhd-ui")
+            # Install HHD
+            check_hhd = subprocess.run(
+                ["rpm", "-q", "hhd"], capture_output=True, text=True
+            )
+            if check_hhd.returncode != 0:
+                updatelist.append("hhd")
 
-        check_hhd_adjustor = subprocess.run(
-            ["rpm", "-q", "adjustor"], capture_output=True, text=True
-        )
-        if check_hhd_adjustor.returncode == 0:
-            remove_names.append("adjustor")
+            check_hhd_ui = subprocess.run(
+                ["rpm", "-q", "hhd-ui"], capture_output=True, text=True
+            )
+            if check_hhd_ui.returncode != 0:
+                updatelist.append("hhd-ui")
 
-        # Install inputplumber
-        check_ip = subprocess.run(
-            ["rpm", "-q", "inputplumber"], capture_output=True, text=True
-        )
-        if check_ip.returncode != 0:
-            updatelist.append("inputplumber")
+            check_hhd_adjustor = subprocess.run(
+                ["rpm", "-q", "adjustor"], capture_output=True, text=True
+            )
+            if check_hhd_adjustor.returncode != 0:
+                updatelist.append("adjustor")
+
+            # Install ROG Ally/X firmware if needed
+            check_ally = subprocess.run(
+                "dmesg | grep 'ROG Ally'", capture_output=True, text=True, shell=True
+            )
+            ally_detected = check_ally.returncode == 0
+            if ally_detected:
+                self.logger.info(
+                    "Found ROG Ally, installing firmware"
+                )
+
+                rogfw_name = "rogally-firmware"
+                check_rogfw = subprocess.run(
+                    ["rpm", "-q", rogfw_name], capture_output=True, text=True
+                )
+                rogfw_notinstalled = check_rogfw.returncode != 0
+                if rogfw_notinstalled:
+                    updatelist.append(rogfw_name)
+
 
         # If it has an SD card reader, install gamescope-handheld-common:
         try:
@@ -222,35 +255,11 @@ class QuirkFixup:
         except Exception as e:
             pass
 
-        # Install ROG Ally/X firmware if needed
-        check_ally = subprocess.run(
-            "dmesg | grep 'ROG Ally'", capture_output=True, text=True, shell=True
-        )
-        ally_detected = check_ally.returncode == 0
-        if ally_detected:
-            self.logger.info(
-                "Found ROG Ally, installing firmware"
-            )
-
-            rogfw_name = "rogally-firmware"
-            check_rogfw = subprocess.run(
-                ["rpm", "-q", rogfw_name], capture_output=True, text=True
-            )
-            rogfw_notinstalled = check_rogfw.returncode != 0
-            if rogfw_notinstalled:
-                updatelist.append(rogfw_name)
-
         if len(remove_names) > 0:
             PackageUpdater(remove_names, "remove", None)
 
         if len(updatelist) > 0:
             PackageUpdater(updatelist, "install", None)
-
-        subprocess.run(
-            ["systemctl", "enable", "--now", "inputplumber"],
-            capture_output=True,
-            text=True,
-        )
 
         # Also check if device is steamdeck, if so install jupiter packages
         check_galileo = subprocess.run(
@@ -302,7 +311,7 @@ class QuirkFixup:
                 PackageUpdater(steamdeck_install, "install", None)
 
         # QUIRK 8: winehq-staging packaging changed in version 9.9. We need to completely remove older versions first.
-        self.logger.info("QUIRK 8/12: winehq-staging packaging changed in version 9.9. We need to completely remove older versions before updating.")
+        self.logger.info("QUIRK: winehq-staging packaging changed in version 9.9. We need to completely remove older versions before updating.")
         check_wine_staging_common = subprocess.run(
                 ["rpm", "-q", "wine-staging-common"], capture_output=True, text=True
         )
@@ -349,7 +358,7 @@ class QuirkFixup:
                 PackageUpdater(add_names, "remove", None)
 
         # QUIRK 9: Obsolete package cleanup
-        self.logger.info("QUIRK 9/12: Obsolete package cleanup.")
+        self.logger.info("QUIRK: Obsolete package cleanup.")
         obsolete = [
             "kf5-baloo-file",
             "supergfxctl-plasmoid",
@@ -374,7 +383,7 @@ class QuirkFixup:
             PackageUpdater(obsolete_names, "remove", None)
 
         # QUIRK 10: Problematic package cleanup
-        self.logger.info("QUIRK 10/12: Problematic package cleanup.")
+        self.logger.info("QUIRK: Problematic package cleanup.")
         problematic = [
             "unrar",
             "qt5-qtwebengine-freeworld",
@@ -399,7 +408,7 @@ class QuirkFixup:
             PackageUpdater(problematic_names, "remove", None)
 
         # QUIRK 11: Cleanup incompatible package versions from Nobara 39 kde6:
-        self.logger.info("QUIRK 11/12: Cleanup incompatible package versions from Nobara 39 kde6.")
+        self.logger.info("QUIRK: Cleanup incompatible package versions from Nobara 39 kde6.")
         incompat = [
             "kf5-kxmlgui-5.116.0-2.fc39.x86_64",
             "kf5-kirigami2-5.116.0-2.fc39.x86_64",
@@ -430,7 +439,7 @@ class QuirkFixup:
             PackageUpdater(reinstall, "install", None)
 
         # QUIRK 12: Clear plasmashell cache if a plasma-workspace update is available
-        self.logger.info("QUIRK 12/12: Clear plasmashell cache if a plasma-workspace update is available.")
+        self.logger.info("QUIRK: Clear plasmashell cache if a plasma-workspace update is available.")
         # Function to run the rpm command and get the output
         def check_update():
             try:
@@ -504,8 +513,8 @@ class QuirkFixup:
                         text=True,
                     )
                     if (
-                        libavcodec_freeworld_check.returncode == 0
-                        and media_fixup_check.returncode != 0
+                        libavcodec_freeworld_check.returncode == 1
+                        and media_fixup_check.returncode == 0
                     ):
                         media_fixup = 1
                         break
@@ -516,8 +525,8 @@ class QuirkFixup:
                         text=True,
                     )
                     if (
-                        libavcodec_freeworld_check.returncode == 0
-                        and media_fixup_check.returncode != 0
+                        libavcodec_freeworld_check.returncode == 1
+                        and media_fixup_check.returncode == 0
                     ):
                         media_fixup = 1
                         break

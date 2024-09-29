@@ -1,7 +1,0 @@
-#! /usr/bin/bash
-if [[ ! -d /home/$USER/.steam/steam/userdata/ ]]; then
-	echo "You need to login to Steam first."
-else
-	bash -c /usr/lib/nobara/nobara-welcome/scripts/steam-game-fixups.sh
-	echo 'Steam game fixups have been applied.'
-fi

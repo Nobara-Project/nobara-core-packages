@@ -52,12 +52,11 @@ elif [[ "$1" = "xone" ]]
 then
 	if rpm -q xone
 	then
-		dnf remove -y lpf-xone-firmware xone xpadneo xone-firmware
+		dnf remove -y lpf-xone-firmware xone xone-firmware xpad-noone
 	else
 		dnf install -y "dnf5-command(builddep)"
-		usermod -aG pkg-build $USER && dnf4 install -y lpf-xone-firmware xone xpadneo && dnf4 remove -y xone-firmware
-		sudo -i -u pkg-build lpf reset xone-firmware
-		sudo -i -u pkg-build lpf update xone-firmware
+		usermod -aG pkg-build $SUDO_USER && dnf4 install -y lpf-xone-firmware xone && dnf4 remove -y xone-firmware
+		exit 0
 	fi
 	exit 0
 # Special override for asusctl

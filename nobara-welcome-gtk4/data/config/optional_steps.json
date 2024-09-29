@@ -11,15 +11,6 @@
     },
     {
       "id": 1,
-      "title": "open-nobara-steam-fixes-title",
-      "subtitle": "open-nobara-steam-fixes-subtitle",
-      "icon": "steam",
-      "button": "launch-label",
-      "terminal": true,
-      "command": "/usr/bin/nobara-steam-fixes &"
-    },
-    {
-      "id": 2,
       "title": "open-protonplus-title",
       "subtitle": "open-protonplus-subtitle",
       "icon": "nobara-com.vysp3r.ProtonPlus",

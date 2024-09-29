@@ -23,6 +23,7 @@ install:
 	@echo "Installing desktop file to $(DESKTOP_DIR)"
 	mkdir -p $(DESKTOP_DIR)
 	install -m 644 data/nobara-updater.desktop $(DESKTOP_DIR)/nobara-updater.desktop
+	install -m 644 data/nobara-tweak-tool.desktop $(DESKTOP_DIR)/nobara-tweak-tool.desktop
 
 	@echo "Installing icon file to $(ICON_DIR)"
 	mkdir -p $(ICON_DIR)
@@ -51,6 +52,10 @@ install:
 	mkdir -p $(BIN_DIR)
 	install -m 755 src/browser_select.py $(BIN_DIR)/nobara-browser-select
 
+	@echo "Tweak tool executable file to $(BIN_DIR)"
+	mkdir -p $(BIN_DIR)
+	install -m 755 src/nobara_tweak_tool.py $(BIN_DIR)/nobara-tweak-tool
+
 symlinks:
 	@echo "Creating symlinks in $(BIN_DIR)"
 	ln -sf /usr/bin/nobara-updater $(BIN_DIR)/nobara-sync
@@ -62,5 +67,7 @@ clean:
 	rm -f $(BIN_DIR)/nobara-updater
 	rm -f $(BIN_DIR)/nobara-updater-gamescope-gui
 	rm -f $(BIN_DIR)/nobara-browser-select
+	rm -f $(BIN_DIR)/nobara-tweak-tool
 	rm -f $(DESKTOP_DIR)/nobara-updater.desktop
+	rm -f $(DESKTOP_DIR)/nobara-tweak-tool
 	rm -f $(ICON_DIR)/nobara-updater.svg

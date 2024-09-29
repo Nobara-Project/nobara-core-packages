@@ -24,19 +24,7 @@ struct contribute_entry {
 pub fn contribute_page(
     contribute_content_page_stack: &gtk::Stack,
     window: &adw::ApplicationWindow,
-    internet_connected: &Rc<RefCell<bool>>,
 ) {
-    let internet_connected_status = internet_connected.clone();
-
-    let (internet_loop_sender, internet_loop_receiver) = async_channel::unbounded();
-    let internet_loop_sender = internet_loop_sender.clone();
-    // The long running operation runs now in a separate thread
-    gio::spawn_blocking(move || loop {
-        thread::sleep(time::Duration::from_secs(1));
-        internet_loop_sender
-            .send_blocking(true)
-            .expect("The channel needs to be open.");
-    });
 
     let contribute_page_box = gtk::Box::builder().vexpand(true).hexpand(true).build();
 
@@ -59,20 +47,6 @@ pub fn contribute_page(
         .propagate_natural_height(true)
         .min_content_width(520)
         .build();
-
-    let internet_loop_context = MainContext::default();
-    // The main loop executes the asynchronous block
-    internet_loop_context.spawn_local(
-        clone!(@strong internet_connected_status, @weak contribute_page_box => async move {
-            while let Ok(_state) = internet_loop_receiver.recv().await {
-                if *internet_connected_status.borrow_mut() == true {
-                    contribute_page_box.set_sensitive(true);
-                } else {
-                    contribute_page_box.set_sensitive(false);
-                }
-            }
-        }),
-    );
 
     let mut json_array: Vec<contribute_entry> = Vec::new();
     let json_path = "/usr/share/nobara/nobara-welcome/config/contribute.json";

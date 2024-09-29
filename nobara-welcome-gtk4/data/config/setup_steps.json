@@ -20,6 +20,15 @@
     },
     {
       "id": 2,
+      "title": "open-tweak-tool-title",
+      "subtitle": "open-tweak-tool-subtitle",
+      "icon": "com.github.nobaraproject.nobarawelcome",
+      "button": "launch-label",
+      "terminal": false,
+      "command": "/usr/bin/nobara-tweak-tool &"
+    },
+    {
+      "id": 3,
       "title": "open-software-manager-title",
       "subtitle": "open-software-manager-subtitle",
       "icon": "nobara-media-floppy",
@@ -28,7 +37,7 @@
       "command": "/usr/lib/nobara/nobara-welcome/scripts/software-manager.sh &"
     },
     {
-      "id": 3,
+      "id": 4,
       "title": "open-webapp-manager-title",
       "subtitle": "open-webapp-manager-subtitle",
       "icon": "nobara-applications-internet",

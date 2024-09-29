@@ -10,7 +10,6 @@ use std::rc::Rc;
 // stack crates
 mod community_page;
 mod contribute_page;
-mod look_and_feel_page;
 mod recommended_addons_page;
 mod optional_steps_page;
 mod setup_steps_page;
@@ -19,7 +18,6 @@ mod welcome_page;
 
 use community_page::community_page;
 use contribute_page::contribute_page;
-use look_and_feel_page::look_and_feel_page;
 use recommended_addons_page::recommended_addons_page;
 use optional_steps_page::optional_steps_page;
 use setup_steps_page::setup_steps_page;
@@ -30,7 +28,6 @@ use crate::config::{APP_GITHUB, APP_ICON, APP_ID, VERSION};
 
 pub fn welcome_content_page(window: &adw::ApplicationWindow, content_box: &gtk::Box) {
     let glib_settings = gio::Settings::new(APP_ID);
-    let internet_connected = Rc::new(RefCell::new(true));
     let window_banner = adw::Banner::builder().revealed(false).build();
 
     let window_title_bar = gtk::HeaderBar::builder().show_title_buttons(true).build();
@@ -160,13 +157,11 @@ pub fn welcome_content_page(window: &adw::ApplicationWindow, content_box: &gtk::
     welcome_page(
         &welcome_content_page_stack,
         &window_banner,
-        &internet_connected,
     );
-    setup_steps_page(&welcome_content_page_stack, &window, &internet_connected);
-    recommended_addons_page(&welcome_content_page_stack, &window, &internet_connected);
-    optional_steps_page(&welcome_content_page_stack, &window, &internet_connected);
-    look_and_feel_page(&welcome_content_page_stack, &window, &internet_connected);
-    troubleshoot_page(&welcome_content_page_stack, &window, &internet_connected);
-    community_page(&welcome_content_page_stack, &window, &internet_connected);
-    contribute_page(&welcome_content_page_stack, &window, &internet_connected);
+    setup_steps_page(&welcome_content_page_stack, &window);
+    recommended_addons_page(&welcome_content_page_stack, &window);
+    optional_steps_page(&welcome_content_page_stack, &window);
+    troubleshoot_page(&welcome_content_page_stack, &window);
+    community_page(&welcome_content_page_stack, &window);
+    contribute_page(&welcome_content_page_stack, &window);
 }
