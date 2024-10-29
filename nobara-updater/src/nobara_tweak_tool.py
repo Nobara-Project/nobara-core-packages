@@ -191,7 +191,7 @@ def get_partitions():
                 continue  # not a device we are interested in (no filesystem)
             name = parts[0]
             fstype = parts[1]
-            name_valid = 'p' in name or 'sd' in name # (e.g. (e.g. nvme0n1p1) or sda1)
+            name_valid = 'p' in name or 'sd' in name # e.g. nvme0n1p1 or sda1
             part_valid = fstype == 'ext3' or fstype == 'ext4' or fstype == 'xfs' or fstype == 'btrfs' or fstype == 'ntfs'
             if len(parts) == 2:  # No mount point
                 name, fstype = parts
