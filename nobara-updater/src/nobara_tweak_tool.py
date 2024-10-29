@@ -187,14 +187,17 @@ def get_partitions():
         mounted_partitions = []
         for line in result.stdout.splitlines():
             parts = line.split()
-            if len(parts) == 2:  # No mount point
-                name, fstype = parts
-                if not name.startswith('loop') and 'p' in name and fstype == 'ext3' or fstype == 'ext4' or fstype == 'xfs' or fstype == 'btrfs' or fstype == 'ntfs':
+            if len(parts) not in [2,3]:
+                continue  # not a device we are interested in (no filesystem)
+            name = parts[0]
+            fstype = parts[1]
+            name_valid = not name.startswith('loop') and 'p' in name or 'sd' in name # e.g. nvme0n1p1 or sda1
+            part_valid = fstype == 'ext3' or fstype == 'ext4' or fstype == 'xfs' or fstype == 'btrfs' or fstype == 'ntfs'
+            if len(parts) == 2 and name_valid and part_valid:  # No mount point
                     unmounted_partitions.append((f"/dev/{name}", fstype))
-            elif len(parts) == 3:  # With mount point
-                name, fstype, mountpoint = parts
-                if not name.startswith('loop') and 'p' in name and fstype == 'ext3' or fstype == 'ext4' or fstype == 'xfs' or fstype == 'btrfs' or fstype == 'ntfs':
-                    mounted_partitions.append((f"/dev/{name}", fstype, mountpoint))
+            elif len(parts) == 3 and name_valid and part_valid:  # With mount point
+                mountpoint = parts[2]
+                mounted_partitions.append((f"/dev/{name}", fstype, mountpoint))
         return unmounted_partitions, mounted_partitions
     except Exception as e:
         status_bar.set(f"Error: Failed to get partitions: {e}")
