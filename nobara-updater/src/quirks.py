@@ -156,7 +156,7 @@ class QuirkFixup:
                 self.logger.info(f"An error occurred while reading the file: {e}")
 
         if controller_update_config == True:
-            self.logger.info("QUIRK: Install HHD for Controller input, install steam firmware for steamdecks. Cleanup old packages.")
+            self.logger.info("QUIRK: Install InputPlumber for Controller input, install steam firmware for steamdecks. Cleanup old packages.")
 
             # Remove any deprecated controller input handlers
             check_handygccs = subprocess.run(
@@ -182,30 +182,30 @@ class QuirkFixup:
             if check_rogue_enemy.returncode == 0:
                 remove_names.append("rogue-enemy")
 
-            check_ip = subprocess.run(
-                ["rpm", "-q", "inputplumber"], capture_output=True, text=True
-            )
-            if check_ip.returncode == 0:
-                remove_names.append("inputplumber")
-
-            # Install HHD
             check_hhd = subprocess.run(
                 ["rpm", "-q", "hhd"], capture_output=True, text=True
             )
-            if check_hhd.returncode != 0:
-                updatelist.append("hhd")
+            if check_hhd.returncode == 0:
+                remove_names.append("hhd")
 
             check_hhd_ui = subprocess.run(
                 ["rpm", "-q", "hhd-ui"], capture_output=True, text=True
             )
-            if check_hhd_ui.returncode != 0:
-                updatelist.append("hhd-ui")
+            if check_hhd_ui.returncode == 0:
+                remove_names.append("hhd-ui")
 
             check_hhd_adjustor = subprocess.run(
                 ["rpm", "-q", "adjustor"], capture_output=True, text=True
             )
-            if check_hhd_adjustor.returncode != 0:
-                updatelist.append("adjustor")
+            if check_hhd_adjustor.returncode == 0:
+                remove_names.append("adjustor")
+
+            # Install InputPlumber
+            check_ip = subprocess.run(
+                ["rpm", "-q", "inputplumber"], capture_output=True, text=True
+            )
+            if check_ip.returncode != 0:
+                updatelist.append("inputplumber")
 
             # Install ROG Ally/X firmware if needed
             check_ally = subprocess.run(
@@ -225,6 +225,262 @@ class QuirkFixup:
                 if rogfw_notinstalled:
                     updatelist.append(rogfw_name)
 
+        check_gamescope_htpc = subprocess.run(
+            ["rpm", "-q", "gamescope-htpc-common"], capture_output=True, text=True
+        )
+        gamescope_htpc_installed = check_gamescope_htpc.returncode == 0
+
+        check_gamescope_session_common = subprocess.run(
+            ["rpm", "-q", "gamescope-session-common"], capture_output=True, text=True
+        )
+        gamescope_session_common_installed = check_gamescope_session_common.returncode == 0
+        if gamescope_htpc_installed:
+            if not gamescope_session_common_installed:
+                # Return to normal grub + plymouth first.
+                plymouth_scripts_name = "plymouth-plugin-script"
+                check_plymouth_scripts = subprocess.run(
+                    ["rpm", "-q", plymouth_scripts_name], capture_output=True, text=True
+                )
+                plymouth_scripts_notinstalled = check_plymouth_scripts.returncode != 0
+                if plymouth_scripts_notinstalled:
+                    PackageUpdater(["plymouth-plugin-script"], "install", None)
+
+                # Run the 'plymouth-set-default-theme' command and capture its output
+                check_theme = subprocess.run(
+                    ["plymouth-set-default-theme"],
+                    capture_output=True,
+                    text=True
+                )
+                if 'steamos' in check_theme.stdout:
+                    # Fixup grub so it's more steamos-like
+                    subprocess.run(
+                        ["plymouth-set-default-theme", "bgrt"],
+                        capture_output=True,
+                        text=True,
+                    )
+
+                    subprocess.run(["dracut", "-f"], check=True)
+
+                    # Path to the grub configuration file
+                    grub_file_path = "/etc/default/grub"  # Use the test file path
+
+                    # Function to calculate SHA256 checksum
+                    def calculate_sha256(file_path):
+                        result = subprocess.run(
+                            ["sha256sum", file_path], capture_output=True, text=True
+                        )
+                        return result.stdout.split()[0]  # Extract the checksum from the output
+
+                    # Calculate SHA256 checksum before changes
+                    sha256_before = calculate_sha256(grub_file_path)
+
+                    # Fixup grub so it's more steamos-like
+                    subprocess.run(
+                        ["sed", "-i", "s/GRUB_TIMEOUT='0'/GRUB_TIMEOUT='5'/g", "/etc/default/grub"],
+                        capture_output=True,
+                        text=True,
+                    )
+
+                    # Lines to remove from the file
+                    lines_to_remove = [
+                        "GRUB_TIMEOUT_STYLE='hidden'",
+                        "GRUB_HIDDEN_TIMEOUT='0'",
+                        "GRUB_HIDDEN_TIMEOUT_QUIET='true'"
+                    ]
+
+                    # Read the current contents of the file
+                    with open(grub_file_path, "r") as file:
+                        current_contents = file.readlines()
+
+                    # Filter out the lines to remove
+                    updated_contents = [
+                        line for line in current_contents if line.strip() not in lines_to_remove
+                    ]
+
+                    # Write the updated contents back to the file
+                    with open(grub_file_path, "w") as file:
+                        file.writelines(updated_contents)
+
+                    # Calculate SHA256 checksum after changes
+                    sha256_after = calculate_sha256(grub_file_path)
+
+                    # Compare checksums
+                    if sha256_before != sha256_after:
+                        subprocess.run(
+                            ["/usr/sbin/grub2-mkconfig", "-o", "/boot/grub2/grub.cfg"],
+                            capture_output=True,
+                            text=True,
+                        )
+            else:
+                # Fixup plymouth so it's more steamos-like
+                plymouth_scripts_name = "plymouth-plugin-script"
+                check_plymouth_scripts = subprocess.run(
+                    ["rpm", "-q", plymouth_scripts_name], capture_output=True, text=True
+                )
+                plymouth_scripts_notinstalled = check_plymouth_scripts.returncode != 0
+                if plymouth_scripts_notinstalled:
+                    PackageUpdater(["plymouth-plugin-script"], "install", None)
+
+                # Run the 'plymouth-set-default-theme' command and capture its output
+                check_theme = subprocess.run(
+                    ["plymouth-set-default-theme"],
+                    capture_output=True,
+                    text=True
+                )
+                if not 'steamos' in check_theme.stdout:
+                    # Fixup grub so it's more steamos-like
+                    subprocess.run(
+                        ["plymouth-set-default-theme", "steamos"],
+                        capture_output=True,
+                        text=True,
+                    )
+
+                    subprocess.run(["dracut", "-f"], check=True)
+
+                    # Path to the grub configuration file
+                    grub_file_path = "/etc/default/grub"  # Use the test file path
+
+                    # Function to calculate SHA256 checksum
+                    def calculate_sha256(file_path):
+                        result = subprocess.run(
+                            ["sha256sum", file_path], capture_output=True, text=True
+                        )
+                        return result.stdout.split()[0]  # Extract the checksum from the output
+
+                    # Calculate SHA256 checksum before changes
+                    sha256_before = calculate_sha256(grub_file_path)
+
+                    # Fixup grub so it's more steamos-like
+                    subprocess.run(
+                        ["sed", "-i", "s/GRUB_TIMEOUT='5'/GRUB_TIMEOUT='0'/g", "/etc/default/grub"],
+                        capture_output=True,
+                        text=True,
+                    )
+
+                    # Lines to add to the file
+                    lines_to_add = [
+                        "GRUB_TIMEOUT_STYLE='hidden'",
+                        "GRUB_HIDDEN_TIMEOUT='0'",
+                        "GRUB_HIDDEN_TIMEOUT_QUIET='true'"
+                    ]
+
+                    # Read the current contents of the file
+                    with open(grub_file_path, "r") as file:
+                        current_contents = file.readlines()
+
+                    # Function to check if a line exists and append it if not
+                    def add_line_if_missing(line):
+                        if line + "\n" not in current_contents:  # Ensure newline is considered
+                            with open(grub_file_path, "a") as file:  # Open file in append mode
+                                file.write(line + "\n")  # Append the line with a newline
+
+                    # Check and add each line
+                    for line in lines_to_add:
+                        add_line_if_missing(line)
+
+                    # Calculate SHA256 checksum after changes
+                    sha256_after = calculate_sha256(grub_file_path)
+
+                    # Compare checksums
+                    if sha256_before != sha256_after:
+                        subprocess.run(
+                            ["/usr/sbin/grub2-mkconfig", "-o", "/boot/grub2/grub.cfg"],
+                            capture_output=True,
+                            text=True,
+                        )
+        if gamescope_session_common_installed:
+            if not gamescope_htpc_installed:
+                # Return to normal grub + plymouth first.
+                plymouth_scripts_name = "plymouth-plugin-script"
+                check_plymouth_scripts = subprocess.run(
+                    ["rpm", "-q", plymouth_scripts_name], capture_output=True, text=True
+                )
+                plymouth_scripts_notinstalled = check_plymouth_scripts.returncode != 0
+                if plymouth_scripts_notinstalled:
+                    PackageUpdater(["plymouth-plugin-script"], "install", None)
+
+                # Run the 'plymouth-set-default-theme' command and capture its output
+                check_theme = subprocess.run(
+                    ["plymouth-set-default-theme"],
+                    capture_output=True,
+                    text=True
+                )
+                if 'steamos' in check_theme.stdout:
+                    # Fixup grub so it's more steamos-like
+                    subprocess.run(
+                        ["plymouth-set-default-theme", "bgrt"],
+                        capture_output=True,
+                        text=True,
+                    )
+
+                    subprocess.run(["dracut", "-f"], check=True)
+
+                    # Path to the grub configuration file
+                    grub_file_path = "/etc/default/grub"  # Use the test file path
+
+                    # Function to calculate SHA256 checksum
+                    def calculate_sha256(file_path):
+                        result = subprocess.run(
+                            ["sha256sum", file_path], capture_output=True, text=True
+                        )
+                        return result.stdout.split()[0]  # Extract the checksum from the output
+
+                    # Calculate SHA256 checksum before changes
+                    sha256_before = calculate_sha256(grub_file_path)
+
+                    # Fixup grub so it's more steamos-like
+                    subprocess.run(
+                        ["sed", "-i", "s/GRUB_TIMEOUT='0'/GRUB_TIMEOUT='5'/g", "/etc/default/grub"],
+                        capture_output=True,
+                        text=True,
+                    )
+
+                    # Lines to remove from the file
+                    lines_to_remove = [
+                        "GRUB_TIMEOUT_STYLE='hidden'",
+                        "GRUB_HIDDEN_TIMEOUT='0'",
+                        "GRUB_HIDDEN_TIMEOUT_QUIET='true'"
+                    ]
+
+                    # Read the current contents of the file
+                    with open(grub_file_path, "r") as file:
+                        current_contents = file.readlines()
+
+                    # Filter out the lines to remove
+                    updated_contents = [
+                        line for line in current_contents if line.strip() not in lines_to_remove
+                    ]
+
+                    # Write the updated contents back to the file
+                    with open(grub_file_path, "w") as file:
+                        file.writelines(updated_contents)
+
+                    # Calculate SHA256 checksum after changes
+                    sha256_after = calculate_sha256(grub_file_path)
+
+                    # Compare checksums
+                    if sha256_before != sha256_after:
+                        subprocess.run(
+                            ["/usr/sbin/grub2-mkconfig", "-o", "/boot/grub2/grub.cfg"],
+                            capture_output=True,
+                            text=True,
+                        )
+
+        check_gamescope_hh = subprocess.run(
+            ["rpm", "-q", "gamescope-handheld-common"], capture_output=True, text=True
+        )
+        gamescope_hh_installed = check_gamescope_hh.returncode == 0
+        if gamescope_hh_installed:
+            ppfeaturemask_check = subprocess.run(
+                ["grep", "ppfeaturemask", "/proc/cmdline"], capture_output=True, text=True
+            )
+            ppfeaturemask_notinstalled = ppfeaturemask_check.returncode != 0
+            subprocess.run(
+                ['grubby', '--update-kernel=ALL', '--args="amdgpu.ppfeaturemask=0xffffffff"'],
+                capture_output=True,
+                text=True,
+            )
+            perform_reboot_request = 1
 
         # If it has an SD card reader, install gamescope-handheld-common:
         try:
@@ -361,13 +617,11 @@ class QuirkFixup:
         self.logger.info("QUIRK: Obsolete package cleanup.")
         obsolete = [
             "kf5-baloo-file",
-            "supergfxctl-plasmoid",
             "layer-shell-qt5",
             "herqq",
             "hfsutils",
             "okular5-libs",
             "fedora-workstation-repositories",
-            "gnome-shell-extension-supergfxctl-gex",
             "mesa-demos",
             "okular5-part",
         ]
@@ -393,8 +647,7 @@ class QuirkFixup:
             "musescore",
             "okular5-libs",
             "fedora-workstation-repositories",
-            "gnome-shell-extension-supergfxctl-gex",
-            "mesa-demos",
+            "mesa-demos"
         ]
         problematic_names = []
         for package in problematic:
@@ -408,12 +661,16 @@ class QuirkFixup:
             PackageUpdater(problematic_names, "remove", None)
 
         # QUIRK 11: Cleanup incompatible package versions from Nobara 39 kde6:
-        self.logger.info("QUIRK: Cleanup incompatible package versions from Nobara 39 kde6.")
+        self.logger.info("QUIRK: Cleanup incompatible package versions from Nobara 39 kde6 and deprecated xpadneo")
         incompat = [
             "kf5-kxmlgui-5.116.0-2.fc39.x86_64",
             "kf5-kirigami2-5.116.0-2.fc39.x86_64",
             "kf5-kiconthemes-5.116.0-2.fc39.x86_64",
-            "kf5-ki18n-5.116.0-2.fc39.x86_64"
+            "kf5-ki18n-5.116.0-2.fc39.x86_64",
+            "xpadneo",
+            "akmod-xpadneo",
+            "kmod-xpadneo",
+            "xpadneo-kmod-common"
         ]
         incompat_names = []
         for package in incompat:
@@ -435,6 +692,12 @@ class QuirkFixup:
             )
             if incompat_check.returncode != 0:
                 reinstall.append(package.replace("-5.116.0-2.fc39.x86_64", ""))
+
+        reinstall.remove("xpadneo")
+        reinstall.remove("akmod-xpadneo")
+        reinstall.remove("kmod-xpadneo")
+        reinstall.remove("xpadneo-kmod-common")
+
         if len(reinstall) > 0:
             PackageUpdater(reinstall, "install", None)
 

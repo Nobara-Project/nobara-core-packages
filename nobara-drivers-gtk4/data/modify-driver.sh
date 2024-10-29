@@ -12,6 +12,8 @@ then
 		dnf remove -y akmod-nvidia
 		dnf remove -y dkms-nvidia
 		rm -rf /var/lib/dkms/nvidia*
+		# reinstall firmware
+		dnf install -y nvidia-gpu-firmware
 		# always run akmods and dracut at the end of updates
 		akmods
 		dracut -f --regenerate-all

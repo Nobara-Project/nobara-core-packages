@@ -91,8 +91,12 @@ def create_fullscreen_window():
     root = tk.Tk()
     root.title("Nobara Updater")
 
-    # Make the window full-screen
-    root.attributes('-fullscreen', True)
+    # Get screen width and height
+    width = root.winfo_screenwidth()
+    height = root.winfo_screenheight()
+
+    # Set the window size to the screen size
+    root.geometry(f"{width}x{height}")
 
     # Set the background color to black
     root.configure(bg='black')

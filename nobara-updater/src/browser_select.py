@@ -49,7 +49,8 @@ def install_browser(browser_name, flatpak_package, png_path):
         subprocess.run(["flatpak", "--user", "install", "-y", flatpak_package], check=True)
 
         # If installation succeeds, add the browser to Steam using steamtinkerlaunch
-        add_to_steam(browser_name, "/usr/bin/flatpak", "run " + flatpak_package)
+        # disabled for now -- does not work on new install because steam data doesn't exist
+        # add_to_steam(browser_name, "/usr/bin/flatpak", "run " + flatpak_package)
 
         # Update the label to indicate success
         status_label.config(text=f"{browser_name} installed successfully!")
