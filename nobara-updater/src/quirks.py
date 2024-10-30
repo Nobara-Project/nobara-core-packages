@@ -221,9 +221,10 @@ class QuirkFixup:
                 check_rogfw = subprocess.run(
                     ["rpm", "-q", rogfw_name], capture_output=True, text=True
                 )
-                rogfw_notinstalled = check_rogfw.returncode != 0
-                if rogfw_notinstalled:
-                    updatelist.append(rogfw_name)
+                rogfw_installed = check_rogfw.returncode == 0
+                # Remove it, it's upstreamed now'
+                if rogfw_installed:
+                    PackageUpdater([rogfw_name], "remove", None)
 
         check_gamescope_htpc = subprocess.run(
             ["rpm", "-q", "gamescope-htpc-common"], capture_output=True, text=True
