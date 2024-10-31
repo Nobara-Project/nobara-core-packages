@@ -647,7 +647,7 @@ def install_updates() -> None:
 
         # Run the commands
         subprocess.run(["akmods"], check=True)
-        subprocess.run(["dracut", "-f"], check=True)
+        subprocess.run(["dracut", "-f","--regenerate-all"], check=True)
 
     if is_running_with_sudo_or_pkexec() == 1:
         sudo_user = os.environ.get('SUDO_USER', '')
