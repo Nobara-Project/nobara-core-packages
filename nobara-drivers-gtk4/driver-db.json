@@ -39,6 +39,14 @@
       "experimental": false,
       "removable": true,
       "detection": "cat /sys/devices/virtual/dmi/id/product_name | grep -i 'ROG'"
+    },
+    {
+      "id": 5,
+      "driver": "broadcom-wl",
+      "icon": "network-wireless",
+      "experimental": false,
+      "removable": true,
+      "detection": "lspci -D | grep -iE 'wireless' | grep -i 'broadcom'"
     }
   ]
 }
