@@ -155,6 +155,8 @@ def toggle_partition(partition):
                     lines.append(partition + '\n')
             else:
                 lines = [line for line in lines if line.strip() != partition]
+            # clean up the file from mount paths that are not uuid based or comments
+            lines = [line for line in lines if line.strip().startswith(("/dev/disk/by-uuid/", "#"))]
             f.writelines(lines)
 
         # Get the SUDO_USER environment variable
@@ -182,22 +184,23 @@ def toggle_partition(partition):
 # Function to get list of partitions with their file systems and mount points
 def get_partitions():
     try:
-        result = subprocess.run(['lsblk', '-rno', 'NAME,FSTYPE,MOUNTPOINT'], capture_output=True, text=True)
+        result = subprocess.run(['lsblk', '-rno', 'NAME,UUID,FSTYPE,MOUNTPOINT'], capture_output=True, text=True)
         unmounted_partitions = []
         mounted_partitions = []
         for line in result.stdout.splitlines():
             parts = line.split()
-            if len(parts) not in [2,3]:
+            if len(parts) not in [3,4]:
                 continue  # not a device we are interested in (no filesystem)
             name = parts[0]
-            fstype = parts[1]
+            uuid = parts[1]
+            fstype = parts[2]
             name_valid = not name.startswith('loop') and 'p' in name or 'sd' in name # e.g. nvme0n1p1 or sda1
             part_valid = fstype == 'ext3' or fstype == 'ext4' or fstype == 'exfat' or fstype == 'xfs' or fstype == 'btrfs' or fstype == 'ntfs'
-            if len(parts) == 2 and name_valid and part_valid:  # No mount point
-                    unmounted_partitions.append((f"/dev/{name}", fstype))
-            elif len(parts) == 3 and name_valid and part_valid:  # With mount point
-                mountpoint = parts[2]
-                mounted_partitions.append((f"/dev/{name}", fstype, mountpoint))
+            if len(parts) == 3 and name_valid and part_valid:  # No mount point
+                    unmounted_partitions.append((f"/dev/disk/by-uuid/{uuid}", fstype, uuid))
+            elif len(parts) == 4 and name_valid and part_valid:  # With mount point
+                mountpoint = parts[3]
+                mounted_partitions.append((f"/dev/disk/by-uuid/{uuid}", fstype, uuid, mountpoint))
         return unmounted_partitions, mounted_partitions
     except Exception as e:
         status_bar.set(f"Error: Failed to get partitions: {e}")
@@ -300,19 +303,23 @@ def main():
     mount_note4 = f"Checking the box enables auto-mounting on login for the partition and will also mount it."
     tk.Label(partitions_frame, text=mount_note4).pack(anchor='w')
 
+    # Add note about UUIDs
+    mount_note4 = f"Only device paths starting with /dev/disk/by-uuid/ are supported for stabiliyt across reboots."
+    tk.Label(partitions_frame, text=mount_note4).pack(anchor='w')
+
     # Add note about mount location
-    user = getpass.getuser()
-    mount_note5 = f"Partitions will be mounted at /run/media/{user}/(partition_name)"
+    user = os.environ.get('SUDO_USER')
+    mount_note5 = f"Partitions will be mounted at /run/media/{user}/(UUID)"
     tk.Label(partitions_frame, text=mount_note5).pack(anchor='w')
 
     # Get partitions
     unmounted_partitions, mounted_partitions = get_partitions()
 
     # Combine unmounted and enabled mounted partitions
-    partitions_to_display = unmounted_partitions + [(p, fstype) for p, fstype, _ in mounted_partitions if p in enabled_partitions]
+    partitions_to_display = unmounted_partitions + [(p, fstype, uuid) for p, fstype, uuid, _ in mounted_partitions if p in enabled_partitions]
 
     if partitions_to_display:
-        for partition, fstype in partitions_to_display:
+        for partition, fstype, _ in partitions_to_display:
             var = tk.BooleanVar(value=partition in enabled_partitions)
             partition_vars[partition] = var
             partition_changed[partition] = False
@@ -325,9 +332,9 @@ def main():
     tk.Label(partitions_frame, text=mount_note).pack(anchor='w')
 
     # Display mounted partitions not in the enabled list
-    for partition, fstype, mountpoint in mounted_partitions:
+    for partition, fstype, _, mountpoint in mounted_partitions:
         if partition not in enabled_partitions:
-            mounted_text = f"    {partition} ({fstype}) mounted at {mountpoint}"
+            mounted_text = f"    {partition} (Type: {fstype}) mounted at {mountpoint}"
             tk.Label(partitions_frame, text=mounted_text).pack(anchor='w')
 
 
