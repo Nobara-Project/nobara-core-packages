@@ -304,7 +304,7 @@ def main():
     tk.Label(partitions_frame, text=mount_note4).pack(anchor='w')
 
     # Add note about UUIDs
-    mount_note4 = f"Only device paths starting with /dev/disk/by-uuid/ are supported for stabiliyt across reboots."
+    mount_note4 = f"Only device paths starting with /dev/disk/by-uuid/ are supported for stability across reboots."
     tk.Label(partitions_frame, text=mount_note4).pack(anchor='w')
 
     # Add note about mount location
