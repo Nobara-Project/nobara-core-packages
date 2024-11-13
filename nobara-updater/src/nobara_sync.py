@@ -18,6 +18,7 @@ from pathlib import Path
 
 import gi  # type: ignore[import]
 import psutil
+import shutil
 import requests
 from nobara_updater.quirks import QuirkFixup  # type: ignore[import]
 from nobara_updater.run_as import run_as_user
@@ -644,6 +645,35 @@ def install_updates() -> None:
         logger.info(
             "Kernel or kernel module updates were performed. Running required 'akmods' and 'dracut -f'...\n"
         )
+        # Cleanup old modules first
+        try:
+            # Run the command and capture the output
+            result = subprocess.run("ls /boot/ | grep vmlinuz | grep -v rescue", shell=True, capture_output=True, text=True, check=True)
+
+            # Split the output into lines
+            lines = result.stdout.strip().split('\n')
+
+            # Extract version numbers by removing 'vmlinuz-' prefix
+            versions = [line.replace('vmlinuz-', '') for line in lines if line.startswith('vmlinuz-')]
+
+            # Run the ls command and capture the output
+            result = subprocess.run(['ls', '/lib/modules'], capture_output=True, text=True, check=True)
+
+            # Split the output into entries
+            modules = result.stdout.strip().split()
+
+            # Filter modules that do not match the kernel versions
+            filtered_modules = [module for module in modules if module not in versions]
+
+            # Remove filtered modules
+            for directory in filtered_modules:
+                if directory:  # Check if directory is not None or empty
+                    dir_path = os.path.join('/lib/modules', directory)
+                    if os.path.exists(dir_path):  # Check if the path exists
+                        shutil.rmtree(dir_path)
+
+        except subprocess.CalledProcessError as e:
+            print(f"An error occurred: {e}")
 
         # Run the commands
         subprocess.run(["akmods"], check=True)

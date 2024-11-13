@@ -64,8 +64,8 @@
     "contribute-patreon-subtitle": "If you enjoy the work done on Nobara, Proton-GE, or any other related projects, please consider donating. Thank you!",
     "contribute-kofi-title": "Donate to GloriousEggroll's Ko-Fi",
     "contribute-kofi-subtitle": "Provided as an alternative to Patreon.",
-    "open-nobara-resolve-wizard-title": "Install DaVinci Resolve Fixups",
-    "open-nobara-resolve-wizard-subtitle": "Install fixups to allow DaVinci Resolve to run.",
+    "open-nobara-resolve-wizard-title": "Install or update DaVinci Resolve.",
+    "open-nobara-resolve-wizard-subtitle": "Install or update DaVinci Resolve and perform fixes to allow it to run.",
     "open-protonplus-title": "Install Proton-GE",
     "open-protonplus-subtitle": "Compatibility tool for Steam Play based on Wine and additional components made by GloriousEggroll\nthis tool allows steam to run windows games natively on linux."
 }

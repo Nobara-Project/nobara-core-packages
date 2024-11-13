@@ -35,7 +35,8 @@ class QuirkFixup:
         perform_reboot_request = 0
         perform_refresh = 0
         # START QUIRKS LIST
-        # QUIRK 1: Make sure to update the updater itself and refresh before anything
+
+        # QUIRK 0: Make sure to update the updater itself and refresh before anything
         self.logger.info("QUIRK: Make sure to update the updater itself and refresh before anything.")
         update_self = [
             "nobara-welcome",
@@ -49,7 +50,7 @@ class QuirkFixup:
             self.update_core_packages(update_self, action, log_message)
             perform_refresh = 1
 
-        # QUIRK 2: Make sure to refresh the repositories and gpg-keys before anything
+        # QUIRK 1: Make sure to refresh the repositories and gpg-keys before anything
         self.logger.info("QUIRK: Make sure to refresh the repositories and gpg-keys before anything.")
         critical_packages = [
             "fedora-gpg-keys",
@@ -66,6 +67,37 @@ class QuirkFixup:
             )
             self.update_core_packages(critical_updates, action, log_message)
             perform_refresh = 1
+
+        # QUIRK 2: Cleanup outdated kernel modules
+        self.logger.info("QUIRK: Cleanup outdated kernel modules.")
+        try:
+            # Run the command and capture the output
+            result = subprocess.run("ls /boot/ | grep vmlinuz | grep -v rescue", shell=True, capture_output=True, text=True, check=True)
+
+            # Split the output into lines
+            lines = result.stdout.strip().split('\n')
+
+            # Extract version numbers by removing 'vmlinuz-' prefix
+            versions = [line.replace('vmlinuz-', '') for line in lines if line.startswith('vmlinuz-')]
+
+            # Run the ls command and capture the output
+            result = subprocess.run(['ls', '/lib/modules'], capture_output=True, text=True, check=True)
+
+            # Split the output into entries
+            modules = result.stdout.strip().split()
+
+            # Filter modules that do not match the kernel versions
+            filtered_modules = [module for module in modules if module not in versions]
+
+            # Remove filtered modules
+            for directory in filtered_modules:
+                if directory:  # Check if directory is not None or empty
+                    dir_path = os.path.join('/lib/modules', directory)
+                    if os.path.exists(dir_path):  # Check if the path exists
+                        shutil.rmtree(dir_path)
+
+        except subprocess.CalledProcessError as e:
+            print(f"An error occurred: {e}")
 
         # QUIRK 3: Make sure to reinstall rpmfusion repos if they do not exist
         self.logger.info("QUIRK: Make sure to reinstall rpmfusion repos if they do not exist.")
@@ -260,7 +292,7 @@ class QuirkFixup:
                         text=True,
                     )
 
-                    subprocess.run(["dracut", "-f"], check=True)
+                    subprocess.run(["dracut", "-f", "--regenerate-all"], check=True)
 
                     # Path to the grub configuration file
                     grub_file_path = "/etc/default/grub"  # Use the test file path
@@ -336,7 +368,7 @@ class QuirkFixup:
                         text=True,
                     )
 
-                    subprocess.run(["dracut", "-f"], check=True)
+                    subprocess.run(["dracut", "-f", "--regenerate-all"], check=True)
 
                     # Path to the grub configuration file
                     grub_file_path = "/etc/default/grub"  # Use the test file path
@@ -414,7 +446,7 @@ class QuirkFixup:
                         text=True,
                     )
 
-                    subprocess.run(["dracut", "-f"], check=True)
+                    subprocess.run(["dracut", "-f", "--regenerate-all"], check=True)
 
                     # Path to the grub configuration file
                     grub_file_path = "/etc/default/grub"  # Use the test file path
@@ -702,7 +734,7 @@ class QuirkFixup:
         if len(reinstall) > 0:
             PackageUpdater(reinstall, "install", None)
 
-        # QUIRK 12: Clear plasmashell cache if a plasma-workspace update is available
+        # QUIRK 13: Clear plasmashell cache if a plasma-workspace update is available
         self.logger.info("QUIRK: Clear plasmashell cache if a plasma-workspace update is available.")
         # Function to run the rpm command and get the output
         def check_update():
@@ -742,7 +774,80 @@ class QuirkFixup:
             for home_dir in get_all_user_home_directories():
                 delete_qmlcache(home_dir)
 
-        # QUIRK 13: Media fixup
+        # QUIRK 14: Fix Nvidia epoch so it matches that of negativo17 for cross compatibility
+        self.logger.info("QUIRK: Fix Nvidia epoch so it matches that of negativo17 for cross compatibility.")
+
+        # Run the dnf list installed command and capture the output
+        check_nvidia_wrong_epoch = subprocess.run(
+            ["dnf", "list", "installed"], capture_output=True, text=True
+        )
+
+        # Check if the command was successful
+        if check_nvidia_wrong_epoch.returncode == 0:
+            # Filter the output for lines containing 'nvidia' and '4:'
+            output_lines = check_nvidia_wrong_epoch.stdout.splitlines()
+            nvidia_wrong_epoch = any("nvidia" in line and "4:" in line for line in output_lines)
+
+            # Print the result
+            print("nvidia_wrong_epoch:", nvidia_wrong_epoch)
+
+            # Proceed if nvidia_wrong_epoch is True
+            if nvidia_wrong_epoch:
+                check_chromium = subprocess.run(
+                    ["rpm", "-q", "chromium"], capture_output=True, text=True
+                )
+                reinstall_chromium = 0
+                if check_chromium == 0:
+                    reinstall_chromium = 1
+
+                # Remove old
+                commands = [
+                    ["dnf", "remove", "-y", "nvidia*"],
+                    ["dnf", "remove", "-y", "kmod-nvidia*"],
+                    ["dnf", "remove", "-y", "akmod-nvidia"],
+                    ["dnf", "remove", "-y", "dkms-nvidia"],
+                    ["rm", "-rf", "/var/lib/dkms/nvidia*"]
+                ]
+
+                for command in commands:
+                    subprocess.run(command, capture_output=False, text=True)
+
+                # Add new
+                packages = [
+                    "akmod-nvidia",
+                    "nvidia-driver",
+                    "libnvidia-ml",
+                    "libnvidia-ml.i686",
+                    "libnvidia-fbc",
+                    "nvidia-driver-cuda",
+                    "nvidia-driver-cuda-libs",
+                    "nvidia-driver-cuda-libs.i686",
+                    "nvidia-driver-libs",
+                    "nvidia-driver-libs.i686",
+                    "nvidia-kmod-common",
+                    "nvidia-libXNVCtrl",
+                    "nvidia-modprobe",
+                    "nvidia-persistenced",
+                    "nvidia-settings",
+                    "nvidia-xconfig",
+                    "nvidia-vaapi-driver",
+                    "nvidia-gpu-firmware",
+                    "libnvidia-cfg"
+                ]
+
+                if reinstall_chromium == 1:
+                    packages.append("chromium")
+
+                # Add the '--refresh' option at the end
+                command = ["dnf", "install", "-y"] + packages + ["--refresh"]
+
+                # Run the command
+                subprocess.run(command)
+
+                perform_kernel_actions = 1
+                perform_reboot_request = 1
+
+        # QUIRK 15: Media fixup
         media_fixup = 0
         if "gamescope" not in os.environ.get('XDG_CURRENT_DESKTOP', '').lower():
             self.logger.info("Media fixup.")
