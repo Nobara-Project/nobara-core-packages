@@ -5,9 +5,9 @@
       "title": "blender-title",
       "subtitle": "blender-subtitle",
       "icon": "nobara-blender",
-      "pkgman": "flatpak",
-      "checkpkg": "org.blender.Blender",
-      "packages": "org.blender.Blender"
+      "pkgman": "pkcon",
+      "checkpkg": "blender",
+      "packages": "blender"
     },
     {
       "id": 1,
@@ -32,9 +32,9 @@
       "title": "discord-title",
       "subtitle": "discord-subtitle",
       "icon": "nobara-discord",
-      "pkgman": "flatpak",
-      "checkpkg": "com.discordapp.Discord",
-      "packages": "com.discordapp.Discord"
+      "pkgman": "flatpak-beta",
+      "checkpkg": "com.discordapp.DiscordCanary",
+      "packages": "com.discordapp.DiscordCanary"
     }
   ]
 }

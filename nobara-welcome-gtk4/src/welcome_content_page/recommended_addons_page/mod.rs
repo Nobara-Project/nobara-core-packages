@@ -57,24 +57,25 @@ fn run_flatpak_command(
     log_loop_sender: async_channel::Sender<String>,
     operation: &str,
     entry_packages: &str,
+    fpcommand_script: &str,
 ) -> Result<(), std::boxed::Box<dyn Error + Send + Sync>> {
     let (pipe_reader, pipe_writer) = os_pipe::pipe()?;
     let child = cmd!(
         "bash",
         "-c",
-        "/usr/lib/nobara/nobara-welcome/scripts/flatpak-install.sh ".to_owned()
+        format!("{} ", fpcommand_script)
             + operation
             + " "
             + &entry_packages
     )
-    .stderr_to_stdout()
-    .stdout_file(pipe_writer)
-    .start()?;
+   .stderr_to_stdout()
+   .stdout_file(pipe_writer)
+   .start()?;
     for line in BufReader::new(pipe_reader).lines() {
         thread::sleep(time::Duration::from_secs(1));
         log_loop_sender
-            .send_blocking(line?)
-            .expect("Channel needs to be opened.")
+           .send_blocking(line?)
+           .expect("Channel needs to be opened.")
     }
     child.wait()?;
 
@@ -300,14 +301,18 @@ pub fn recommended_addons_page(
                     }
             }));
             recommended_addons_page_listbox.append(&entry_row)
-        } else if entry_pkgman == "flatpak" {
+        } else if entry_pkgman.contains("flatpak") {
             gio::spawn_blocking(
                 clone!(@strong checkpkg_status_loop_sender, @strong entry_checkpkg => move || loop {
-                    let checkpkg_command = Command::new("/usr/lib/nobara/nobara-welcome/scripts/flatpak-install.sh")
-                        .arg("check")
-                        .arg(&entry_checkpkg)
-                        .output()
-                        .expect("failed to execute process");
+                    fpcommand_script = "/usr/lib/nobara/nobara-welcome/scripts/flatpak-install.sh"
+                    if entry_pkgman == "flatpak-beta"{
+                        fpcommand_script = "/usr/lib/nobara/nobara-welcome/scripts/flatpak-beta-install.sh"
+                    }
+                        let checkpkg_command = Command::new(fpcommand_script)
+                            .arg("check")
+                            .arg(&entry_checkpkg)
+                            .output()
+                            .expect("failed to execute process");
                     if checkpkg_command.status.success() {
                         checkpkg_status_loop_sender.send_blocking(true).expect("The channel needs to be open.");
                     } else {
@@ -443,7 +448,7 @@ pub fn recommended_addons_page(
                         let log_loop_sender_clone= log_loop_sender.clone();
                         let entry_packages_clone= entry_packages.clone();
                         std::thread::spawn(move || {
-                            let command = run_flatpak_command(log_loop_sender_clone, "install", &entry_packages_clone);
+                            let command = run_flatpak_command(log_loop_sender_clone, "install", &entry_packages_clone, fpcommand_script.clone());
                             match command {
                                 Ok(_) => {
                                     println!("Status: Addon Command Successful");
