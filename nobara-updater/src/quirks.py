@@ -170,7 +170,7 @@ class QuirkFixup:
         if de_update_packages:
             perform_reboot_request = 1
 
-        # QUIRK 7: Install HHD for Controller input, install steam firmware for steamdecks. Cleanup old packages.
+        # QUIRK 7: Install InputPlumber for Controller input, install steam firmware for steamdecks. Cleanup old packages.
         remove_names = []
         updatelist  = []
         controller_update_config_path = '/etc/nobara/handheld_packages/autoupdate.conf'
@@ -515,35 +515,6 @@ class QuirkFixup:
             )
             perform_reboot_request = 1
 
-        # If it has an SD card reader, install gamescope-handheld-common:
-        try:
-            # Execute the lsblk command to list block devices
-            result = subprocess.run(['lsblk', '-o', 'NAME,TYPE'], capture_output=True, text=True)
-
-            # Check if the command was successful
-            if result.returncode != 0:
-                self.logger.info("Failed to execute lsblk command")
-
-
-            # Parse the output
-            output = result.stdout
-            lines = output.splitlines()
-            sdreader_detected = 0
-            # Look for devices of type 'disk' that match the typical SD card reader pattern
-            for line in lines:
-                if 'mmcblk' in line and 'disk' in line:
-                    sdreader_detected = 1
-
-            if sdreader_detected == 1:
-                check_gamescope_hh = subprocess.run(
-                    ["rpm", "-q", "gamescope-handheld-common"], capture_output=True, text=True
-                )
-                gamescope_hh_notinstalled = check_gamescope_hh.returncode != 0
-                if gamescope_hh_notinstalled:
-                    updatelist.append("gamescope-handheld-common")
-        except Exception as e:
-            pass
-
         if len(remove_names) > 0:
             PackageUpdater(remove_names, "remove", None)
 
@@ -779,7 +750,7 @@ class QuirkFixup:
 
         # Run the dnf list installed command and capture the output
         check_nvidia_wrong_epoch = subprocess.run(
-            ["dnf", "list", "installed"], capture_output=True, text=True
+            ["dnf4", "list", "installed"], capture_output=True, text=True
         )
 
         # Check if the command was successful
@@ -847,7 +818,59 @@ class QuirkFixup:
                 perform_kernel_actions = 1
                 perform_reboot_request = 1
 
-        # QUIRK 15: Media fixup
+        # QUIRK 15: Swap old AMD ROCm packages with upstream Fedora ROCm versions.
+        self.logger.info("QUIRK: Swap old AMD ROCm packages with upstream Fedora ROCm versions.")
+
+        try:
+            # Run the command and capture output
+            old_rocm = subprocess.run(
+                ["dnf4", "list", "installed", "|", "grep", "@nobara-rocm-official"],
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+
+            # Check if the command was successful
+            if old_rocm.returncode != 0:
+                print(f"Command failed with error: {old_rocm.stderr}")
+                return
+
+            # Extract the output
+            old_rocm_output = old_rocm.stdout.strip()
+
+            # Check if any lines were matched
+            if old_rocm_output:
+                # Remove old ROCm packages
+                old_rocm_removal = [
+                    "comgr.x86_64",
+                    "hip-devel.x86_64",
+                    "hip-runtime-amd.x86_64",
+                    "hipcc.x86_64",
+                    "hsa-rocr.x86_64",
+                    "hsa-rocr-devel.x86_64",
+                    "hsakmt-roct-devel.x86_64",
+                    "openmp-extras-runtime.x86_64",
+                    "rocm-core.x86_64",
+                    "rocm-device-libs.x86_64",
+                    "rocm-hip-runtime.x86_64",
+                    "rocm-language-runtime.x86_64",
+                    "rocm-llvm.x86_64",
+                    "rocm-opencl.x86_64",
+                    "rocm-opencl-icd-loader.x86_64",
+                    "rocm-opencl-runtime.x86_64",
+                    "rocm-smi-lib.x86_64",
+                    "rocminfo.x86_64",
+                    "rocprofiler-register.x86_64"
+                    "rocm-meta",
+                ]
+                PackageUpdater(old_rocm_removal, "remove", None)
+                # Now reinstall new rocm-meta
+                PackageUpdater(["rocm-meta"], "install", None)
+
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+        # QUIRK 16: Media fixup
         media_fixup = 0
         if "gamescope" not in os.environ.get('XDG_CURRENT_DESKTOP', '').lower():
             self.logger.info("Media fixup.")
@@ -986,4 +1009,3 @@ class QuirkFixup:
     def run_package_updater(self, package_names: list[str], action: str) -> None:
         # Initialize the PackageUpdater
         PackageUpdater(package_names, action, None)
-
