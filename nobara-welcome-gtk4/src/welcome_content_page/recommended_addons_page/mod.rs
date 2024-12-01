@@ -431,7 +431,7 @@ pub fn recommended_addons_page(
                         let log_loop_sender_clone= log_loop_sender.clone();
                         let entry_packages_clone= entry_packages.clone();
                         std::thread::spawn(move || {
-                            let command = run_flatpak_command(log_loop_sender_clone, "remove", &entry_packages_clone);
+                            let command = run_flatpak_command(log_loop_sender_clone, "remove", &entry_packages_clone, fpcommand_script.clone());
                             match command {
                                 Ok(_) => {
                                     println!("Status: Addon Command Successful");
