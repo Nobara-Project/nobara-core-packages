@@ -49,6 +49,83 @@ then
 	fi
 
 	exit 0
+elif [[ "$1" = "rocm-meta" ]]
+then
+	if rpm -q rocm-meta
+	then
+		dnf remove -y rocm-meta \
+			rocm-comgr \
+			rocm-runtime \
+			rocm-smi \
+			rocm-clinfo \
+			rocm-cmake \
+			rocm-core \
+			rocm-rpm-macros \
+			python3-torch-rocm-gfx9 \
+			python3-torchaudio-rocm-gfx9 \
+			rocprim-devel \
+			rocblas \
+			rocsparse \
+			rocminfo \
+			rocrand \
+			hipblas \
+			hipfft \
+			hipsolver \
+			rocclr \
+			rocfft \
+			rocsolver \
+			hipblaslt \
+			rocalution \
+			roctracer \
+			rocm-opencl \
+			comgr \
+			hip-devel \
+			hip-runtime-amd \
+			hipcc \
+			hsa-rocr \
+			hsa-rocr-devel \
+			hsakmt-roct-devel \
+			openmp-extras-runtime \
+			rocm-core \
+			rocm-device-libs \
+			rocm-hip-runtime \
+			rocm-language-runtime \
+			rocm-llvm \
+			rocm-opencl \
+			rocm-opencl-icd-loader \
+			rocm-opencl-runtime \
+			rocm-smi-lib \
+			rocminfo \
+			rocprofiler-register
+	else
+		dnf install -y rocm-meta \
+			rocm-comgr \
+			rocm-runtime \
+			rocm-smi \
+			rocm-clinfo \
+			rocm-cmake \
+			rocm-core \
+			rocm-rpm-macros \
+			python3-torch-rocm-gfx9 \
+			python3-torchaudio-rocm-gfx9 \
+			rocprim-devel \
+			rocblas \
+			rocsparse \
+			rocminfo \
+			rocrand \
+			hipblas \
+			hipfft \
+			hipsolver \
+			rocclr \
+			rocfft \
+			rocsolver \
+			hipblaslt \
+			rocalution \
+			roctracer \
+			rocm-opencl \
+		--refresh
+	fi
+	exit 0
 # Special override for xone
 elif [[ "$1" = "xone" ]]
 then
