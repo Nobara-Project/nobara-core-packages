@@ -30,7 +30,9 @@ gi.require_version("Flatpak", "1.0")
 from typing import Any
 
 from gi.repository import Flatpak, GLib, Gtk  # type: ignore[import]
-from yumex.constants import BACKEND  # type: ignore[import]
+#from yumex.constants import BACKEND  # type: ignore[import]
+# still need to repair DNF5, use DNF4 for now
+BACKEND = "DNF4"
 
 if BACKEND == "DNF5":
     from nobara_updater.dnf5 import (  # type: ignore[import]

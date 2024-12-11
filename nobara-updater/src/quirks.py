@@ -839,7 +839,7 @@ class QuirkFixup:
             old_rocm_output = old_rocm.stdout.strip()
 
             # Check if any lines were matched
-            if old_rocm_output:
+            if "@nobara-rocm-official" in str(old_rocm_output):
                 # Remove old ROCm packages
                 old_rocm_removal = [
                     "comgr.x86_64",
@@ -860,7 +860,7 @@ class QuirkFixup:
                     "rocm-opencl-runtime.x86_64",
                     "rocm-smi-lib.x86_64",
                     "rocminfo.x86_64",
-                    "rocprofiler-register.x86_64"
+                    "rocprofiler-register.x86_64",
                     "rocm-meta",
                 ]
                 PackageUpdater(old_rocm_removal, "remove", None)

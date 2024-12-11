@@ -8,6 +8,7 @@ from typing import Any
 import inspect
 import dnf  # type: ignore[import]
 import gi  # type: ignore[import]
+import subprocess
 
 gi.require_version("Gtk", "3.0")
 
@@ -202,7 +203,7 @@ class CustomTransactionDisplay(dnf.yum.rpmtrans.LoggingTransactionDisplay):
                     self.logger.info("Installing...")
 
                 self.performing_upgrade = 1
-            
+
             if self.package != package_name:
                 self.starting_line += 1
                 if self.starting_line <= self.total_packages:
@@ -245,7 +246,11 @@ class PackageUpdater:
         self.logger = logger if logger is not None else logging.getLogger()
         self.logger.addHandler(self.queue_handler)
         self.logger.setLevel(logging.INFO)
-        self.update_packages(action)
+        # Right now update_packages doesn't provide sufficient logging.
+        # It also doesn't correctly log in the dnf history
+        # Use DNF command for now
+        #self.update_packages(action)
+        self.update_packages_dnf_command(action)
 
     def update_packages(self, action: str, retries: int = 3, delay: int = 5) -> None:
         attempt = 0
@@ -302,4 +307,48 @@ class PackageUpdater:
                         attempt = 3
                     except Exception as e:
                         self.logger.error("Failed to close base: %s", e)
+        raise Exception("Failed to complete operation after %d attempts" % retries)
+
+    def update_packages_dnf_command(self, action: str, retries: int = 3, delay: int = 5) -> None:
+        attempt = 0
+        while attempt < retries:
+            if self.package_names:
+                try:
+                    action_log_string = "Upgrading packages:" if action == "upgrade" else (
+                        "Installing packages:" if action == "install" else "Removing packages:"
+                    )
+
+                    package_list = " ".join(self.package_names)
+                    command = f"dnf {'update' if action == 'upgrade' else 'install' if action == 'install' else 'remove'} --refresh -y {package_list}"
+
+                    self.logger.info("%s\n%s", action_log_string, "\n".join(self.package_names))
+
+                    process = subprocess.Popen(
+                        command,
+                        shell=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True
+                    )
+
+                    while True:
+                        line = process.stdout.readline()
+                        if not line:
+                            break
+                        self.logger.info(line.strip())
+
+                    self.logger.info("Successfully updated packages!")
+                    return  # Exit the loop on success
+                except FileNotFoundError as e:
+                    if e.errno == 2:
+                        attempt += 1
+                        self.logger.info("Attempt %d failed with error: %s. Retrying in %d seconds...", attempt, e, delay)
+                        time.sleep(delay)
+                    else:
+                        raise
+                except Exception as e:
+                    self.logger.error("An unexpected error occurred: %s", e)
+                    raise
+            else:
+                raise ValueError("No package names provided")
         raise Exception("Failed to complete operation after %d attempts" % retries)
