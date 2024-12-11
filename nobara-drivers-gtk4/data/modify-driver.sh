@@ -49,6 +49,59 @@ then
 	fi
 
 	exit 0
+if [[ "$1" = "cuda-devel" ]]
+then
+	if rpm -q cuda-devel
+	then
+		# uninstall first
+		rpm -e --nodeps cuda-devel
+		rpm -e --nodeps cuda
+		rpm -e --nodeps cuda-cccl-devel
+		rpm -e --nodeps cuda-cudart
+		rpm -e --nodeps cuda-cudart-devel
+		rpm -e --nodeps cuda-cuobjdump
+		rpm -e --nodeps cuda-cupti
+		rpm -e --nodeps cuda-cupti-devel
+		rpm -e --nodeps cuda-cuxxfilt-devel
+		rpm -e --nodeps cuda-gcc
+		rpm -e --nodeps cuda-gcc-c++
+		rpm -e --nodeps cuda-libs
+		rpm -e --nodeps cuda-nvcc
+		rpm -e --nodeps cuda-nvprof
+		rpm -e --nodeps cuda-nvprof-devel
+		rpm -e --nodeps cuda-nvprune
+		rpm -e --nodeps cuda-nvrtc
+		rpm -e --nodeps cuda-nvrtc-devel
+		rpm -e --nodeps cuda-nvtx
+		rpm -e --nodeps cuda-nvtx-devel
+		rpm -e --nodeps isl
+		rpm -e --nodeps libcublas
+		rpm -e --nodeps libcublas-devel
+		rpm -e --nodeps libcufft
+		rpm -e --nodeps libcufft-devel
+		rpm -e --nodeps libcufile
+		rpm -e --nodeps libcufile-devel
+		rpm -e --nodeps libcurand
+		rpm -e --nodeps libcurand-devel
+		rpm -e --nodeps libcusolver
+		rpm -e --nodeps libcusolver-devel
+		rpm -e --nodeps libcusparse
+		rpm -e --nodeps libcusparse-devel
+		rpm -e --nodeps libnpp
+		rpm -e --nodeps libnpp-devel
+		rpm -e --nodeps libnvjitlink
+		rpm -e --nodeps libnvjpeg
+		rpm -e --nodeps libnvjpeg-devel
+		rpm -e --nodeps librdmacm
+		rpm -e --nodeps opencl-headers
+		# reinstall
+		dnf install -y isl
+		dnf install -y cuda-devel
+	else
+		dnf install -y isl
+		dnf install -y cuda-devel
+	fi
+	exit 0
 elif [[ "$1" = "rocm-meta" ]]
 then
 	if rpm -q rocm-meta
