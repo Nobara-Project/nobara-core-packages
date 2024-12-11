@@ -57,25 +57,24 @@ fn run_flatpak_command(
     log_loop_sender: async_channel::Sender<String>,
     operation: &str,
     entry_packages: &str,
-    fpcommand_script: &str,
 ) -> Result<(), std::boxed::Box<dyn Error + Send + Sync>> {
     let (pipe_reader, pipe_writer) = os_pipe::pipe()?;
     let child = cmd!(
         "bash",
         "-c",
-        format!("{} ", fpcommand_script)
+        "/usr/lib/nobara/nobara-welcome/scripts/flatpak-install.sh ".to_owned()
             + operation
             + " "
             + &entry_packages
     )
-   .stderr_to_stdout()
-   .stdout_file(pipe_writer)
-   .start()?;
+    .stderr_to_stdout()
+    .stdout_file(pipe_writer)
+    .start()?;
     for line in BufReader::new(pipe_reader).lines() {
         thread::sleep(time::Duration::from_secs(1));
         log_loop_sender
-           .send_blocking(line?)
-           .expect("Channel needs to be opened.")
+            .send_blocking(line?)
+            .expect("Channel needs to be opened.")
     }
     child.wait()?;
 
@@ -159,7 +158,7 @@ pub fn recommended_addons_page(
                     thread::sleep(time::Duration::from_secs(10));
                 }),
             );
-    
+
             let entry_row = adw::ActionRow::builder()
                 .title(t!(&entry_title))
                 .subtitle(t!(&entry_subtitle))
@@ -179,16 +178,16 @@ pub fn recommended_addons_page(
             entry_buttons_size_group.add_widget(&entry_row_button);
             entry_row.add_prefix(&entry_row_icon);
             entry_row.add_suffix(&entry_row_button);
-    
+
             let recommended_addons_command_log_terminal_buffer = gtk::TextBuffer::builder().build();
-    
+
             let recommended_addons_command_log_terminal = gtk::TextView::builder()
                 .vexpand(true)
                 .hexpand(true)
                 .editable(false)
                 .buffer(&recommended_addons_command_log_terminal_buffer)
                 .build();
-    
+
             let recommended_addons_command_log_terminal_scroll = gtk::ScrolledWindow::builder()
                 .width_request(400)
                 .height_request(200)
@@ -196,7 +195,7 @@ pub fn recommended_addons_page(
                 .hexpand(true)
                 .child(&recommended_addons_command_log_terminal)
                 .build();
-    
+
             let recommended_addons_command_dialog = adw::MessageDialog::builder()
                 .transient_for(window)
                 .hide_on_close(true)
@@ -209,7 +208,7 @@ pub fn recommended_addons_page(
                 "recommended_addons_command_dialog_ok",
                 &t!("recommended_addons_command_dialog_ok_label").to_string(),
             );
-    
+
             let checkpkg_status_loop_context = MainContext::default();
             // The main loop executes the asynchronous block
             checkpkg_status_loop_context.spawn_local(
@@ -229,7 +228,7 @@ pub fn recommended_addons_page(
                     }
                 }),
             );
-    
+
             //
             let log_loop_context = MainContext::default();
             // The main loop executes the asynchronous block
@@ -238,7 +237,7 @@ pub fn recommended_addons_page(
                     recommended_addons_command_log_terminal_buffer.insert(&mut recommended_addons_command_log_terminal_buffer.end_iter(), &("\n".to_string() + &state))
                 }
             }));
-    
+
             let log_status_loop_context = MainContext::default();
             // The main loop executes the asynchronous block
             log_status_loop_context.spawn_local(clone!(@weak recommended_addons_command_dialog, @strong log_status_loop_receiver => async move {
@@ -258,7 +257,7 @@ pub fn recommended_addons_page(
                         recommended_addons_command_log_terminal_scroll.vadjustment().set_value(recommended_addons_command_log_terminal_scroll.vadjustment().upper())
                     }
                 }));
-    
+
             entry_row_button.connect_clicked(clone!(@strong entry_packages, @weak entry_row_button, @weak window => move |_| {
                     recommended_addons_command_log_terminal_buffer.delete(&mut recommended_addons_command_log_terminal_buffer.bounds().0, &mut recommended_addons_command_log_terminal_buffer.bounds().1);
                     recommended_addons_command_dialog.set_response_enabled("recommended_addons_command_dialog_ok", false);
@@ -301,18 +300,14 @@ pub fn recommended_addons_page(
                     }
             }));
             recommended_addons_page_listbox.append(&entry_row)
-        } else if entry_pkgman.contains("flatpak") {
+        } else if entry_pkgman == "flatpak" {
             gio::spawn_blocking(
                 clone!(@strong checkpkg_status_loop_sender, @strong entry_checkpkg => move || loop {
-                    fpcommand_script = "/usr/lib/nobara/nobara-welcome/scripts/flatpak-install.sh"
-                    if entry_pkgman == "flatpak-beta"{
-                        fpcommand_script = "/usr/lib/nobara/nobara-welcome/scripts/flatpak-beta-install.sh"
-                    }
-                        let checkpkg_command = Command::new(fpcommand_script)
-                            .arg("check")
-                            .arg(&entry_checkpkg)
-                            .output()
-                            .expect("failed to execute process");
+                    let checkpkg_command = Command::new("/usr/lib/nobara/nobara-welcome/scripts/flatpak-install.sh")
+                        .arg("check")
+                        .arg(&entry_checkpkg)
+                        .output()
+                        .expect("failed to execute process");
                     if checkpkg_command.status.success() {
                         checkpkg_status_loop_sender.send_blocking(true).expect("The channel needs to be open.");
                     } else {
@@ -321,7 +316,7 @@ pub fn recommended_addons_page(
                     thread::sleep(time::Duration::from_secs(10));
                 }),
             );
-    
+
             let entry_row = adw::ActionRow::builder()
                 .title(t!(&entry_title))
                 .subtitle(t!(&entry_subtitle))
@@ -341,16 +336,16 @@ pub fn recommended_addons_page(
             entry_buttons_size_group.add_widget(&entry_row_button);
             entry_row.add_prefix(&entry_row_icon);
             entry_row.add_suffix(&entry_row_button);
-    
+
             let recommended_addons_command_log_terminal_buffer = gtk::TextBuffer::builder().build();
-    
+
             let recommended_addons_command_log_terminal = gtk::TextView::builder()
                 .vexpand(true)
                 .hexpand(true)
                 .editable(false)
                 .buffer(&recommended_addons_command_log_terminal_buffer)
                 .build();
-    
+
             let recommended_addons_command_log_terminal_scroll = gtk::ScrolledWindow::builder()
                 .width_request(400)
                 .height_request(200)
@@ -358,7 +353,7 @@ pub fn recommended_addons_page(
                 .hexpand(true)
                 .child(&recommended_addons_command_log_terminal)
                 .build();
-    
+
             let recommended_addons_command_dialog = adw::MessageDialog::builder()
                 .transient_for(window)
                 .hide_on_close(true)
@@ -371,7 +366,7 @@ pub fn recommended_addons_page(
                 "recommended_addons_command_dialog_ok",
                 &t!("recommended_addons_command_dialog_ok_label").to_string(),
             );
-    
+
             let checkpkg_status_loop_context = MainContext::default();
             // The main loop executes the asynchronous block
             checkpkg_status_loop_context.spawn_local(
@@ -391,7 +386,7 @@ pub fn recommended_addons_page(
                     }
                 }),
             );
-    
+
             //
             let log_loop_context = MainContext::default();
             // The main loop executes the asynchronous block
@@ -400,7 +395,7 @@ pub fn recommended_addons_page(
                     recommended_addons_command_log_terminal_buffer.insert(&mut recommended_addons_command_log_terminal_buffer.end_iter(), &("\n".to_string() + &state))
                 }
             }));
-    
+
             let log_status_loop_context = MainContext::default();
             // The main loop executes the asynchronous block
             log_status_loop_context.spawn_local(clone!(@weak recommended_addons_command_dialog, @strong log_status_loop_receiver => async move {
@@ -420,7 +415,7 @@ pub fn recommended_addons_page(
                         recommended_addons_command_log_terminal_scroll.vadjustment().set_value(recommended_addons_command_log_terminal_scroll.vadjustment().upper())
                     }
                 }));
-    
+
             entry_row_button.connect_clicked(clone!(@strong entry_packages, @weak entry_row_button, @weak window => move |_| {
                     recommended_addons_command_log_terminal_buffer.delete(&mut recommended_addons_command_log_terminal_buffer.bounds().0, &mut recommended_addons_command_log_terminal_buffer.bounds().1);
                     recommended_addons_command_dialog.set_response_enabled("recommended_addons_command_dialog_ok", false);
@@ -431,7 +426,7 @@ pub fn recommended_addons_page(
                         let log_loop_sender_clone= log_loop_sender.clone();
                         let entry_packages_clone= entry_packages.clone();
                         std::thread::spawn(move || {
-                            let command = run_flatpak_command(log_loop_sender_clone, "remove", &entry_packages_clone, fpcommand_script.clone());
+                            let command = run_flatpak_command(log_loop_sender_clone, "remove", &entry_packages_clone);
                             match command {
                                 Ok(_) => {
                                     println!("Status: Addon Command Successful");
@@ -448,7 +443,7 @@ pub fn recommended_addons_page(
                         let log_loop_sender_clone= log_loop_sender.clone();
                         let entry_packages_clone= entry_packages.clone();
                         std::thread::spawn(move || {
-                            let command = run_flatpak_command(log_loop_sender_clone, "install", &entry_packages_clone, fpcommand_script.clone());
+                            let command = run_flatpak_command(log_loop_sender_clone, "install", &entry_packages_clone);
                             match command {
                                 Ok(_) => {
                                     println!("Status: Addon Command Successful");

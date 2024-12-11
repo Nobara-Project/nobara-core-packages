@@ -6,7 +6,7 @@
       "subtitle": "open-nobara-resolve-wizard-subtitle",
       "icon": "nobara-resolve",
       "button": "launch-label",
-      "terminal": true,
+      "terminal": false,
       "command": "/usr/bin/nobara-resolve-wizard &"
     },
     {

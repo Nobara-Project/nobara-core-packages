@@ -32,7 +32,7 @@
       "title": "discord-title",
       "subtitle": "discord-subtitle",
       "icon": "nobara-discord",
-      "pkgman": "flatpak-beta",
+      "pkgman": "flatpak",
       "checkpkg": "com.discordapp.DiscordCanary",
       "packages": "com.discordapp.DiscordCanary"
     }

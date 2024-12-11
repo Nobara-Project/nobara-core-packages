@@ -7,6 +7,7 @@ import pwd
 import subprocess
 import shutil
 import sys
+import threading
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib
@@ -15,16 +16,6 @@ class DaVinciInstaller(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.nobaraproject.policykit.davinciresolve.wizard.install")
         self.window = None
-
-        # Check if running as root, if not, re-run with pkexec
-        if os.geteuid() != 0:
-            print("Re-running with pkexec...")
-            env = os.environ.copy()
-            env['DISPLAY'] = os.environ.get('DISPLAY', '')
-            env['XAUTHORITY'] = os.environ.get('XAUTHORITY', '')
-            env['REALUSER'] = os.environ.get('USER', '')
-            subprocess.run(["pkexec", "env", f"DISPLAY={env['DISPLAY']}", f"XAUTHORITY={env['XAUTHORITY']}", f"REALUSER={env['REALUSER']}", sys.executable] + sys.argv)
-            return
 
     def do_activate(self):
         if not self.window:
@@ -39,7 +30,6 @@ class DaVinciInstaller(Gtk.Application):
             vbox.pack_start(instruction_label, True, True, 0)
 
             download_link = Gtk.LinkButton(uri="https://www.blackmagicdesign.com/products/davinciresolve", label="Download DaVinci Resolve")
-            download_link.connect("clicked", self.on_download_link_clicked)
             vbox.pack_start(download_link, True, True, 0)
 
             select_button = Gtk.Button(label="Select Downloaded File")
@@ -48,28 +38,7 @@ class DaVinciInstaller(Gtk.Application):
 
             self.window.show_all()
 
-    def on_download_link_clicked(self, widget):
-        real_user = os.environ.get('REALUSER', '')
-        if not real_user:
-            self.show_error_dialog("REALUSER environment variable is not set.")
-            return
-
-        # Command to open the URL in the default web browser
-        url = "https://www.blackmagicdesign.com/products/davinciresolve"
-        try:
-            subprocess.run(["sudo", "-u", real_user, "xdg-open", url], check=True)
-        except Exception as e:
-            self.show_error_dialog(f"Failed to open the link: {str(e)}")
-
     def on_file_select(self, widget):
-        real_user = os.environ.get('REALUSER', '')
-        if not real_user:
-            self.show_error_dialog("REALUSER environment variable is not set.")
-            return
-
-        # Get the REALUSER's home directory
-        user_info = pwd.getpwnam(real_user)
-        user_home = user_info.pw_dir
 
         dialog = Gtk.FileChooserDialog(
             title="Select ZIP File",
@@ -81,9 +50,6 @@ class DaVinciInstaller(Gtk.Application):
             Gtk.STOCK_OPEN, Gtk.ResponseType.OK
         )
 
-        # Set the initial directory to the REALUSER's home directory
-        dialog.set_current_folder(user_home)
-
         filter_zip = Gtk.FileFilter()
         filter_zip.set_name("ZIP files")
         filter_zip.add_pattern("*.zip")
@@ -93,14 +59,20 @@ class DaVinciInstaller(Gtk.Application):
         if response == Gtk.ResponseType.OK:
             zip_path = dialog.get_filename()
             dialog.destroy()  # Close the file chooser dialog
-            try:
-                self.run_installer(zip_path)
-            except Exception as e:
-                self.show_error_dialog(str(e))
+
+            # Create a thread to run self.run_installer asynchronously
+            installer_thread = threading.Thread(target=self.run_installer, args=(zip_path,))
+            installer_thread.start()
         else:
             dialog.destroy()
 
     def run_installer(self, zip_path):
+
+        def on_install_complete(success):
+            if success:
+                self.show_success_dialog()
+            else:
+                self.show_error_dialog("An error occurred during DaVinci Resolve installation.")
         # Show status dialog
         status_dialog = Gtk.MessageDialog(
             transient_for=self.window,
@@ -110,14 +82,42 @@ class DaVinciInstaller(Gtk.Application):
             text="Running DaVinci Resolve installer...",
         )
         status_dialog.show()
+        # Start the installer process in a separate thread
+        installer_thread = threading.Thread(target=self.extract_and_install, args=(zip_path,))
+        installer_thread.start()
 
-        try:
-            self.extract_and_install(zip_path)
-            status_dialog.destroy()
-            self.show_info_dialog("DaVinci Resolve installed successfully!")
-        except Exception as e:
-            status_dialog.destroy()
-            self.show_error_dialog(str(e))
+        # Wait for the installer to complete
+        installer_thread.join(timeout=300)
+
+        # Close the status dialog
+        status_dialog.destroy()
+
+        if not installer_thread.is_alive():
+            on_install_complete(True)
+        else:
+            on_install_complete(False)
+
+    def run_nobara_resolved_pkexec(self, run_file, shortcut_file):
+        def run_command():
+            try:
+                subprocess.run(
+                    ["pkexec", "/usr/libexec/nobara-resolve-pkexec", run_file, shortcut_file],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=True
+                )
+            except subprocess.CalledProcessError as e:
+                self.show_error_dialog(f"An error occurred during Nobara Resolve installation: {e}")
+
+        # Start the command in a separate thread
+        thread = threading.Thread(target=run_command)
+        thread.start()
+
+        # Wait for the thread to complete
+        thread.join(timeout=300)  # Set a timeout of 5 minutes
+
+        if thread.is_alive():
+            self.show_error_dialog("The installation process timed out. Please check your internet connection and try again.")
 
     def extract_and_install(self, zip_path):
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
@@ -134,40 +134,40 @@ class DaVinciInstaller(Gtk.Application):
         if not run_file:
             raise FileNotFoundError("No .run file found in the extracted contents.")
 
-        # Step 1: Install necessary packages as root
-        subprocess.run(["dnf", "install", "-y", "rocm-meta", "nobara-resolve-runtime", "zlib"], check=True)
+        # Step 4: Copy the shortcut entry to the user's Desktop and applications menus
+        shortcut_file = '/usr/share/applications/com.blackmagicdesign.resolve.desktop'
 
-        # Step 2: Run the .run file as the user
-        os.chmod(run_file, 0o755)
-        real_user = os.environ.get('REALUSER', '')
-        if not real_user:
-            raise EnvironmentError("REALUSER environment variable is not set.")
-        subprocess.run(["sudo", "-u", real_user, "bash", "-c", f"SKIP_PACKAGE_CHECK=1 {run_file}"], check=True)
+        ### ROOT REQUIRED ###
 
-        # Step 3: Modify the desktop entry as root
-        desktop_file = "/usr/share/applications/com.blackmagicdesign.resolve.desktop"
-        if os.path.exists(desktop_file):
-            subprocess.run(["sed", "-i", 's|Exec=.*|Exec=/usr/bin/davinci-resolve|', desktop_file], check=True)
-        else:
-            raise FileNotFoundError("Desktop entry file not found.")
+        # Call the function to run the pkexec command
+        self.run_nobara_resolved_pkexec(run_file, shortcut_file,)
 
-        # Step 4: Copy the desktop entry to the user's Desktop
-        user_info = pwd.getpwnam(real_user)
-        user_home = user_info.pw_dir
-        user_desktop = os.path.join(user_home, "Desktop")
-        shutil.copy(desktop_file, user_desktop)
+        ### END ROOT REQUIRED ###
+        user_home = os.path.expanduser("~")
+        desktop_path = os.path.join(user_home, "Desktop")
+        shutil.copy(shortcut_file, desktop_path)
 
         # Step 5: Bypass the Davinci Resolve new install Welcome/Onboarding screen
         config_dir = os.path.join(user_home, '.local', 'share', 'DaVinciResolve', 'configs')
         version_file = os.path.join(config_dir, '.version')
-        subprocess.run(["chown", "-R", real_user + ":" + real_user, os.path.join(user_home, '.local', 'share', 'DaVinciResolve')], check=True)
 
-        # Create the directory structure
+        # Create the directory structure if it doesn't exist
         os.makedirs(config_dir, exist_ok=True)
 
         # Write the version information to the file
         with open(version_file, 'w') as file:
             file.write("Onboarding.Version=100000")
+
+    def show_success_dialog(self):
+        dialog = Gtk.MessageDialog(
+            transient_for=self.window,
+            flags=Gtk.DialogFlags.DESTROY_WITH_PARENT,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.OK,
+            text="DaVinci Resolve installed successfully!",
+        )
+        dialog.connect("response", self.on_dialog_response, dialog)
+        dialog.show_all()
 
     def show_error_dialog(self, message):
         dialog = Gtk.MessageDialog(
@@ -181,18 +181,12 @@ class DaVinciInstaller(Gtk.Application):
         dialog.run()
         dialog.destroy()
 
-    def show_info_dialog(self, message):
-        dialog = Gtk.MessageDialog(
-            transient_for=self.window,
-            flags=0,
-            message_type=Gtk.MessageType.INFO,
-            buttons=Gtk.ButtonsType.OK,
-            text="Success",
-        )
-        dialog.format_secondary_text(message)
-        dialog.run()
+    def on_dialog_response(self, widget, response_id, dialog):
+        if response_id == Gtk.ResponseType.OK:
+            if self.window:
+                self.window.destroy()
+            Gtk.main_quit()
         dialog.destroy()
 
 if __name__ == "__main__":
-    app = DaVinciInstaller()
-    app.run(None)
+    DaVinciInstaller().run(None)
