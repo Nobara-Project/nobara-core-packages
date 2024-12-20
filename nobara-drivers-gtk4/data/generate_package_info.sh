@@ -7,6 +7,8 @@ then
         echo "These are OPTIONAL additional packages for OpenCL/ROCm support"
     elif [[ $2 == "cuda-devel" ]]; then
         echo "These are OPTIONAL additional packages for CUDA support"
+    elif [[ $2 == "mesa-vulkan-drivers-git" ]]; then
+        echo "These are OPTIONAL ALTERNATIVE AMD + Intel Vulkan drivers which are built from open-source Mesa git repository frequently. They may contain fixes (or also bugs) which are not present in the current stable release."
     fi
 elif [[ $1 == "description" ]]
 then

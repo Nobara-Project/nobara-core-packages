@@ -18,6 +18,22 @@
     },
     {
       "id": 2,
+      "driver": "mesa-vulkan-drivers-git",
+      "icon": "intel",
+      "experimental": false,
+      "removable": true,
+      "detection": "lspci -D | grep -iE 'VGA|3D' | grep -i intel"
+    },
+    {
+      "id": 3,
+      "driver": "mesa-vulkan-drivers-git",
+      "icon": "amd",
+      "experimental": false,
+      "removable": true,
+      "detection": "lspci -D | grep -iE 'VGA|3D' | grep -i amd"
+    },
+    {
+      "id": 4,
       "driver": "nvidia-driver",
       "icon": "nvidia",
       "experimental": false,
@@ -25,7 +41,7 @@
       "detection": "lspci -D | grep -iE 'VGA|3D' | grep -i nvidia"
     },
     {
-      "id": 3,
+      "id": 5,
       "driver": "cuda-devel",
       "icon": "nvidia",
       "experimental": false,
@@ -33,7 +49,7 @@
       "detection": "lspci -D | grep -iE 'VGA|3D' | grep -i nvidia"
     },
     {
-      "id": 4,
+      "id": 6,
       "driver": "alsa-firmware",
       "icon": "speaker",
       "experimental": false,
@@ -41,7 +57,7 @@
       "detection": "lspci -D | grep -iE 'Audio' | grep -i 'Sound Blaster'"
     },
     {
-      "id": 5,
+      "id": 7,
       "driver": "asusctl",
       "icon": "preferences-desktop",
       "experimental": false,
@@ -49,7 +65,7 @@
       "detection": "cat /sys/devices/virtual/dmi/id/product_name | grep -i 'ROG'"
     },
     {
-      "id": 6,
+      "id": 8,
       "driver": "broadcom-wl",
       "icon": "network-wireless",
       "experimental": false,

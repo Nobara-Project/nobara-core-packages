@@ -49,7 +49,7 @@ then
 	fi
 
 	exit 0
-if [[ "$1" = "cuda-devel" ]]
+elif [[ "$1" = "cuda-devel" ]]
 then
 	if rpm -q cuda-devel
 	then
@@ -177,6 +177,19 @@ then
 			roctracer \
 			rocm-opencl \
 		--refresh
+	fi
+	exit 0
+elif [[ "$1" = "mesa-vulkan-drivers-git" ]]
+then
+	if rpm -q mesa-vulkan-drivers-git
+	then
+		rpm -e --nodeps mesa-vulkan-drivers-git.x86_64
+		rpm -e --nodeps mesa-vulkan-drivers-git.i686
+		dnf install -y mesa-vulkan-drivers.x86_64 mesa-vulkan-drivers.i686 --refresh
+	else
+		rpm -e --nodeps mesa-vulkan-drivers.x86_64
+		rpm -e --nodeps mesa-vulkan-drivers.i686
+		dnf install -y mesa-vulkan-drivers-git.x86_64 mesa-vulkan-drivers-git.i686 --refresh
 	fi
 	exit 0
 # Special override for xone
