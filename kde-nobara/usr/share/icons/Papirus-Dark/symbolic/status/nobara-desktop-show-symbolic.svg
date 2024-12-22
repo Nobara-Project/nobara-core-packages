@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="16"
+   height="16"
+   version="1.1"
+   id="svg1"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs1" />
+  <path
+     style="fill:#dfdfdf;fill-opacity:1;stroke-width:0.8"
+     d="M 8,1.6 C 4.4708571,1.6 1.6,4.4708571 1.6,8 c 0,3.529143 2.8708571,6.4 6.4,6.4 3.529143,0 6.4,-2.870857 6.4,-6.4 C 14.4,4.4708571 11.529143,1.6 8,1.6 Z m 0,1.6 c 2.656,0 4.8,2.144 4.8,4.8 0,2.656 -2.144,4.8 -4.8,4.8 C 5.3439999,12.8 3.2,10.656 3.2,8 3.2,5.344 5.3439999,3.2 8,3.2 Z"
+     id="path1" />
+  <rect
+     style="fill:#dfdfdf;fill-opacity:1"
+     id="rect7"
+     width="7.2517986"
+     height="2.5323741"
+     x="4.4892087"
+     y="3.0311751" />
+  <rect
+     style="fill:#dfdfdf;fill-opacity:1"
+     id="rect8"
+     width="2.2254198"
+     height="6.5227818"
+     x="10.858513"
+     y="4.2973623" />
+  <rect
+     style="fill:#dfdfdf;fill-opacity:1"
+     id="rect9"
+     width="9.0935249"
+     height="1.5347722"
+     x="3.1846523"
+     y="10.167866" />
+  <rect
+     style="fill:#dfdfdf;fill-opacity:1"
+     id="rect10"
+     width="6.561151"
+     height="1.8417267"
+     x="4.4124699"
+     y="11.127098" />
+  <rect
+     style="fill:#dfdfdf;fill-opacity:1"
+     id="rect11"
+     width="8.4796162"
+     height="5.7553959"
+     x="2.8393285"
+     y="4.5659471" />
+</svg>

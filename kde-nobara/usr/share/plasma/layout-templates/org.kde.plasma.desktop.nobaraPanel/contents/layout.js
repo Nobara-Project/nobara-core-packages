@@ -78,4 +78,6 @@ if (langIds.indexOf(languageId) != -1) {
 
 panel.addWidget("org.kde.plasma.systemtray")
 panel.addWidget("org.kde.plasma.digitalclock")
-panel.addWidget("org.kde.plasma.win7showdesktop")
+//panel.addWidget("org.kde.plasma.win7showdesktop")
+panel.addWidget("org.kde.plasma.nobara.showdesktop")
+
