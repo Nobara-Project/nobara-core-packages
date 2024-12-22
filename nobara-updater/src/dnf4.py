@@ -323,19 +323,28 @@ class PackageUpdater:
 
                     self.logger.info("%s\n%s", action_log_string, "\n".join(self.package_names))
 
-                    process = subprocess.Popen(
-                        command,
-                        shell=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True
-                    )
+                    try:
+                        process = subprocess.Popen(
+                            command,
+                            shell=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            text=True,
+                            encoding='latin-1'
+                        )
 
-                    while True:
-                        line = process.stdout.readline()
-                        if not line:
-                            break
-                        self.logger.info(line.strip())
+                        output_lines = []
+                        while True:
+                            line = process.stdout.readline()
+                            if not line:
+                                break
+                            output_lines.append(line.strip())
+                            if line.endswith('\n'):
+                                for ln in output_lines:
+                                    self.logger.info(ln)
+                                output_lines.clear()
+                    except UnicodeDecodeError as e:
+                        self.logger.error(f"Encoding error: {e}")
 
                     self.logger.info("Successfully updated packages!")
                     return  # Exit the loop on success

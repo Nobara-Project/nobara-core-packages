@@ -572,7 +572,7 @@ def install_fixups() -> None:
     )
 
     # Run quirks.py and get the values
-    logger.info("Running quirk fixup -- first pass")
+    logger.info("Running quirk fixup")
     quirk_fixup = QuirkFixup(logger)
     (
         perform_kernel_actions,
@@ -583,23 +583,13 @@ def install_fixups() -> None:
 
     # Perform final refresh after making core fixes before updating the rest of the packages.
     if perform_refresh == 1:
+        logger.info("Re-launching after critical update to continue update process...")
         try:
-            logger.info("Running quirk fixup -- second pass")
-            # Reload the quirks module to apply any changes made to quirks.py
-            import nobara_updater.quirks
-
-            importlib.reload(nobara_updater.quirks)
-
-            # Create a new instance of QuirkFixup after reloading the module
-            quirk_fixup = nobara_updater.quirks.QuirkFixup(logger)
-            (
-                perform_kernel_actions,
-                perform_reboot_request,
-                fixups_available,
-                perform_refresh,
-            ) = quirk_fixup.system_quirk_fixup()
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+            # Log success
+            logger.info("Command scheduled successfully.")
         except Exception as e:
-            logger.error("Error during install_fixups: %s", e)
+            logger.error(f"Failed to relaunch script: {e}")
 
     # Check for media codec fixup first
     if fixups_available == 1:
@@ -859,6 +849,50 @@ def media_fixup() -> None:
         )
         if install_check.returncode != 0:
             install_list.append(package)
+
+        mesa_fixup_check = subprocess.run(
+            ["rpm", "-q", "mesa-libgallium"], capture_output=True, text=True
+        )
+
+        mesa_fixup_check_2 = subprocess.run(
+            ["rpm", "-q", "mesa-va-drivers-freeworld"], capture_output=True, text=True
+        )
+
+        if (
+            mesa_fixup_check.returncode == 0
+            and mesa_fixup_check_2.returncode == 0
+        ):
+            gallium_version = mesa_fixup_check.stdout.strip()
+
+            # Extract version number
+            version_match = re.search(r'\d+(?:\.\d+){2}', gallium_version)
+            if version_match:
+                version_number = version_match.group()
+                self.logger.info(f"Extracted version: {version_number}")
+
+            # Split by hyphen and get the fourth item
+            hyphen_group = re.split('-', gallium_version)[-4]
+
+            # Split by decimal point and get the first item
+            release_number = re.split(r'\.', hyphen_group)[0]
+            self.logger.info(f"Extracted release: {release_number}")
+
+            if version_number and release_number:
+                if tuple(map(int, version_number.split('.'))) <= (24, 3, 2) and int(release_number) <= 5:
+                    self.logger.info("Swapping mesa packages for VAAPI.")
+                    # Execute rpm -e commands
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium.i686"], capture_output=True, text=True
+                    )
+
+                    subprocess.run(
+                        ["dnf", "install", "-y", "mesa-libgallium-freeworld.x86_64", "mesa-libgallium-freeworld.i686", "--refresh"],
+                        capture_output=True, text=True
+                    )
+
     if install_list:
         PackageUpdater(install_list, "install", None)
     fixups_available = 0

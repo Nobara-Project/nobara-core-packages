@@ -47,9 +47,20 @@ class QuirkFixup:
                 pkg for pkg in package_names if "nobara-welcome" in pkg or "nobara-updater" in pkg
             ]
             log_message = "An update for the Update System app has been detected, updating self...\n"
-            self.update_core_packages(update_self, action, log_message)
+            subprocess.run("dnf update -y --refresh nobara-updater nobara-welcome", shell=True, capture_output=True, text=True, check=True)
+            # Remove "nobara-updater" from package_names
+            if "nobara-updater" in package_names:
+                package_names = [pkg for pkg in package_names if pkg != "nobara-updater"]
+            # Remove "nobara-updater" from package_names
+            if "nobara-welcome" in package_names:
+                package_names = [pkg for pkg in package_names if pkg != "nobara-welcome"]
             perform_refresh = 1
-
+            return (
+                0,
+                0,
+                0,
+                perform_refresh,
+            )
         # QUIRK 1: Make sure to refresh the repositories and gpg-keys before anything
         self.logger.info("QUIRK: Make sure to refresh the repositories and gpg-keys before anything.")
         critical_packages = [
@@ -65,9 +76,22 @@ class QuirkFixup:
             log_message = "Updates for repository packages detected: {}. Updating these first...\n".format(
                 ", ".join(critical_updates)
             )
-            self.update_core_packages(critical_updates, action, log_message)
+            subprocess.run("dnf update -y --refresh fedora-repos fedora-gpg-keys nobara-repos nobara-gpg-keys", shell=True, capture_output=True, text=True, check=True)
+            if "fedora-repos" in package_names:
+                package_names = [pkg for pkg in package_names if pkg != "fedora-repos"]
+            if "fedora-gpg-keys" in package_names:
+                package_names = [pkg for pkg in package_names if pkg != "fedora-gpg-keys"]
+            if "nobara-repos" in package_names:
+                package_names = [pkg for pkg in package_names if pkg != "nobara-repos"]
+            if "nobara-gpg-keys" in package_names:
+                package_names = [pkg for pkg in package_names if pkg != "nobara-gpg-keys"]
             perform_refresh = 1
-
+            return (
+                0,
+                0,
+                0,
+                perform_refresh,
+            )
         # QUIRK 2: Cleanup outdated kernel modules
         self.logger.info("QUIRK: Cleanup outdated kernel modules.")
         try:
@@ -130,7 +154,6 @@ class QuirkFixup:
             == 1
         ):
             perform_refresh = 1
-
         # QUIRK 4: Don't allow kde discover to manage system packages or updates
         self.logger.info("QUIRK: Don't allow kde discover to manage system packages or updates.")
         # Check if the specified package is installed
@@ -822,24 +845,15 @@ class QuirkFixup:
         self.logger.info("QUIRK: Swap old AMD ROCm packages with upstream Fedora ROCm versions.")
 
         try:
-            # Run the command and capture output
-            old_rocm = subprocess.run(
-                ["dnf4", "list", "installed", "|", "grep", "@nobara-rocm-official"],
+            result = subprocess.run(
+                "dnf4 list installed | grep @nobara-rocm-official",
                 shell=True,
                 capture_output=True,
                 text=True
             )
 
-            # Check if the command was successful
-            if old_rocm.returncode != 0:
-                print(f"Command failed with error: {old_rocm.stderr}")
-                return
-
-            # Extract the output
-            old_rocm_output = old_rocm.stdout.strip()
-
-            # Check if any lines were matched
-            if "@nobara-rocm-official" in str(old_rocm_output):
+            # Check if there is any output
+            if result.stdout.strip():
                 # Remove old ROCm packages
                 old_rocm_removal = [
                     "comgr.x86_64",
@@ -870,7 +884,76 @@ class QuirkFixup:
         except Exception as e:
             print(f"An error occurred: {e}")
 
-        # QUIRK 16: Media fixup
+        # QUIRK 16: mesa-vulkan-drivers fixup
+        self.logger.info("QUIRK: mesa-vulkan-drivers fixup.")
+        try:
+            result = subprocess.run(
+                "rpm -q mesa-vulkan-drivers | grep git",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+
+            # Check if there is any output
+            if result.stdout.strip():
+                self.logger.info("mesa-vulkan-drivers fixup.")
+                subprocess.run(
+                    ["rpm", "-e", "--nodeps", "mesa-vulkan-drivers.x86_64"], capture_output=True, text=True
+                )
+                subprocess.run(
+                    ["rpm", "-e", "--nodeps", "mesa-vulkan-drivers.i686"], capture_output=True, text=True
+                )
+                subprocess.run(
+                    ["dnf4", "install", "-y", "mesa-vulkan-drivers.x86_64", "mesa-vulkan-drivers.i686"], capture_output=True, text=True
+                )
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+        # QUIRK 18: vaapi fixup
+        mesa_fixup_check = subprocess.run(
+            ["rpm", "-q", "mesa-libgallium"], capture_output=True, text=True
+        )
+
+        mesa_fixup_check_2 = subprocess.run(
+            ["rpm", "-q", "mesa-va-drivers-freeworld"], capture_output=True, text=True
+        )
+
+        if (
+            mesa_fixup_check.returncode == 0
+            and mesa_fixup_check_2.returncode == 0
+        ):
+            gallium_version = mesa_fixup_check.stdout.strip()
+
+            # Extract version number
+            version_match = re.search(r'\d+(?:\.\d+){2}', gallium_version)
+            if version_match:
+                version_number = version_match.group()
+                self.logger.info(f"Extracted version: {version_number}")
+
+            # Split by hyphen and get the fourth item
+            hyphen_group = re.split('-', gallium_version)[-4]
+
+            # Split by decimal point and get the first item
+            release_number = re.split(r'\.', hyphen_group)[0]
+            self.logger.info(f"Extracted release: {release_number}")
+
+            if version_number and release_number:
+                if tuple(map(int, version_number.split('.'))) <= (24, 3, 2) and int(release_number) <= 5:
+                    self.logger.info("Swapping mesa packages for VAAPI.")
+                    # Execute rpm -e commands
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium.i686"], capture_output=True, text=True
+                    )
+
+                    subprocess.run(
+                        ["dnf", "install", "-y", "mesa-libgallium-freeworld.x86_64", "mesa-libgallium-freeworld.i686", "--refresh"],
+                        capture_output=True, text=True
+                    )
+
+        # QUIRK 18: Media fixup
         media_fixup = 0
         if "gamescope" not in os.environ.get('XDG_CURRENT_DESKTOP', '').lower():
             self.logger.info("Media fixup.")
