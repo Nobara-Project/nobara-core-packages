@@ -169,7 +169,7 @@ then
 			hipblas \
 			hipfft \
 			hipsolver \
-			rocclr \
+			rocm-hip \
 			rocfft \
 			rocsolver \
 			hipblaslt \
