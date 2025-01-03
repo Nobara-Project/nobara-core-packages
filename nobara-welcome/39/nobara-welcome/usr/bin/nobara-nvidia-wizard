@@ -1,2 +1,0 @@
-#! /usr/bin/bash
-python3 /etc/nobara/scripts/cosmo-nvidia-wizard/main.py

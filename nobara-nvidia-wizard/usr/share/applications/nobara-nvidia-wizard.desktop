@@ -1,8 +1,0 @@
-[Desktop Entry]
-Name=Nobara Nvidia Wizard
-Exec=/usr/bin/nobara-nvidia-wizard
-Icon=nvidia
-Terminal=false
-Type=Application
-Categories=GNOME;GTK;Utility;
-Keywords=Gnome;GTK
