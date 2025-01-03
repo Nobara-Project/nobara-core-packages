@@ -911,52 +911,158 @@ class QuirkFixup:
 
         # QUIRK 18: vaapi fixup
         mesa_fixup_check = subprocess.run(
-            ["rpm", "-q", "mesa-libgallium"], capture_output=True, text=True
+            ["rpm", "-q", "mesa-libgallium-freeworld.x86_64"], capture_output=True, text=True
+        )
+        mesa_fixup_check1 = subprocess.run(
+            ["rpm", "-q", "mesa-libgallium-freeworld.i686"], capture_output=True, text=True
+        )
+        mesa_fixup_check2 = subprocess.run(
+            ["rpm", "-q", "mesa-va-drivers-freeworld.x86_64"], capture_output=True, text=True
+        )
+        mesa_fixup_check3 = subprocess.run(
+            ["rpm", "-q", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True
+        )
+        mesa_fixup_check4 = subprocess.run(
+            ["rpm", "-q", "mesa-va-drivers-freeworld.x86_64"], capture_output=True, text=True
+        )
+        mesa_fixup_check5 = subprocess.run(
+            ["rpm", "-q", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True
         )
 
-        mesa_fixup_check_2 = subprocess.run(
-            ["rpm", "-q", "mesa-va-drivers-freeworld"], capture_output=True, text=True
+        mesa_fixup_check6 = subprocess.run(
+            ["rpm", "-q", "mesa-libgallium.x86_64"], capture_output=True, text=True
         )
-
-        if (
+        mesa_fixup_check7 = subprocess.run(
+            ["rpm", "-q", "mesa-libgallium.i686"], capture_output=True, text=True
+        )
+        mesa_fixup_check8 = subprocess.run(
+            ["rpm", "-q", "mesa-va-drivers.x86_64"], capture_output=True, text=True
+        )
+        mesa_fixup_check9 = subprocess.run(
+            ["rpm", "-q", "mesa-va-drivers.i686"], capture_output=True, text=True
+        )
+        mesa_fixup_check10 = subprocess.run(
+            ["rpm", "-q", "mesa-va-drivers.x86_64"], capture_output=True, text=True
+        )
+        mesa_fixup_check11 = subprocess.run(
+            ["rpm", "-q", "mesa-va-drivers.i686"], capture_output=True, text=True
+        )
+        # they should all either end in -freeworld or not, no mixing.
+        if not (
             mesa_fixup_check.returncode == 0
-            and mesa_fixup_check_2.returncode == 0
+            and mesa_fixup_check1.returncode == 0
+            and mesa_fixup_check2.returncode == 0
+            and mesa_fixup_check3.returncode == 0
+            and mesa_fixup_check4.returncode == 0
+            and mesa_fixup_check5.returncode == 0
         ):
-            gallium_version = mesa_fixup_check.stdout.strip()
+            # If all of them are not freeworld, check if they are all standard:
+            if not (
+                mesa_fixup_check6.returncode == 0
+                and mesa_fixup_check7.returncode == 0
+                and mesa_fixup_check8.returncode == 0
+                and mesa_fixup_check9.returncode == 0
+                and mesa_fixup_check10.returncode == 0
+                and mesa_fixup_check11.returncode == 0
+            ):
 
-            # Extract version number
-            version_match = re.search(r'\d+(?:\.\d+){2}', gallium_version)
-            if version_match:
-                version_number = version_match.group()
-                self.logger.info(f"Extracted version: {version_number}")
-
-            # Split by hyphen and get the fourth item
-            hyphen_group = re.split('-', gallium_version)[-4]
-
-            # Split by decimal point and get the first item
-            release_number = re.split(r'\.', hyphen_group)[0]
-            self.logger.info(f"Extracted release: {release_number}")
-
-            if version_number and release_number:
-                if tuple(map(int, version_number.split('.'))) <= (24, 3, 2) and int(release_number) <= 5:
-                    self.logger.info("Swapping mesa packages for VAAPI.")
-                    # Execute rpm -e commands
+                # looks like we have a mix of both, let's check if -any- of them are freeworld:
+                if not (
+                    # If at least one of them is freeworld, correct all to freeworld
+                    mesa_fixup_check.returncode == 0
+                    or mesa_fixup_check1.returncode == 0
+                    or mesa_fixup_check2.returncode == 0
+                    or mesa_fixup_check3.returncode == 0
+                    or mesa_fixup_check4.returncode == 0
+                    or mesa_fixup_check5.returncode == 0
+                ):
                     subprocess.run(
                         ["rpm", "-e", "--nodeps", "mesa-libgallium.x86_64"], capture_output=True, text=True
                     )
                     subprocess.run(
                         ["rpm", "-e", "--nodeps", "mesa-libgallium.i686"], capture_output=True, text=True
                     )
-
                     subprocess.run(
-                        ["dnf", "install", "-y", "mesa-libgallium-freeworld.x86_64", "mesa-libgallium-freeworld.i686", "--refresh"],
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium-freeworld.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium-freeworld.i686"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers.i686"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers.i686"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers-freeworld.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers-freeworld.i686"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["dnf", "install", "-y", "mesa-libgallium-freeworld.x86_64", "mesa-libgallium-freeworld.i686", "mesa-va-drivers-freeworld.x86_64", "mesa-va-drivers-freeworld.i686", "mesa-vdpau-drivers-freeworld.x86_64", "mesa-vdpau-drivers-freeworld.i686", "--refresh"],
+                        capture_output=True, text=True
+                    )
+                # Otherwise correct to original
+                else:
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium.i686"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium-freeworld.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium-freeworld.i686"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers.i686"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers.i686"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers-freeworld.x86_64"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers-freeworld.i686"], capture_output=True, text=True
+                    )
+                    subprocess.run(
+                        ["dnf", "install", "-y", "mesa-libgallium.x86_64", "mesa-libgallium.i686", "mesa-va-drivers.x86_64", "mesa-va-drivers.i686", "mesa-vdpau-drivers.x86_64", "mesa-vdpau-drivers.i686", "--refresh"],
                         capture_output=True, text=True
                     )
 
         # QUIRK 18: Media fixup
         media_fixup = 0
         if "gamescope" not in os.environ.get('XDG_CURRENT_DESKTOP', '').lower():
-            self.logger.info("Media fixup.")
+            self.logger.info("QUIRK: Media fixup.")
             media = [
                 "ffmpeg-libs.x86_64",
                 "ffmpeg-libs.i686",

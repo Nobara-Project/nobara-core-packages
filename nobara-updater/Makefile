@@ -24,6 +24,7 @@ install:
 	mkdir -p $(DESKTOP_DIR)
 	install -m 644 data/nobara-updater.desktop $(DESKTOP_DIR)/nobara-updater.desktop
 	install -m 644 data/nobara-tweak-tool.desktop $(DESKTOP_DIR)/nobara-tweak-tool.desktop
+	install -m 644 data/nobara-updater.desktop $(DESKTOP_DIR)/nobara-rpm-installer.desktop
 
 	@echo "Installing icon file to $(ICON_DIR)"
 	mkdir -p $(ICON_DIR)
@@ -43,6 +44,10 @@ install:
 	@echo "Main executable file to $(BIN_DIR)"
 	mkdir -p $(BIN_DIR)
 	install -m 755 src/nobara_sync.py $(BIN_DIR)/nobara-updater
+
+	@echo "RPM Installer $(BIN_DIR)"
+	mkdir -p $(BIN_DIR)
+	install -m 755 src/rpm_installer.py $(BIN_DIR)/nobara-rpm-installer
 
 	@echo "Gamescope updater executable file to $(BIN_DIR)"
 	mkdir -p $(BIN_DIR)
