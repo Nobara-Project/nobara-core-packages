@@ -97,6 +97,13 @@ class DaVinciInstaller(Gtk.Application):
         else:
             on_install_complete(False)
 
+        # Cleanup step
+        extract_path = os.path.join(os.path.dirname(zip_path), "resolve_wizard_extracted")
+        try:
+            shutil.rmtree(extract_path)
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+
     def run_nobara_resolved_pkexec(self, run_file, shortcut_file):
         def run_command():
             try:
@@ -121,7 +128,7 @@ class DaVinciInstaller(Gtk.Application):
 
     def extract_and_install(self, zip_path):
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            extract_path = os.path.join(os.path.dirname(zip_path), "extracted")
+            extract_path = os.path.join(os.path.dirname(zip_path), "resolve_wizard_extracted")
             zip_ref.extractall(extract_path)
 
         run_file = None
