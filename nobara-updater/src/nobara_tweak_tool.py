@@ -206,6 +206,41 @@ def get_partitions():
         status_bar.set(f"Error: Failed to get partitions: {e}")
         return [], []
 
+def check_amdgpu_controls():
+    try:
+        with open('/sys/module/amdgpu/parameters/ppfeaturemask', 'r') as f:
+            mask = int(f.read(), 16)
+        return mask == 0xFFFFFFFF
+    except FileNotFoundError:
+        return False
+
+def toggle_amdgpu_controls():
+    current_state = check_amdgpu_controls()
+    config_file = '/etc/nobara/amdgpu/controls.conf'
+    config_dir = os.path.dirname(config_file)
+    status = ""
+
+    if not os.path.exists(config_file):
+        os.makedirs(config_dir, exist_ok=True)
+        with open(config_file, 'w') as f:
+            f.write('0' if not current_state else '1')
+
+    with open(config_file, 'r') as f:
+        current_setting = f.read().strip()
+
+    if current_setting == '1':
+            # Disable AMDGPU power controls
+            subprocess.run(['sed', '-i', 's/quiet amdgpu.ppfeaturemask=0xffffffff/quiet/g', '/etc/default/grub'])
+            subprocess.run(['/usr/sbin/grub2-mkconfig', '-o', '/boot/grub2/grub.cfg'])
+            status = "AMDGPU power controls disabled."
+    elif current_setting == '0':
+            # Enable AMDGPU power controls
+            subprocess.run(['sed', '-i', 's/"quiet"/"quiet amdgpu.ppfeaturemask=0xffffffff"/g', '/etc/default/grub'])
+            subprocess.run(['/usr/sbin/grub2-mkconfig', '-o', '/boot/grub2/grub.cfg'])
+            status = "AMDGPU power controls enabled."
+
+    status_bar.set(status)
+
 # Function to run before closing the application
 def on_closing():
     root.destroy()
@@ -239,6 +274,9 @@ def main():
     decky_frame = tk.LabelFrame(root, text="Enable DeckyLoader in gamescope session (recommended)", padx=10, pady=10)
     decky_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
+    amdgpu_frame = tk.LabelFrame(root, text="Enable AMDGPU Power and Clock Controls (amdgpu.ppfeaturemask=0xffffffff) (requires reboot)", padx=10, pady=10)
+    amdgpu_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
     partitions_frame = tk.LabelFrame(root, text="Enable auto-mounting on available disk partitions", padx=10, pady=10)
     partitions_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -269,6 +307,15 @@ def main():
     decky_var = tk.BooleanVar(value=True)
     decky_checkbox = tk.Checkbutton(decky_frame, text="Enable", variable=decky_var, command=toggle_decky_loader)
     decky_checkbox.pack(anchor='w')
+
+    global amdgpu_var
+    amdgpu_var = tk.BooleanVar(value=check_amdgpu_controls())
+
+    amdgpu_checkbox = tk.Checkbutton(amdgpu_frame, text="Enable", variable=amdgpu_var, command=toggle_amdgpu_controls)
+    amdgpu_checkbox.pack(anchor='w')
+
+    config_note = "Configuration file: /etc/nobara/amdgpu/controls.conf"
+    tk.Label(amdgpu_frame, text=config_note).pack(anchor='w')
 
     # Add configuration file location for automount
     partitions_config_note = "Configuration file: /etc/nobara/automount/enabled.conf"

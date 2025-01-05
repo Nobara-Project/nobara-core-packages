@@ -522,22 +522,6 @@ class QuirkFixup:
                             text=True,
                         )
 
-        check_gamescope_hh = subprocess.run(
-            ["rpm", "-q", "gamescope-handheld-common"], capture_output=True, text=True
-        )
-        gamescope_hh_installed = check_gamescope_hh.returncode == 0
-        if gamescope_hh_installed:
-            ppfeaturemask_check = subprocess.run(
-                ["grep", "ppfeaturemask", "/proc/cmdline"], capture_output=True, text=True
-            )
-            ppfeaturemask_notinstalled = ppfeaturemask_check.returncode != 0
-            subprocess.run(
-                ['grubby', '--update-kernel=ALL', '--args="amdgpu.ppfeaturemask=0xffffffff"'],
-                capture_output=True,
-                text=True,
-            )
-            perform_reboot_request = 1
-
         if len(remove_names) > 0:
             PackageUpdater(remove_names, "remove", None)
 
