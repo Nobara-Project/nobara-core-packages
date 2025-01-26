@@ -883,13 +883,30 @@ class QuirkFixup:
             version_output = full_version.stdout.strip()
 
             if "fsync" in version_output:
-                subprocess.run(['dnf', 'remove', 'kernel-uki-virt*', '-y', '--refresh'], capture_output=True, text=True, check=True)
-                subprocess.run(['dnf', 'update', 'kernel', '-y', '--refresh'], capture_output=True, text=True, check=True)
+                subprocess.run(['dnf', 'remove', 'kernel-uki-virt*', '-y'], capture_output=True, text=True, check=True)
+                subprocess.run(['dnf', 'update', 'kernel', '-y'], capture_output=True, text=True, check=True)
+                subprocess.run(['dnf', 'update', 'kernel-devel', '-y'], capture_output=True, text=True, check=True)
                 perform_kernel_actions = 1
                 perform_reboot_request = 1
 
+            target_version = "6.12.11-204.nobara.fc41.x86_64"
+            if "nobara" in version_output:
+                if version_output < target_version:
+                    checkpending = subprocess.run(['rpm', '-q', f'kernel-{target_version}'], check=True)
+                    checkpending_output = checkpending.stdout.strip()
+                    if "not installed" in checkpending_output:
+                        try:
+                            subprocess.run(['dnf', 'install', "-y", f'kernel-{target_version}'], check=True)
+                            subprocess.run(['dnf', 'install', "-y", f'kernel-devel-{target_version}'], check=True)
+                            perform_kernel_actions = 1
+                            perform_reboot_request = 1
+                        except subprocess.CalledProcessError as e:
+                            self.logger.info(f"Error installing new kernel: {e}")
+                else:
+                    self.logger.info(f"Current kernel version ({version_output}) is already up to date.")
+
         except subprocess.CalledProcessError as e:
-            print(f"An error occurred: {e}")
+            self.logger.info(f"An error occurred: {e}")
 
         # QUIRK 18: Media fixup
         media_fixup = 0
