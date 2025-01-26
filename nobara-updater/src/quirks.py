@@ -4,6 +4,7 @@ import threading
 import os
 import subprocess
 import shutil
+import shlex
 import pwd
 import re
 from datetime import datetime
@@ -16,7 +17,9 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("GLib", "2.0")
 gi.require_version("Flatpak", "1.0")
 
-from yumex.constants import BACKEND  # type: ignore[import]
+#from yumex.constants import BACKEND  # type: ignore[import]
+# still need to repair DNF5, use DNF4 for now
+BACKEND = "DNF4"
 
 if BACKEND == "DNF5":
     from nobara_updater.dnf5 import PackageUpdater, updatechecker  # type: ignore[import]
@@ -38,29 +41,18 @@ class QuirkFixup:
 
         # QUIRK 0: Make sure to update the updater itself and refresh before anything
         self.logger.info("QUIRK: Make sure to update the updater itself and refresh before anything.")
-        update_self = [
-            "nobara-welcome",
-            "nobara-updater",
-        ]
-        if any(pkg in package_names for pkg in update_self):
-            update_self = [
-                pkg for pkg in package_names if "nobara-welcome" in pkg or "nobara-updater" in pkg
-            ]
+        if "nobara-updater" in package_names:
             log_message = "An update for the Update System app has been detected, updating self...\n"
-            subprocess.run("dnf update -y --refresh nobara-updater nobara-welcome", shell=True, capture_output=True, text=True, check=True)
-            # Remove "nobara-updater" from package_names
-            if "nobara-updater" in package_names:
-                package_names = [pkg for pkg in package_names if pkg != "nobara-updater"]
-            # Remove "nobara-updater" from package_names
-            if "nobara-welcome" in package_names:
-                package_names = [pkg for pkg in package_names if pkg != "nobara-welcome"]
+            subprocess.run("dnf update -y --refresh nobara-updater", shell=True, capture_output=True, text=True, check=True)
             perform_refresh = 1
+            self.logger.info(perform_refresh)
             return (
                 0,
                 0,
                 0,
                 perform_refresh,
             )
+            self.logger.info(log_message)
         # QUIRK 1: Make sure to refresh the repositories and gpg-keys before anything
         self.logger.info("QUIRK: Make sure to refresh the repositories and gpg-keys before anything.")
         critical_packages = [
@@ -92,6 +84,7 @@ class QuirkFixup:
                 0,
                 perform_refresh,
             )
+            self.logger.info(log_message)
         # QUIRK 2: Cleanup outdated kernel modules
         self.logger.info("QUIRK: Cleanup outdated kernel modules.")
         try:
@@ -122,59 +115,6 @@ class QuirkFixup:
 
         except subprocess.CalledProcessError as e:
             print(f"An error occurred: {e}")
-
-        # QUIRK 3: Make sure to reinstall rpmfusion repos if they do not exist
-        self.logger.info("QUIRK: Make sure to reinstall rpmfusion repos if they do not exist.")
-        if (
-            self.check_and_install_rpmfusion(
-                "/etc/yum.repos.d/rpmfusion-free.repo", "rpmfusion-free-release"
-            )
-            == 1
-        ):
-            perform_refresh = 1
-        if (
-            self.check_and_install_rpmfusion(
-                "/etc/yum.repos.d/rpmfusion-free-updates.repo", "rpmfusion-free-release"
-            )
-            == 1
-        ):
-            perform_refresh = 1
-        if (
-            self.check_and_install_rpmfusion(
-                "/etc/yum.repos.d/rpmfusion-nonfree.repo", "rpmfusion-nonfree-release"
-            )
-            == 1
-        ):
-            perform_refresh = 1
-        if (
-            self.check_and_install_rpmfusion(
-                "/etc/yum.repos.d/rpmfusion-nonfree-updates.repo",
-                "rpmfusion-nonfree-release",
-            )
-            == 1
-        ):
-            perform_refresh = 1
-        # QUIRK 4: Don't allow kde discover to manage system packages or updates
-        self.logger.info("QUIRK: Don't allow kde discover to manage system packages or updates.")
-        # Check if the specified package is installed
-        discover_packagekit_name = "plasma-discover-packagekit"
-        result = subprocess.run(
-            ["rpm", "-q", discover_packagekit_name], capture_output=True, text=True
-        )
-        if result.returncode == 0:  # Check if the package is installed
-            self.logger.info("%s is installed.\n", discover_packagekit_name)
-            self.logger.info(
-                "%s does not follow repository priority settings, it is not safe to use for managing system packages. Removing...\n",
-                discover_packagekit_name,
-            )
-            self.logger.info("Discover should only be used for flatpak management.\n")
-            updater_thread = threading.Thread(
-                target=self.run_package_updater,
-                args=([discover_packagekit_name], "remove"),
-            )
-            updater_thread.start()
-            updater_thread.join()
-
         # QUIRK 5: Make sure to run both dracut and akmods if any kmods  or kernel packages were updated.
         self.logger.info("QUIRK: Make sure to run both dracut and akmods if any kmods  or kernel packages were updated.")
         # Check if any packages contain "kernel" or "akmod"
@@ -577,76 +517,6 @@ class QuirkFixup:
             if len(steamdeck_install) > 0:
                 PackageUpdater(steamdeck_install, "install", None)
 
-        # QUIRK 8: winehq-staging packaging changed in version 9.9. We need to completely remove older versions first.
-        self.logger.info("QUIRK: winehq-staging packaging changed in version 9.9. We need to completely remove older versions before updating.")
-        check_wine_staging_common = subprocess.run(
-                ["rpm", "-q", "wine-staging-common"], capture_output=True, text=True
-        )
-        if check_wine_staging_common.returncode == 0:
-            self.logger.info("Upstream wine packaging has changed, fixing conflicts")
-
-            remove_names = []
-            add_names = []
-
-            remove_names.append("wine-staging-common")
-
-            check_winehq_staging = subprocess.run(
-                ["rpm", "-q", "winehq-staging"], capture_output=True, text=True
-            )
-            if check_winehq_staging.returncode == 0:
-                remove_names.append("winehq-staging")
-
-            check_wine_staging64 = subprocess.run(
-                ["rpm", "-q", "wine-staging64"], capture_output=True, text=True
-            )
-            if check_wine_staging64.returncode == 0:
-                remove_names.append("wine-staging64")
-
-            check_wine_staging = subprocess.run(
-                ["rpm", "-q", "wine-staging"], capture_output=True, text=True
-            )
-            if check_wine_staging64.returncode == 0:
-                remove_names.append("wine-staging")
-
-            check_winetricks = subprocess.run(
-                ["rpm", "-q", "winetricks"], capture_output=True, text=True
-            )
-            if check_wine_staging64.returncode == 0:
-                remove_names.append("winetricks")
-
-            add_names.append("winehq-staging")
-            add_names.append("winetricks")
-            add_names.append("wine-staging")
-
-            if len(remove_names) > 0:
-                PackageUpdater(remove_names, "remove", None)
-
-            if len(add_names) > 0:
-                PackageUpdater(add_names, "remove", None)
-
-        # QUIRK 9: Obsolete package cleanup
-        self.logger.info("QUIRK: Obsolete package cleanup.")
-        obsolete = [
-            "kf5-baloo-file",
-            "layer-shell-qt5",
-            "herqq",
-            "hfsutils",
-            "okular5-libs",
-            "fedora-workstation-repositories",
-            "mesa-demos",
-            "okular5-part",
-        ]
-        obsolete_names = []
-        for package in obsolete:
-            obsolete_check = subprocess.run(
-                ["rpm", "-q", package], capture_output=True, text=True
-            )
-            if obsolete_check.returncode == 0:
-                obsolete_names.append(package)
-        if len(obsolete_names) > 0:
-            self.logger.info("Found obsolete packages, removing...")
-            PackageUpdater(obsolete_names, "remove", None)
-
         # QUIRK 10: Problematic package cleanup
         self.logger.info("QUIRK: Problematic package cleanup.")
         problematic = [
@@ -670,47 +540,6 @@ class QuirkFixup:
         if len(problematic_names) > 0:
             self.logger.info("Found problematic packages, removing...")
             PackageUpdater(problematic_names, "remove", None)
-
-        # QUIRK 11: Cleanup incompatible package versions from Nobara 39 kde6:
-        self.logger.info("QUIRK: Cleanup incompatible package versions from Nobara 39 kde6 and deprecated xpadneo")
-        incompat = [
-            "kf5-kxmlgui-5.116.0-2.fc39.x86_64",
-            "kf5-kirigami2-5.116.0-2.fc39.x86_64",
-            "kf5-kiconthemes-5.116.0-2.fc39.x86_64",
-            "kf5-ki18n-5.116.0-2.fc39.x86_64",
-            "xpadneo",
-            "akmod-xpadneo",
-            "kmod-xpadneo",
-            "xpadneo-kmod-common"
-        ]
-        incompat_names = []
-        for package in incompat:
-            incompat_check = subprocess.run(
-                ["rpm", "-q", package], capture_output=True, text=True
-            )
-            if incompat_check.returncode == 0:
-                incompat_names.append(package.replace("-5.116.0-2.fc39.x86_64", ""))
-        if len(incompat_names) > 0:
-            self.logger.info("Found incompatible package versions, fixing them...")
-            for package in incompat:
-                incompat_check = subprocess.run(
-                    ["rpm", "-e", "--nodeps", package], capture_output=True, text=True
-                )
-        reinstall = []
-        for package in incompat:
-            incompat_check = subprocess.run(
-                ["rpm", "-q", package.replace("-5.116.0-2.fc39.x86_64", "")], capture_output=True, text=True
-            )
-            if incompat_check.returncode != 0:
-                reinstall.append(package.replace("-5.116.0-2.fc39.x86_64", ""))
-
-        reinstall.remove("xpadneo")
-        reinstall.remove("akmod-xpadneo")
-        reinstall.remove("kmod-xpadneo")
-        reinstall.remove("xpadneo-kmod-common")
-
-        if len(reinstall) > 0:
-            PackageUpdater(reinstall, "install", None)
 
         # QUIRK 13: Clear plasmashell cache if a plasma-workspace update is available
         self.logger.info("QUIRK: Clear plasmashell cache if a plasma-workspace update is available.")
@@ -894,6 +723,7 @@ class QuirkFixup:
             print(f"An error occurred: {e}")
 
         # QUIRK 18: vaapi fixup
+        self.logger.info("QUIRK: vaapi fixup.")
         mesa_fixup_check = subprocess.run(
             ["rpm", "-q", "mesa-libgallium-freeworld.x86_64"], capture_output=True, text=True
         )
@@ -1042,6 +872,24 @@ class QuirkFixup:
                         ["dnf", "install", "-y", "mesa-libgallium.x86_64", "mesa-libgallium.i686", "mesa-va-drivers.x86_64", "mesa-va-drivers.i686", "mesa-vdpau-drivers.x86_64", "mesa-vdpau-drivers.i686", "--refresh"],
                         capture_output=True, text=True
                     )
+
+        # QUIRK 18: Kernel 6.12.9 fixup
+        self.logger.info("QUIRK: Kernel fsync->nobara conversion update.")
+        try:
+            # Get the full kernel version
+            full_version = subprocess.run(['uname', '-r'], capture_output=True, text=True, check=True)
+
+            # Access the captured output
+            version_output = full_version.stdout.strip()
+
+            if "fsync" in version_output:
+                subprocess.run(['dnf', 'remove', 'kernel-uki-virt*', '-y', '--refresh'], capture_output=True, text=True, check=True)
+                subprocess.run(['dnf', 'update', 'kernel', '-y', '--refresh'], capture_output=True, text=True, check=True)
+                perform_kernel_actions = 1
+                perform_reboot_request = 1
+
+        except subprocess.CalledProcessError as e:
+            print(f"An error occurred: {e}")
 
         # QUIRK 18: Media fixup
         media_fixup = 0

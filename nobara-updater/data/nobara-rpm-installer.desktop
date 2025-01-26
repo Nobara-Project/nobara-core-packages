@@ -1,8 +1,7 @@
 [Desktop Entry]
 Name=RPM Installer
+MimeType=application/x-rpm
 Exec=/usr/bin/nobara-rpm-installer
 Icon=com.github.nobaraproject.nobarawelcome
-Terminal=false
 Type=Application
-Categories=System;
-Terminal=false
+Categories=Utility;

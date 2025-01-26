@@ -24,7 +24,7 @@ install:
 	mkdir -p $(DESKTOP_DIR)
 	install -m 644 data/nobara-updater.desktop $(DESKTOP_DIR)/nobara-updater.desktop
 	install -m 644 data/nobara-tweak-tool.desktop $(DESKTOP_DIR)/nobara-tweak-tool.desktop
-	install -m 644 data/nobara-updater.desktop $(DESKTOP_DIR)/nobara-rpm-installer.desktop
+	install -m 644 data/nobara-rpm-installer.desktop $(DESKTOP_DIR)/nobara-rpm-installer.desktop
 
 	@echo "Installing icon file to $(ICON_DIR)"
 	mkdir -p $(ICON_DIR)
