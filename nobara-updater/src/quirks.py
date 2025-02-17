@@ -39,21 +39,7 @@ class QuirkFixup:
         perform_refresh = 0
         # START QUIRKS LIST
 
-        # QUIRK 0: Make sure to update the updater itself and refresh before anything
-        self.logger.info("QUIRK: Make sure to update the updater itself and refresh before anything.")
-        if "nobara-updater" in package_names:
-            log_message = "An update for the Update System app has been detected, updating self...\n"
-            subprocess.run("dnf update -y --refresh nobara-updater", shell=True, capture_output=True, text=True, check=True)
-            perform_refresh = 1
-            self.logger.info(perform_refresh)
-            return (
-                0,
-                0,
-                0,
-                perform_refresh,
-            )
-            self.logger.info(log_message)
-        # QUIRK 1: Make sure to refresh the repositories and gpg-keys before anything
+        # QUIRK 0: Make sure to refresh the repositories and gpg-keys before anything
         self.logger.info("QUIRK: Make sure to refresh the repositories and gpg-keys before anything.")
         critical_packages = [
             "fedora-gpg-keys",
@@ -68,7 +54,7 @@ class QuirkFixup:
             log_message = "Updates for repository packages detected: {}. Updating these first...\n".format(
                 ", ".join(critical_updates)
             )
-            subprocess.run("dnf update -y --refresh fedora-repos fedora-gpg-keys nobara-repos nobara-gpg-keys", shell=True, capture_output=True, text=True, check=True)
+            subprocess.run("dnf update -y --refresh fedora-repos fedora-gpg-keys nobara-repos nobara-gpg-keys --nogpgcheck", shell=True, capture_output=True, text=True, check=True)
             if "fedora-repos" in package_names:
                 package_names = [pkg for pkg in package_names if pkg != "fedora-repos"]
             if "fedora-gpg-keys" in package_names:
@@ -78,6 +64,20 @@ class QuirkFixup:
             if "nobara-gpg-keys" in package_names:
                 package_names = [pkg for pkg in package_names if pkg != "nobara-gpg-keys"]
             perform_refresh = 1
+            return (
+                0,
+                0,
+                0,
+                perform_refresh,
+            )
+            self.logger.info(log_message)
+        # QUIRK 1: Make sure to update the updater itself and refresh before anything
+        self.logger.info("QUIRK: Make sure to update the updater itself and refresh before anything.")
+        if "nobara-updater" in package_names:
+            log_message = "An update for the Update System app has been detected, updating self...\n"
+            subprocess.run("dnf update -y --refresh nobara-updater --nogpgcheck", shell=True, capture_output=True, text=True, check=True)
+            perform_refresh = 1
+            self.logger.info(perform_refresh)
             return (
                 0,
                 0,
@@ -115,6 +115,39 @@ class QuirkFixup:
 
         except subprocess.CalledProcessError as e:
             print(f"An error occurred: {e}")
+
+        # QUIRK 3: Make sure to reinstall rpmfusion repos if they do not exist
+        self.logger.info("QUIRK: Make sure to reinstall rpmfusion repos if they do not exist.")
+        if (
+            self.check_and_install_rpmfusion(
+                "/etc/yum.repos.d/rpmfusion-free.repo", "rpmfusion-free-release"
+            )
+            == 1
+        ):
+            perform_refresh = 1
+        if (
+            self.check_and_install_rpmfusion(
+                "/etc/yum.repos.d/rpmfusion-free-updates.repo", "rpmfusion-free-release"
+            )
+            == 1
+        ):
+            perform_refresh = 1
+        if (
+            self.check_and_install_rpmfusion(
+                "/etc/yum.repos.d/rpmfusion-nonfree.repo", "rpmfusion-nonfree-release"
+            )
+            == 1
+        ):
+            perform_refresh = 1
+        if (
+            self.check_and_install_rpmfusion(
+                "/etc/yum.repos.d/rpmfusion-nonfree-updates.repo",
+                "rpmfusion-nonfree-release",
+            )
+            == 1
+        ):
+            perform_refresh = 1
+
         # QUIRK 5: Make sure to run both dracut and akmods if any kmods  or kernel packages were updated.
         self.logger.info("QUIRK: Make sure to run both dracut and akmods if any kmods  or kernel packages were updated.")
         # Check if any packages contain "kernel" or "akmod"
@@ -541,6 +574,18 @@ class QuirkFixup:
             self.logger.info("Found problematic packages, removing...")
             PackageUpdater(problematic_names, "remove", None)
 
+        problematic_2025 = [
+            "plasma-workspace-geolocation",
+            "plasma-workspace-geolocation-libs"
+        ]
+        for package in problematic_2025:
+            problematic_check_2025 = subprocess.run(
+                ["rpm", "-q", package], capture_output=True, text=True
+            )
+            if problematic_check_2025.returncode == 0:
+                subprocess.run(["rpm", "-e", "--nodeps", package], capture_output=True, text=True)
+
+
         # QUIRK 13: Clear plasmashell cache if a plasma-workspace update is available
         self.logger.info("QUIRK: Clear plasmashell cache if a plasma-workspace update is available.")
         # Function to run the rpm command and get the output
@@ -892,7 +937,7 @@ class QuirkFixup:
             target_version = "6.12.11-204.nobara.fc41.x86_64"
             if "nobara" in version_output:
                 if version_output < target_version:
-                    checkpending = subprocess.run(['rpm', '-q', f'kernel-{target_version}'], check=True)
+                    checkpending = subprocess.run(['rpm', '-q', f'kernel-{target_version}'], capture_output=True, text=True, check=True)
                     checkpending_output = checkpending.stdout.strip()
                     if "not installed" in checkpending_output:
                         try:
