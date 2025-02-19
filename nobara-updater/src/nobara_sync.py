@@ -527,8 +527,8 @@ def fp_get_system_updates() -> list[Flatpak.Ref] | None:
     # Get our flatpak updates
     system_installation = Flatpak.Installation.new_system(None)
     with fp_system_installation_list(system_installation) as flatpak_sys_updates:
-        if flatpak_system_updates != []:
-            return flatpak_system_updates
+        if flatpak_sys_updates != []:
+            return flatpak_sys_updates
         return []
 
 
@@ -557,6 +557,7 @@ class fp_system_installation_list(object):
 
 
     def __enter__(self):
+        flatpak_system_updates = None
         error = True # No do-while in Python so init to true to run loop once
         while not error:
             try:
