@@ -7,7 +7,7 @@
       "icon": "nobara-emblem-important",
       "button": "launch-label",
       "terminal": false,
-      "command": "xdg-open https://feed.nobaraproject.org/en &"
+      "command": "xdg-open https://wiki.nobaraproject.org/#known-issues &"
     },
     {
       "id": 1,
@@ -16,7 +16,7 @@
       "icon": "nobara-emblem-documents",
       "button": "launch-label",
       "terminal": false,
-      "command": "xdg-open https://nobaraproject.org/docs/ &"
+      "command": "xdg-open https://wiki.nobaraproject.org/ &"
     }
   ]
 }
