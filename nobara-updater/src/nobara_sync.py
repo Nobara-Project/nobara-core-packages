@@ -525,8 +525,7 @@ def check_updates(return_texts: bool = False) -> None | tuple[str | None, str | 
 
 def fp_get_system_updates() -> list[Flatpak.Ref] | None:
     # Get our flatpak updates
-    system_installation = Flatpak.Installation.new_system(None)
-    with fp_system_installation_list(system_installation) as flatpak_sys_updates:
+    with fp_system_installation_list(Flatpak.Installation.new_system(None)) as flatpak_sys_updates:
         if flatpak_sys_updates != []:
             return flatpak_sys_updates
         return []
@@ -549,6 +548,7 @@ def install_system_flatpak_updates() -> None:
                     logger.error("Error updating %s: %s", ref.get_appdata_name(), e)
             transaction.run()
             logger.info("Flatpak System Updates complete!")
+    del system_installation
 
 class fp_system_installation_list(object):
     # Generates flatpak_system_updates for other functions with error handling
