@@ -564,6 +564,8 @@ class fp_system_installation_list(object):
                 flatpak_system_updates = self.system_installation.list_installed_refs_for_update(None)
             except gi.repository.GLib.GError as e:
                 logger.error(e)
+            except:
+                raise
             else:
                 error = False
         return flatpak_system_updates
