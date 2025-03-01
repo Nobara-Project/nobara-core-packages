@@ -525,32 +525,55 @@ def check_updates(return_texts: bool = False) -> None | tuple[str | None, str | 
 
 def fp_get_system_updates() -> list[Flatpak.Ref] | None:
     # Get our flatpak updates
-    system_installation = Flatpak.Installation.new_system(None)
-    flatpak_system_updates = system_installation.list_installed_refs_for_update(None)
-    del system_installation
-    if flatpak_system_updates != []:
-        return flatpak_system_updates
-    return []
+    with fp_system_installation_list(Flatpak.Installation.new_system(None)) as flatpak_sys_updates:
+        if flatpak_sys_updates != []:
+            return flatpak_sys_updates
+        return []
 
 
 def install_system_flatpak_updates() -> None:
     # System installation updates
     system_installation = Flatpak.Installation.new_system(None)
-    flatpak_sys_updates = system_installation.list_installed_refs_for_update(None)
-    if flatpak_sys_updates is not None:
-        transaction = Flatpak.Transaction.new_for_installation(system_installation)
-        for ref in flatpak_sys_updates:
-            logger.info(
-                "Updating %s for system installation...", ref.get_appdata_name()
-            )
-            try:
-                # Perform the update
-                transaction.add_update(ref.format_ref(), None, None)
-            except Exception as e:
-                logger.error("Error updating %s: %s", ref.get_appdata_name(), e)
-        transaction.run()
-        logger.info("Flatpak System Updates complete!")
+    with fp_system_installation_list(system_installation) as flatpak_sys_updates:
+        if flatpak_sys_updates is not None:
+            transaction = Flatpak.Transaction.new_for_installation(system_installation)
+            for ref in flatpak_sys_updates:
+                logger.info(
+                    "Updating %s for system installation...", ref.get_appdata_name()
+                )
+                try:
+                    # Perform the update
+                    transaction.add_update(ref.format_ref(), None, None)
+                except Exception as e:
+                    logger.error("Error updating %s: %s", ref.get_appdata_name(), e)
+            transaction.run()
+            logger.info("Flatpak System Updates complete!")
     del system_installation
+
+class fp_system_installation_list(object):
+    # Generates flatpak_system_updates for other functions with error handling
+    def __init__(self, system_installation):
+        self.system_installation = system_installation
+
+
+    def __enter__(self):
+        flatpak_system_updates = None
+        error = True # No do-while in Python so init to true to run loop once
+        while error:
+            try:
+                flatpak_system_updates = self.system_installation.list_installed_refs_for_update(None)
+            except gi.repository.GLib.GError as e:
+                # Expected, see #43
+                logger.error(e)
+            except:
+                raise
+            else:
+                error = False
+        return flatpak_system_updates
+    
+
+    def __exit__(self, *args):
+        del self.system_installation
 
 def button_ensure_sensitivity(
     widget: Gtk.Widget, desired_state: bool
