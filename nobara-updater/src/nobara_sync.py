@@ -559,7 +559,7 @@ class fp_system_installation_list(object):
     def __enter__(self):
         flatpak_system_updates = None
         error = True # No do-while in Python so init to true to run loop once
-        while not error:
+        while error:
             try:
                 flatpak_system_updates = self.system_installation.list_installed_refs_for_update(None)
             except gi.repository.GLib.GError as e:
