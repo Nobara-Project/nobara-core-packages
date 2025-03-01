@@ -47,14 +47,15 @@ def fp_get_user_updates(
 
     # Get our flatpak updates
     user_installation = Flatpak.Installation.new_user(None)
-    flatpak_user_updates = user_installation.list_installed_refs_for_update(None)
+    # flatpak_user_updates = user_installation.list_installed_refs_for_update(None)
 
-    # Convert InstalledRef objects to a list of strings
-    update_list = [
-        fp_user_update.get_appdata_name()
-        for fp_user_update in flatpak_user_updates
-        if fp_user_update.get_appdata_name()
-    ]
+    with fp_user_installation_list(user_installation, log_queue) as flatpak_user_updates:
+        # Convert InstalledRef objects to a list of strings
+        update_list = [
+            fp_user_update.get_appdata_name()
+            for fp_user_update in flatpak_user_updates
+            if fp_user_update.get_appdata_name()
+        ]
     del user_installation
     if update_list:
         return update_list
@@ -162,27 +163,55 @@ def install_user_flatpak_updates(
 
     # User installation updates
     user_installation = Flatpak.Installation.new_user(None)
-    flatpak_user_updates = user_installation.list_installed_refs_for_update(None)
+    # flatpak_user_updates = user_installation.list_installed_refs_for_update(None)
 
-    if flatpak_user_updates:
-        transaction = Flatpak.Transaction.new_for_installation(user_installation)
-        for ref in flatpak_user_updates:
-            try:
-                appdata_name = ref.get_appdata_name()
-                if appdata_name:
-                    log_queue.put(f"Updating {appdata_name} for user installation...")
+    with fp_user_installation_list(user_installation, log_queue) as flatpak_user_updates:
+        if flatpak_user_updates:
+            transaction = Flatpak.Transaction.new_for_installation(user_installation)
+            for ref in flatpak_user_updates:
+                try:
+                    appdata_name = ref.get_appdata_name()
+                    if appdata_name:
+                        log_queue.put(f"Updating {appdata_name} for user installation...")
 
-                # Perform the update
-                transaction.add_update(ref.format_ref(), None, None)
-            except Exception as e:
-                if appdata_name:
-                    log_queue.put(f"Error updating {appdata_name}: {e}")
-                else:
-                    log_queue.put(f"Error updating ref: {e}")
-        transaction.run()
-        log_queue.put("Flatpak User Updates complete!")
+                    # Perform the update
+                    transaction.add_update(ref.format_ref(), None, None)
+                except Exception as e:
+                    if appdata_name:
+                        log_queue.put(f"Error updating {appdata_name}: {e}")
+                    else:
+                        log_queue.put(f"Error updating ref: {e}")
+            transaction.run()
+            log_queue.put("Flatpak User Updates complete!")
 
     del user_installation
+
+
+class fp_user_installation_list(object):
+    # Generates flatpak_system_updates for other functions with error handling
+    def __init__(self, user_installation, log_queue):
+        self.user_installation = user_installation
+        self.log_queue = log_queue
+
+
+    def __enter__(self):
+        flatpak_user_updates = None
+        error = True # No do-while in Python so init to true to run loop once
+        while error:
+            try:
+                flatpak_user_updates = self.user_installation.list_installed_refs_for_update(None)
+            except gi.repository.GLib.GError as e:
+                # Expected, see #43
+                self.log_queue.put(f"Error getting Flatpak user updates: {e}")
+            except:
+                raise
+            else:
+                error = False
+        return flatpak_user_updates
+    
+
+    def __exit__(self, *args):
+        del self.user_installation
 
 
 def on_button_popen_async(
