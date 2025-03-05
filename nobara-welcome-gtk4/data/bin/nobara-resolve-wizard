@@ -168,7 +168,7 @@ class DaVinciInstaller(Gtk.Application):
     def show_success_dialog(self):
         dialog = Gtk.MessageDialog(
             transient_for=self.window,
-            flags=Gtk.DialogFlags.DESTROY_WITH_PARENT,
+            destroy_with_parent=True,
             message_type=Gtk.MessageType.INFO,
             buttons=Gtk.ButtonsType.OK,
             text="DaVinci Resolve installed successfully!",
