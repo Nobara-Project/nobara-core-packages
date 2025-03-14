@@ -570,7 +570,7 @@ class fp_system_installation_list(object):
             else:
                 error = False
         return flatpak_system_updates
-    
+
 
     def __exit__(self, *args):
         del self.system_installation
@@ -786,6 +786,8 @@ def media_fixup() -> None:
         "ffmpeg.x86_64",
         "ffmpeg-libs.x86_64",
         "ffmpeg-libs.i686",
+        "libavcodec-free.x86_64",
+        "libavcodec-free.i686",
         "libavcodec-freeworld.x86_64",
         "libavcodec-freeworld.i686",
         "libavdevice.x86_64",
@@ -843,10 +845,10 @@ def media_fixup() -> None:
         "mesa-va-drivers-freeworld.i686",
         "mesa-vdpau-drivers-freeworld.i686",
         "ffmpeg-free.x86_64",
-        "libavcodec-free.x86_64",
-        "libavcodec-free.i686",
         "libavutil-free.x86_64",
         "libavutil-free.i686",
+        "libavcodec-freeworld.x86_64",
+        "libavcodec-freeworld.i686",
         "libswresample-free.x86_64",
         "libswresample-free.i686",
         "libavformat-free.x86_64",
@@ -868,8 +870,6 @@ def media_fixup() -> None:
         "x264-libs.i686",
         "x265-libs.x86_64",
         "x265-libs.i686",
-        "libavcodec-freeworld.x86_64",
-        "libavcodec-freeworld.i686",
     ]
 
     action_log_string = "Performing clean media package installation..."

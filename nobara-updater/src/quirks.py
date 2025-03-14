@@ -968,6 +968,14 @@ class QuirkFixup:
                 "libavcodec-free.i686",
                 "mesa-va-drivers.x86_64",
                 "mesa-vdpau-drivers.x86_64",
+                "x264-libs.x86_64",
+                "x264-libs.i686",
+                "x265-libs.x86_64",
+                "x265-libs.i686",
+                "libavcodec-freeworld.x86_64",
+                "libavcodec-freeworld.i686",
+                "openh264.x86_64",
+                "openh264.i686",
                 "mesa-va-drivers-freeworld.x86_64",
                 "mesa-vdpau-drivers-freeworld.x86_64",
                 "gstreamer1-plugins-bad-free-extras.x86_64",
@@ -980,32 +988,15 @@ class QuirkFixup:
                 media_fixup_check = subprocess.run(
                     ["rpm", "-q", package], capture_output=True, text=True
                 )
-
-                if package == "libavcodec-free.x86_64":
-                    libavcodec_freeworld_check = subprocess.run(
-                        ["rpm", "-q", "libavcodec-freeworld.x86_64"],
-                        capture_output=True,
-                        text=True,
-                    )
-                    if (
-                        libavcodec_freeworld_check.returncode == 1
-                        and media_fixup_check.returncode == 0
-                    ):
-                        media_fixup = 1
-                        break
-                elif package == "libavcodec-free.i686":
-                    libavcodec_freeworld_check = subprocess.run(
-                        ["rpm", "-q", "libavcodec-freeworld.i686"],
-                        capture_output=True,
-                        text=True,
-                    )
-                    if (
-                        libavcodec_freeworld_check.returncode == 1
-                        and media_fixup_check.returncode == 0
-                    ):
-                        media_fixup = 1
-                        break
-                elif package in [
+                if package in [
+                    "x264-libs.x86_64",
+                    "x264-libs.i686",
+                    "x265-libs.x86_64",
+                    "x265-libs.i686",
+                    "libavcodec-freeworld.x86_64",
+                    "libavcodec-freeworld.i686",
+                    "openh264.x86_64",
+                    "openh264.i686",
                     "mesa-va-drivers-freeworld.x86_64",
                     "mesa-vdpau-drivers-freeworld.x86_64",
                     "gstreamer1-plugins-bad-free-extras.x86_64",
@@ -1016,9 +1007,21 @@ class QuirkFixup:
                         media_fixup = 1
                         break
                 else:
-                    if media_fixup_check.returncode == 0:
-                        media_fixup = 1
-                        break
+                    if package in [
+                        "ffmpeg-libs.x86_64",
+                        "ffmpeg-libs.i686",
+                        "x264.x86_64",
+                        "x265.x86_64",
+                        "noopenh264.x86_64",
+                        "noopenh264.i686",
+                        "libavcodec-free.x86_64",
+                        "libavcodec-free.i686",
+                        "mesa-va-drivers.x86_64",
+                        "mesa-vdpau-drivers.x86_64",
+                    ]:
+                        if media_fixup_check.returncode == 0:
+                            media_fixup = 1
+                            break
 
         # END QUIRKS LIST
         # Check if any packages contain "kernel" or "akmod"
