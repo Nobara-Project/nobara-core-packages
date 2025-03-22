@@ -15,6 +15,7 @@ import threading
 import xml.etree.ElementTree as ElementTree
 from argparse import Namespace
 from pathlib import Path
+import atexit
 
 import gi  # type: ignore[import]
 import psutil
@@ -786,8 +787,6 @@ def media_fixup() -> None:
         "ffmpeg.x86_64",
         "ffmpeg-libs.x86_64",
         "ffmpeg-libs.i686",
-        "libavcodec-free.x86_64",
-        "libavcodec-free.i686",
         "libavcodec-freeworld.x86_64",
         "libavcodec-freeworld.i686",
         "libavdevice.x86_64",
@@ -845,10 +844,10 @@ def media_fixup() -> None:
         "mesa-va-drivers-freeworld.i686",
         "mesa-vdpau-drivers-freeworld.i686",
         "ffmpeg-free.x86_64",
+        "libavcodec-free.x86_64",
+        "libavcodec-free.i686",
         "libavutil-free.x86_64",
         "libavutil-free.i686",
-        "libavcodec-freeworld.x86_64",
-        "libavcodec-freeworld.i686",
         "libswresample-free.x86_64",
         "libswresample-free.i686",
         "libavformat-free.x86_64",
@@ -870,6 +869,8 @@ def media_fixup() -> None:
         "x264-libs.i686",
         "x265-libs.x86_64",
         "x265-libs.i686",
+        "libavcodec-freeworld.x86_64",
+        "libavcodec-freeworld.i686",
     ]
 
     action_log_string = "Performing clean media package installation..."
@@ -998,6 +999,7 @@ def check_root_privileges(args: Namespace) -> None:
                 + sys.argv[1:],
             )
         else:
+            subprocess.run(["xhost", "si:localuser:root"])
             os.execvp(
                 "pkexec",
                 [
@@ -1017,7 +1019,6 @@ def check_root_privileges(args: Namespace) -> None:
                 ]
                 + sys.argv[1:],
             )
-
 def request_update_status() -> None:
     global updates_available
     global fixups_available
@@ -1042,6 +1043,12 @@ def request_update_status() -> None:
     if have_updates != 1:
         logger.info("All Updates complete!")
 
+def cleanup_xhost():
+    """Cleanup function to run xhost on exit"""
+    try:
+        subprocess.run(["xhost", "-si:localuser:root"])
+    except Exception as e:
+        logger.error(f"Failed to run xhost cleanup: {e}")
 
 def main() -> None:
 
@@ -1051,6 +1058,22 @@ def main() -> None:
     if args.command and os.geteuid() == 0:
         initialize_logging()
         logger.info("Running CLI mode...")
+        # Display updates.txt content
+        try:
+            response = requests.get("https://updates.nobaraproject.org/updates.txt")
+            if response.status_code == 200:
+                content = response.text
+                print("\n" + "="*50)
+                print("Important Notices:")
+                print("="*50)
+                print(content)
+                print("="*50)
+            else:
+                error_message = f"Failed to fetch updates.nobaraproject.org/updates.txt (Status code: {response.status_code})"
+                print(error_message)
+        except Exception as e:
+            error_message = f"Error fetching updates: {str(e)}"
+            print(error_message)
         if args.command == "install-updates" or args.command == "cli":
             check_repos()
             check_updates()
@@ -1076,11 +1099,17 @@ def main() -> None:
             initialize_logging()
             logger.info("Running CLI mode...")
     elif "DISPLAY" in os.environ and os.geteuid() == 0:
-        update_window = UpdateWindow()
-        update_window.connect("destroy", Gtk.main_quit)
-        update_window.show_all()
-        update_window.present()  # Ensure the window is presented in a normal state
-        Gtk.main()
+        try:
+            if not Gtk.init_check():
+                logger.error("Failed to initialize GTK")
+                return 1
+            update_window = UpdateWindow()
+            update_window.connect("destroy", Gtk.main_quit)
+            update_window.show_all()
+            update_window.present()  # Ensure the window is presented in a normal state
+            Gtk.main()
+        except RuntimeError as e:
+            logger.error(f"GTK initialization error: {e}")
     else:
         logger.info(
             "No valid options provided. Use -h or --help for usage information."
@@ -1091,7 +1120,6 @@ def main() -> None:
 class UpdateWindow(Gtk.Window):  # type: ignore[misc]
     def __init__(self) -> None:
         super().__init__(title="Update System")
-
         if os.geteuid() == 0:
             if is_running_with_sudo_or_pkexec() == 1:
                 sudo_user = os.environ.get('SUDO_USER', '')
@@ -1117,7 +1145,19 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
 
         self.main_context = GLib.MainContext.default()
         self.set_border_width(10)
-        self.set_default_size(900, 600)  # Set default window size
+        self.set_default_size(900, 900)  # Set default window size
+
+        # Create the notices text view and its scrolled window
+        self.notices_textview = Gtk.TextView()
+        self.notices_textview.set_editable(False)
+        self.notices_textview.set_wrap_mode(Gtk.WrapMode.WORD)
+        notices_scrolled_window = Gtk.ScrolledWindow()
+        notices_scrolled_window.set_policy(
+            Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC
+        )  # Disable horizontal scrolling, enable vertical scrolling
+        notices_scrolled_window.add(self.notices_textview)
+        notices_scrolled_window.set_size_request(300, 150)
+        notices_scrolled_window.set_vexpand(True)  # Allow vertical expansion
 
         # Create the update text view and its scrolled window
         self.update_textview = Gtk.TextView()
@@ -1126,10 +1166,10 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         update_scrolled_window = Gtk.ScrolledWindow()
         update_scrolled_window.set_policy(
             Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC
-        )  # Disable horizontal scrolling, enable vertical scrolling
+        )
         update_scrolled_window.add(self.update_textview)
         update_scrolled_window.set_size_request(300, 150)
-        update_scrolled_window.set_vexpand(True)  # Allow vertical expansion
+        update_scrolled_window.set_vexpand(True)
 
         # Create the status text view and its scrolled window
         self.status_textview = Gtk.TextView()
@@ -1183,6 +1223,22 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         flatpak_system_label = Gtk.Label(label="Flatpak System Updates:")
         flatpak_system_label.set_halign(Gtk.Align.START)  # Align label to the left
 
+        # Create the new updates.nobaraproject.org text view and its scrolled window
+        self.nobara_notices_textview = Gtk.TextView()
+        self.nobara_notices_textview.set_editable(False)
+        self.nobara_notices_textview.set_wrap_mode(Gtk.WrapMode.WORD)
+        nobara_notices_scrolled_window = Gtk.ScrolledWindow()
+        nobara_notices_scrolled_window.set_policy(
+            Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC
+        )
+        nobara_notices_scrolled_window.add(self.nobara_notices_textview)
+        nobara_notices_scrolled_window.set_hexpand(True)
+        nobara_notices_scrolled_window.set_vexpand(True)
+
+        # Create label for the nobara updates
+        nobara_notices_label = Gtk.Label(label="Important Notices:")
+        nobara_notices_label.set_halign(Gtk.Align.START)
+
         # Create the button to install updates
         self.install_button = Gtk.Button(label="No Updates Available")
         GLib.idle_add(button_ensure_sensitivity, self.install_button, False)
@@ -1217,41 +1273,45 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         grid.set_row_spacing(6)
 
         # Attach labels and text views to the grid
-        grid.attach(update_label, 0, 0, 1, 1)  # Column 0, Row 0
-        grid.attach(flatpak_user_label, 1, 0, 1, 1)  # Column 1, Row 0
-        grid.attach(flatpak_system_label, 2, 0, 1, 1)  # Column 2, Row 0
+        grid.attach(nobara_notices_label, 0, 0, 3, 1)  # Span all columns
+        grid.attach(nobara_notices_scrolled_window, 0, 1, 3, 1)  # Span all columns
 
-        grid.attach(update_scrolled_window, 0, 1, 1, 1)  # Column 0, Row 1
-        grid.attach(flatpak_user_scrolled_window, 1, 1, 1, 1)  # Column 1, Row 1
-        grid.attach(flatpak_system_scrolled_window, 2, 1, 1, 1)  # Column 2, Row 1
+        # Attach labels and text views to the grid
+        grid.attach(update_label, 0, 2, 1, 1)  # Column 0, Row 0
+        grid.attach(flatpak_user_label, 1, 2, 1, 1)  # Column 1, Row 0
+        grid.attach(flatpak_system_label, 2, 2, 1, 1)  # Column 2, Row 0
 
-        grid.attach(self.status_label, 0, 2, 3, 1)  # Column 0, Row 2
+        grid.attach(update_scrolled_window, 0, 3, 1, 1)  # Column 0, Row 1
+        grid.attach(flatpak_user_scrolled_window, 1, 3, 1, 1)  # Column 1, Row 1
+        grid.attach(flatpak_system_scrolled_window, 2, 3, 1, 1)  # Column 2, Row 1
+
+        grid.attach(self.status_label, 0, 4, 3, 1)  # Column 0, Row 2
         grid.attach(
-            status_scrolled_window, 0, 3, 3, 1
+            status_scrolled_window, 0, 5, 3, 1
         )  # Column 0, Row 3, spanning 3 columns
 
         # Add the buttons to the grid
         # Column 0, Row 4, spanning 3 columns
         grid.attach(
-            self.install_button, 0, 4, 3, 1
+            self.install_button, 0, 6, 3, 1
         )
         # Column 0, Row 5, spanning 3 columns
         grid.attach(
-            self.fixups_button, 0, 5, 3, 1
+            self.fixups_button, 0, 7, 3, 1
         )
         # Column 0, Row 6, spanning 3 columns
         grid.attach(
-            self.check_updates_button, 0, 6, 3, 1
+            self.check_updates_button, 0, 8, 3, 1
         )
         # Column 0, Row 7, spanning 3 columns
-        grid.attach(self.open_log_button, 0, 7, 3, 1)
+        grid.attach(self.open_log_button, 0, 9, 3, 1)
         # Column 0, Row 8, spanning 3 columns
         grid.attach(
-            self.open_log_button_dir, 0, 8, 3, 1
+            self.open_log_button_dir, 0, 10, 3, 1
         )
         # Column 0, Row 9, spanning 3 columns
         grid.attach(
-            self.open_package_man_button, 0, 9, 3, 1
+            self.open_package_man_button, 0, 11, 3, 1
         )
 
         self.add(grid)
@@ -1259,9 +1319,37 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         # Initialize the logger
         self.logger = initialize_logging(self.status_textview)
 
+        # Add method to update the nobara updates text view
+        self.update_nobara_notices()
+
         logger.info("Running GUI mode...")
         updater_thread = threading.Thread(target=self.run_updater)
         updater_thread.start()
+
+    def update_nobara_notices(self):
+        try:
+            response = requests.get("https://updates.nobaraproject.org/updates.txt")
+            if response.status_code == 200:
+                content = response.text
+                buffer = self.nobara_notices_textview.get_buffer()
+                buffer.set_text(content)
+
+                # Log the content with a clear separator
+                logger.info("\n" + "="*50)
+                logger.info("Important Notices:")
+                logger.info("="*50)
+                logger.info(content)
+                logger.info("="*50)
+            else:
+                error_message = f"Failed to fetch updates.nobaraproject.org/updates.txt (Status code: {response.status_code})"
+                buffer = self.nobara_notices_textview.get_buffer()
+                buffer.set_text(error_message)
+                logger.error(error_message)
+        except Exception as e:
+            error_message = f"Error fetching updates: {str(e)}"
+            buffer = self.nobara_notices_textview.get_buffer()
+            buffer.set_text(error_message)
+            logger.error(error_message)
 
     def textview_updates(self) -> None:
         result = check_updates(return_texts=True)
@@ -1406,4 +1494,9 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         self.status_label_updates("Finished known problem checking and repair")
 
 if __name__ == "__main__":
-    main()
+    try:
+        # Your main application code here
+        main()
+    finally:
+        # This ensures cleanup runs even if main() throws an exception
+        cleanup_xhost()

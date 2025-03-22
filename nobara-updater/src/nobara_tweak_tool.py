@@ -12,7 +12,7 @@ def relaunch_with_pkexec():
     script_path = Path(__file__).resolve()
     user = getpass.getuser()
     if os.geteuid() != 0:
-
+        subprocess.run(["xhost", "si:localuser:root"])
         # Ensure DISPLAY and XAUTHORITY are set
         os.execvp(
             "pkexec",
@@ -210,6 +210,13 @@ def get_partitions():
 def on_closing():
     root.destroy()
 
+def cleanup_xhost():
+    """Cleanup function to run xhost on exit"""
+    try:
+        subprocess.run(["xhost", "-si:localuser:root"])
+    except Exception as e:
+        logger.error(f"Failed to run xhost cleanup: {e}")
+
 # Main function
 def main():
     global status_bar
@@ -344,6 +351,12 @@ def main():
     # Run the application
     root.mainloop()
 
-if __name__ == '__main__':
-    main()
+
+if __name__ == "__main__":
+    try:
+        # Your main application code here
+        main()
+    finally:
+        # This ensures cleanup runs even if main() throws an exception
+        cleanup_xhost()
 

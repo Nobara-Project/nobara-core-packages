@@ -143,8 +143,16 @@ def show_waiting_dialog(rpm_name, status, rpm_file):
         messagebox.showerror("Error", error_message + "\n\nLog file location: " + setup_logging(), parent=root)
         sys.exit(0)
 
+def cleanup_xhost():
+    """Cleanup function to run xhost on exit"""
+    try:
+        subprocess.run(["xhost", "-si:localuser:root"])
+    except Exception as e:
+        logger.error(f"Failed to run xhost cleanup: {e}")
+
 # Main function
 def main():
+    subprocess.run(["xhost", "si:localuser:root"])
     global root
     root = tk.Tk()
     root.withdraw()
@@ -209,4 +217,9 @@ def main():
     root.mainloop()
 
 if __name__ == "__main__":
-    main()
+    try:
+        # Your main application code here
+        main()
+    finally:
+        # This ensures cleanup runs even if main() throws an exception
+        cleanup_xhost()
