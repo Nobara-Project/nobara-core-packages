@@ -562,6 +562,8 @@ class QuirkFixup:
             "okular5-libs",
             "fedora-workstation-repositories",
             "mesa-demos"
+            "libheif-freeworld.x86_64",
+            "libheif-freeworld.i686",
         ]
         problematic_names = []
         for package in problematic:
