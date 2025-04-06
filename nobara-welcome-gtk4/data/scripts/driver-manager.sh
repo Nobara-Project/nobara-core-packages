@@ -1,2 +1,2 @@
 #!/bin/bash
-nobara-drivers "$@"
+nobara-driver-manager "$@"

@@ -13,7 +13,7 @@
       "id": 1,
       "title": "open-driver-manager-title",
       "subtitle": "open-driver-manager-subtitle",
-      "icon": "com.github.nobaraproject.nobaradrivers",
+      "icon": "com.github.nobara-project.nobaradrivermanager",
       "button": "launch-label",
       "terminal": false,
       "command": "/usr/lib/nobara/nobara-welcome/scripts/driver-manager.sh &"
