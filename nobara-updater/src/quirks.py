@@ -562,8 +562,6 @@ class QuirkFixup:
             "okular5-libs",
             "fedora-workstation-repositories",
             "mesa-demos"
-            "libheif-freeworld.x86_64",
-            "libheif-freeworld.i686",
         ]
         problematic_names = []
         for package in problematic:
@@ -984,6 +982,11 @@ class QuirkFixup:
                 "gstreamer1-plugins-bad-free-extras.i686",
                 "mozilla-openh264.x86_64",
                 "mesa-demos",
+                "libheif.x86_64",
+                "libheif.i686",
+                "libheif-freeworld.x86_64",
+                "libheif-freeworld.i686",
+                "pipewire-codec-aptx",
             ]
 
             for package in media:
@@ -1004,6 +1007,10 @@ class QuirkFixup:
                     "gstreamer1-plugins-bad-free-extras.x86_64",
                     "gstreamer1-plugins-bad-free-extras.i686",
                     "mozilla-openh264.x86_64",
+                    "libheif-freeworld.x86_64",
+                    "libheif-freeworld.i686",
+                    "pipewire-codec-aptx",
+
                 ]:
                     if media_fixup_check.returncode != 0:
                         media_fixup = 1
@@ -1016,8 +1023,6 @@ class QuirkFixup:
                         "x265.x86_64",
                         "noopenh264.x86_64",
                         "noopenh264.i686",
-                        "libavcodec-free.x86_64",
-                        "libavcodec-free.i686",
                         "mesa-va-drivers.x86_64",
                         "mesa-vdpau-drivers.x86_64",
                     ]:

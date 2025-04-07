@@ -814,6 +814,9 @@ def media_fixup() -> None:
         "x265.x86_64",
         "x265-libs.x86_64",
         "x265-libs.i686",
+        "libheif-freeworld.x86_64",
+        "libheif-freeworld.i686",
+        "pipewire-codec-aptx",
     ]
     soft_removal = ["mozilla-openh264", "qt5-qtwebengine-freeworld"]
 
@@ -871,6 +874,9 @@ def media_fixup() -> None:
         "x265-libs.i686",
         "libavcodec-freeworld.x86_64",
         "libavcodec-freeworld.i686",
+        "libheif-freeworld.x86_64",
+        "libheif-freeworld.i686",
+        "pipewire-codec-aptx",
     ]
 
     action_log_string = "Performing clean media package installation..."
