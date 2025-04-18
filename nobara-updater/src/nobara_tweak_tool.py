@@ -117,31 +117,6 @@ def toggle_handheld_packages():
         except Exception as e:
             status_bar.set(f"Error: {e}")
 
-def toggle_decky_loader():
-    config_path = '/etc/nobara/decky_loader/autoupdate.conf'
-    config_dir = os.path.dirname(config_path)
-
-    if not decky_var.get():
-        try:
-            os.makedirs(config_dir, exist_ok=True)
-            with open(config_path, 'w') as f:
-                f.write('disabled\n')
-            status_bar.set("Decky Loader disabled.")
-        except PermissionError:
-            status_bar.set("Error: Permission denied. Run as administrator.")
-        except Exception as e:
-            status_bar.set(f"Error: {e}")
-    else:
-        try:
-            os.remove(config_path)
-            status_bar.set("Decky Loader enabled.")
-        except FileNotFoundError:
-            status_bar.set("Decky Loader enabled.")
-        except PermissionError:
-            status_bar.set("Error: Permission denied. Run as administrator.")
-        except Exception as e:
-            status_bar.set(f"Error: {e}")
-
 # Function to toggle partition mount
 def toggle_partition(partition):
     partition_changed[partition] = True
@@ -243,9 +218,6 @@ def main():
     handheld_frame = tk.LabelFrame(root, text="Enable auto-configuring of controller input packages (recommended)", padx=10, pady=10)
     handheld_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-    decky_frame = tk.LabelFrame(root, text="Enable DeckyLoader in gamescope session (recommended)", padx=10, pady=10)
-    decky_frame.pack(fill="both", expand=True, padx=10, pady=5)
-
     partitions_frame = tk.LabelFrame(root, text="Enable auto-mounting on available disk partitions", padx=10, pady=10)
     partitions_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -267,15 +239,6 @@ def main():
     handheld_var = tk.BooleanVar(value=True)
     handheld_checkbox = tk.Checkbutton(handheld_frame, text="Enable", variable=handheld_var, command=toggle_handheld_packages)
     handheld_checkbox.pack(anchor='w')
-
-    # Add configuration file location for Decky Loader
-    decky_config_note = "Configuration file: /etc/nobara/decky_loader/autoupdate.conf"
-    tk.Label(decky_frame, text=decky_config_note).pack(anchor='w')
-
-    global decky_var
-    decky_var = tk.BooleanVar(value=True)
-    decky_checkbox = tk.Checkbutton(decky_frame, text="Enable", variable=decky_var, command=toggle_decky_loader)
-    decky_checkbox.pack(anchor='w')
 
     # Add configuration file location for automount
     partitions_config_note = "Configuration file: /etc/nobara/automount/enabled.conf"

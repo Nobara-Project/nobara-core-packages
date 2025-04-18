@@ -44,7 +44,6 @@ class QuirkFixup:
         critical_packages = [
             "fedora-gpg-keys",
             "nobara-gpg-keys",
-            "fedora-repos",
             "nobara-repos",
         ]
         if any(pkg in package_names for pkg in critical_packages):
@@ -55,8 +54,6 @@ class QuirkFixup:
                 ", ".join(critical_updates)
             )
             subprocess.run("dnf update -y --refresh fedora-repos fedora-gpg-keys nobara-repos nobara-gpg-keys --nogpgcheck", shell=True, capture_output=True, text=True, check=True)
-            if "fedora-repos" in package_names:
-                package_names = [pkg for pkg in package_names if pkg != "fedora-repos"]
             if "fedora-gpg-keys" in package_names:
                 package_names = [pkg for pkg in package_names if pkg != "fedora-gpg-keys"]
             if "nobara-repos" in package_names:
@@ -561,7 +558,8 @@ class QuirkFixup:
             "musescore",
             "okular5-libs",
             "fedora-workstation-repositories",
-            "mesa-demos"
+            "mesa-demos",
+            "deckyloader"
         ]
         problematic_names = []
         for package in problematic:

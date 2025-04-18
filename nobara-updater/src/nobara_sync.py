@@ -645,6 +645,7 @@ def install_fixups() -> None:
         orig_user_uid, orig_user_gid, "yumex_sync_updates"
     )
 
+
 def install_updates() -> None:
     global perform_kernel_actions
     global perform_reboot_request
@@ -740,6 +741,105 @@ def install_updates() -> None:
         logger.info("Kernel, kernel module, or desktop compositor update performed. Reboot required.")
         prompt_reboot()
 
+
+def attempt_distro_sync() -> None:
+    # Run dnf distro-sync first
+    try:
+        logger.info("Running dnf distro-sync --refresh...")
+
+        # Run dnf distro-sync with output capture
+        result = subprocess.run(
+            ["dnf", "distro-sync", "--refresh", "-y"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        # Display the output in the status window
+        if result.stdout:
+            logger.info("dnf distro-sync output:\n" + result.stdout)
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"dnf distro-sync failed: {e}")
+        return
+    # Cleanup old modules
+    try:
+        # Run the command and capture the output
+        result = subprocess.run(
+            "ls /boot/ | grep vmlinuz | grep -v rescue",
+            shell=True,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        logger.info("Found kernel versions:\n" + result.stdout)
+
+        # Split the output into lines
+        lines = result.stdout.strip().split('\n')
+
+        # Extract version numbers by removing 'vmlinuz-' prefix
+        versions = [line.replace('vmlinuz-', '') for line in lines if line.startswith('vmlinuz-')]
+        logger.info("Kernel versions to keep: " + ", ".join(versions))
+
+        # Run the ls command and capture the output
+        result = subprocess.run(
+            ['ls', '/lib/modules'],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        logger.info("Found module directories:\n" + result.stdout)
+
+        # Split the output into entries
+        modules = result.stdout.strip().split()
+
+        # Filter modules that do not match the kernel versions
+        filtered_modules = [module for module in modules if module not in versions]
+        logger.info("Modules to remove: " + ", ".join(filtered_modules))
+
+        # Remove filtered modules
+        for directory in filtered_modules:
+            if directory:  # Check if directory is not None or empty
+                dir_path = os.path.join('/lib/modules', directory)
+                if os.path.exists(dir_path):  # Check if the path exists
+                    shutil.rmtree(dir_path)
+                    logger.info(f"Removed module directory: {dir_path}")
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"An error occurred: {e}")
+        self.status_label_updates(f"Error during distro-sync: {str(e)}")
+        return
+
+    # Run the commands
+    try:
+        result = subprocess.run(
+            ["akmods"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        logger.info("akmods output:\n" + result.stdout)
+
+        result = subprocess.run(
+            ["dracut", "-f","--regenerate-all"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        logger.info("dracut output:\n" + result.stdout)
+        logger.info("Distro-sync completed successfully")
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error running akmods/dracut: {e}")
+        return
+
+    try:
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+        # Log success
+        logger.info("Command scheduled successfully.")
+    except Exception as e:
+        logger.error(f"Failed to relaunch script: {e}")
+        self.status_label_updates("Failed to relaunch script")
 
 def prompt_media_fixup() -> None:
     global media_fixup_event
@@ -942,6 +1042,7 @@ def parse_args() -> argparse.Namespace:
         help="Performs check-updates, install-fixups, then installs any updates available.",
     )
     subparsers.add_parser("check-updates", help="Check for new updates and fixups.")
+    subparsers.add_parser("repair", help="Attempts repair using distro-sync.")
     subparsers.add_parser(
         "install-fixups", help="Performs a series of known problem fixes."
     )
@@ -1091,6 +1192,12 @@ def main() -> None:
         if args.command == "install-fixups":
             check_updates()
             install_fixups()
+            check_updates()
+            request_update_status()
+            exit(0)
+        if args.command == "repair":
+            check_updates()
+            attempt_distro_sync()
             check_updates()
             request_update_status()
             exit(0)
@@ -1273,6 +1380,10 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         self.open_package_man_button = Gtk.Button(label="Open Package Manager")
         self.open_package_man_button.connect("clicked", self.on_open_package_man_button_clicked)
 
+        # Create the button to open the package manager
+        self.open_repair_button = Gtk.Button(label="Repair System Packages")
+        self.open_repair_button.connect("clicked", self.on_repair_button_clicked)
+
         # Create a grid to arrange the labels, text views
         grid = Gtk.Grid()
         grid.set_column_spacing(6)
@@ -1309,17 +1420,20 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         grid.attach(
             self.check_updates_button, 0, 8, 3, 1
         )
+        # Column 0, Row 9, spanning 3 columns
+        grid.attach(
+            self.open_repair_button, 0, 9, 3, 1
+        )
         # Column 0, Row 7, spanning 3 columns
-        grid.attach(self.open_log_button, 0, 9, 3, 1)
+        grid.attach(self.open_log_button, 0, 10, 3, 1)
         # Column 0, Row 8, spanning 3 columns
         grid.attach(
-            self.open_log_button_dir, 0, 10, 3, 1
+            self.open_log_button_dir, 0, 11, 3, 1
         )
         # Column 0, Row 9, spanning 3 columns
         grid.attach(
-            self.open_package_man_button, 0, 11, 3, 1
+            self.open_package_man_button, 0, 12, 3, 1
         )
-
         self.add(grid)
 
         # Initialize the logger
@@ -1441,6 +1555,21 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
     def on_open_package_man_button_clicked(self, widget):
         threading.Thread(target=self.button_popen_async, args=("pac_man",)).start()
 
+    def on_repair_button_clicked(self, widget):
+        threading.Thread(target=self.on_repair_button_clicked_async).start()
+
+    def on_repair_button_clicked_async(self):
+        toggle_refresh()
+        GLib.idle_add(self.toggle_buttons_during_refresh)
+        self.status_label_updates("Attempting repair using distro-sync...")
+        self.textview_updates()
+        attempt_distro_sync()
+        self.textview_updates()
+        self.status_label_updates("Process complete!")
+        toggle_refresh()
+        GLib.idle_add(self.toggle_buttons_during_refresh)
+        request_update_status()
+
     def button_popen_async(self, option: str) -> None:
         run_as_user(
             self.orig_user_uid, self.orig_user_gid, "on_button_popen_async", option
@@ -1468,11 +1597,19 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
             GLib.idle_add(
                 self.fixups_button.set_label, "Performing tasks, please wait..."
             )
+            GLib.idle_add(button_ensure_sensitivity, self.open_repair_button, False)
+            GLib.idle_add(
+                self.open_repair_button.set_label, "Performing tasks, please wait..."
+            )
         else:
             GLib.idle_add(
                 button_ensure_sensitivity, self.check_updates_button, True
             )
             GLib.idle_add(self.check_updates_button.set_label, "Check for Updates/Fixups")
+            GLib.idle_add(
+                button_ensure_sensitivity, self.open_repair_button, True
+            )
+            GLib.idle_add(self.open_repair_button.set_label, "Repair")
             if get_updates_available() == 1:
                 GLib.idle_add(button_ensure_sensitivity, self.install_button, True)
                 GLib.idle_add(self.install_button.set_label, "Install Updates")
