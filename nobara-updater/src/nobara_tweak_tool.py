@@ -170,7 +170,7 @@ def get_partitions():
             uuid = parts[1]
             fstype = parts[2]
             name_valid = not name.startswith('loop') and 'p' in name or 'sd' in name # e.g. nvme0n1p1 or sda1
-            part_valid = fstype == 'ext3' or fstype == 'ext4' or fstype == 'exfat' or fstype == 'xfs' or fstype == 'btrfs' or fstype == 'ntfs'
+            part_valid = fstype == 'ext3' or fstype == 'ext4' or fstype == 'exfat' or fstype == 'xfs' or fstype == 'btrfs' or fstype == 'ntfs' or fstype == 'f2fs'
             if len(parts) == 3 and name_valid and part_valid:  # No mount point
                     unmounted_partitions.append((f"/dev/disk/by-uuid/{uuid}", fstype, uuid))
             elif len(parts) == 4 and name_valid and part_valid:  # With mount point
