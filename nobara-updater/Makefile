@@ -49,10 +49,6 @@ install:
 	mkdir -p $(BIN_DIR)
 	install -m 755 src/rpm_installer.py $(BIN_DIR)/nobara-rpm-installer
 
-	@echo "Gamescope updater executable file to $(BIN_DIR)"
-	mkdir -p $(BIN_DIR)
-	install -m 755 src/gamescope_gui.py $(BIN_DIR)/nobara-updater-gamescope-gui
-
 	@echo "Gamescope browser choice executable file to $(BIN_DIR)"
 	mkdir -p $(BIN_DIR)
 	install -m 755 src/browser_select.py $(BIN_DIR)/nobara-browser-select
@@ -70,7 +66,6 @@ clean:
 	rm -rf $(TARGET_DIR)
 	rm -f $(BIN_DIR)/nobara-sync
 	rm -f $(BIN_DIR)/nobara-updater
-	rm -f $(BIN_DIR)/nobara-updater-gamescope-gui
 	rm -f $(BIN_DIR)/nobara-browser-select
 	rm -f $(BIN_DIR)/nobara-tweak-tool
 	rm -f $(DESKTOP_DIR)/nobara-updater.desktop

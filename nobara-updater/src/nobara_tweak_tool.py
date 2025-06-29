@@ -61,62 +61,6 @@ def check_wheel_group():
         status_bar.set(f"Error: Failed to check group membership: {e}")
         sys.exit(1)
 
-# Function to toggle automatic updates
-def toggle_autoupdate():
-    config_path = '/etc/nobara/gamescope/autoupdate.conf'
-    config_dir = os.path.dirname(config_path)
-
-    if not autoupdate_var.get():
-        try:
-            # Ensure the directory exists
-            os.makedirs(config_dir, exist_ok=True)
-
-            # Write to the file
-            with open(config_path, 'w') as f:
-                f.write('disabled\n')
-            status_bar.set("Automatic updates disabled.")
-        except PermissionError:
-            status_bar.set("Error: Permission denied. Run as administrator.")
-        except Exception as e:
-            status_bar.set(f"Error: {e}")
-    else:
-        try:
-            # Remove the file if it exists
-            os.remove(config_path)
-            status_bar.set("Automatic updates enabled.")
-        except FileNotFoundError:
-            # File doesn't exist, which is fine
-            status_bar.set("Automatic updates enabled.")
-        except PermissionError:
-            status_bar.set("Error: Permission denied. Run as administrator.")
-        except Exception as e:
-            status_bar.set(f"Error: {e}")
-
-def toggle_handheld_packages():
-    config_path = '/etc/nobara/handheld_packages/autoupdate.conf'
-    config_dir = os.path.dirname(config_path)
-
-    if not handheld_var.get():
-        try:
-            os.makedirs(config_dir, exist_ok=True)
-            with open(config_path, 'w') as f:
-                f.write('disabled\n')
-            status_bar.set("Controller input packages configuration disabled.")
-        except PermissionError:
-            status_bar.set("Error: Permission denied. Run as administrator.")
-        except Exception as e:
-            status_bar.set(f"Error: {e}")
-    else:
-        try:
-            os.remove(config_path)
-            status_bar.set("Controller input packages configuration enabled.")
-        except FileNotFoundError:
-            status_bar.set("Controller input packages configuration enabled.")
-        except PermissionError:
-            status_bar.set("Error: Permission denied. Run as administrator.")
-        except Exception as e:
-            status_bar.set(f"Error: {e}")
-
 # Function to toggle partition mount
 def toggle_partition(partition):
     partition_changed[partition] = True
@@ -220,25 +164,6 @@ def main():
 
     partitions_frame = tk.LabelFrame(root, text="Enable auto-mounting on available disk partitions", padx=10, pady=10)
     partitions_frame.pack(fill="both", expand=True, padx=10, pady=5)
-
-    # Add configuration file location for automatic updates
-    updates_config_note = "Configuration file: /etc/nobara/gamescope/autoupdate.conf"
-    tk.Label(updates_frame, text=updates_config_note).pack(anchor='w')
-
-    # Automatic Updates Section
-    global autoupdate_var
-    autoupdate_var = tk.BooleanVar(value=True)
-    autoupdate_checkbox = tk.Checkbutton(updates_frame, text="Enable", variable=autoupdate_var, command=toggle_autoupdate)
-    autoupdate_checkbox.pack(anchor='w')
-
-    # Add configuration file location for handheld package updates
-    handheld_config_note = "Configuration file: /etc/nobara/handheld_packages/autoupdate.conf"
-    tk.Label(handheld_frame, text=handheld_config_note).pack(anchor='w')
-
-    global handheld_var
-    handheld_var = tk.BooleanVar(value=True)
-    handheld_checkbox = tk.Checkbutton(handheld_frame, text="Enable", variable=handheld_var, command=toggle_handheld_packages)
-    handheld_checkbox.pack(anchor='w')
 
     # Add configuration file location for automount
     partitions_config_note = "Configuration file: /etc/nobara/automount/enabled.conf"

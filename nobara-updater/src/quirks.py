@@ -166,90 +166,47 @@ class QuirkFixup:
         # QUIRK 7: Install InputPlumber for Controller input, install steam firmware for steamdecks. Cleanup old packages.
         remove_names = []
         updatelist  = []
-        controller_update_config_path = '/etc/nobara/handheld_packages/autoupdate.conf'
-        controller_update_config = True
 
-        # Check if the file exists
-        if os.path.exists(controller_update_config_path):
-            try:
-                # Open the file and read its contents
-                with open(controller_update_config_path, 'r') as file:
-                    content = file.read().strip()
-                    if content == "disabled":
-                        controller_update_config = False
-            except Exception as e:
-                self.logger.info(f"An error occurred while reading the file: {e}")
+        self.logger.info("QUIRK: Install InputPlumber for Controller input, install steam firmware for steamdecks. Cleanup old packages.")
 
-        if controller_update_config == True:
-            self.logger.info("QUIRK: Install InputPlumber for Controller input, install steam firmware for steamdecks. Cleanup old packages.")
+        # Install InputPlumber
+        check_ip = subprocess.run(
+            ["rpm", "-q", "inputplumber"], capture_output=True, text=True
+        )
+        if check_ip.returncode != 0:
+            updatelist.append("inputplumber")
 
-            # Remove any deprecated controller input handlers
-            check_handygccs = subprocess.run(
-                ["rpm", "-q", "HandyGCCS"], capture_output=True, text=True
+        # Install ROG Ally/X firmware if needed
+        check_ally = subprocess.run(
+            "dmesg | grep 'ROG Ally'", capture_output=True, text=True, shell=True
+        )
+        ally_detected = check_ally.returncode == 0
+        if ally_detected:
+            self.logger.info(
+                "Found ROG Ally, installing firmware"
             )
-            if check_handygccs.returncode == 0:
-                subprocess.run(
-                    ["systemctl", "disable", "--now", "handycon"],
-                    capture_output=True,
-                    text=True,
-                )
-                remove_names.append("HandyGCCS")
 
-            check_lgcd = subprocess.run(
-                ["rpm", "-q", "lgcd"], capture_output=True, text=True
+            rogfw_name = "rogally-firmware"
+            check_rogfw = subprocess.run(
+                ["rpm", "-q", rogfw_name], capture_output=True, text=True
             )
-            if check_lgcd.returncode == 0:
-                remove_names.append("lgcd")
+            rogfw_installed = check_rogfw.returncode == 0
+            # Remove it, it's upstreamed now'
+            if rogfw_installed:
+                PackageUpdater([rogfw_name], "remove", None)
 
-            check_rogue_enemy = subprocess.run(
-                ["rpm", "-q", "rogue-enemy"], capture_output=True, text=True
+        check_falcond = subprocess.run(
+            ["rpm", "-q", "falcond"], capture_output=True, text=True
+        )
+        falcond_installed = check_falcond.returncode == 0
+        if not falcond_installed:
+            PackageUpdater(["falcond"], "install", None)
+            subprocess.run(
+                ["systemctl", "enable", "--now", "falcond"],
+                capture_output=True,
+                text=True,
             )
-            if check_rogue_enemy.returncode == 0:
-                remove_names.append("rogue-enemy")
 
-            check_hhd = subprocess.run(
-                ["rpm", "-q", "hhd"], capture_output=True, text=True
-            )
-            if check_hhd.returncode == 0:
-                remove_names.append("hhd")
-
-            check_hhd_ui = subprocess.run(
-                ["rpm", "-q", "hhd-ui"], capture_output=True, text=True
-            )
-            if check_hhd_ui.returncode == 0:
-                remove_names.append("hhd-ui")
-
-            check_hhd_adjustor = subprocess.run(
-                ["rpm", "-q", "adjustor"], capture_output=True, text=True
-            )
-            if check_hhd_adjustor.returncode == 0:
-                remove_names.append("adjustor")
-
-            # Install InputPlumber
-            check_ip = subprocess.run(
-                ["rpm", "-q", "inputplumber"], capture_output=True, text=True
-            )
-            if check_ip.returncode != 0:
-                updatelist.append("inputplumber")
-
-            # Install ROG Ally/X firmware if needed
-            check_ally = subprocess.run(
-                "dmesg | grep 'ROG Ally'", capture_output=True, text=True, shell=True
-            )
-            ally_detected = check_ally.returncode == 0
-            if ally_detected:
-                self.logger.info(
-                    "Found ROG Ally, installing firmware"
-                )
-
-                rogfw_name = "rogally-firmware"
-                check_rogfw = subprocess.run(
-                    ["rpm", "-q", rogfw_name], capture_output=True, text=True
-                )
-                rogfw_installed = check_rogfw.returncode == 0
-                # Remove it, it's upstreamed now'
-                if rogfw_installed:
-                    PackageUpdater([rogfw_name], "remove", None)
 
         check_gamescope_htpc = subprocess.run(
             ["rpm", "-q", "gamescope-htpc-common"], capture_output=True, text=True
@@ -568,21 +525,38 @@ class QuirkFixup:
             )
             if problematic_check.returncode == 0:
                 problematic_names.append(package)
+
         if len(problematic_names) > 0:
             self.logger.info("Found problematic packages, removing...")
             PackageUpdater(problematic_names, "remove", None)
 
         problematic_2025 = [
             "plasma-workspace-geolocation",
-            "plasma-workspace-geolocation-libs"
+            "plasma-workspace-geolocation-libs",
+            "rubberband.i686",
+            "python3-torch-rocm-gfx9",
+            "python3-torchaudio-rocm-gfx9",
+            "tesseract.i686"
         ]
         for package in problematic_2025:
             problematic_check_2025 = subprocess.run(
                 ["rpm", "-q", package], capture_output=True, text=True
             )
             if problematic_check_2025.returncode == 0:
-                subprocess.run(["rpm", "-e", "--nodeps", package], capture_output=True, text=True)
-
+                if "rubberband" in package:
+                    libs32_check = subprocess.run(["rpm", "-q", package], capture_output=True, text=True)
+                    if libs32_check.returncode == 0:
+                        subprocess.run(["rpm", "-e", "--nodeps", package], capture_output=True, text=True)
+                        subprocess.run(["dnf", "install", "-y", "rubberband-libs.x86_64", "--refresh"], capture_output=True, text=True)
+                        subprocess.run(["dnf", "install", "-y", "rubberband-libs.i686", "--refresh"], capture_output=True, text=True)
+                elif "tesseract" in package:
+                    libs32_check = subprocess.run(["rpm", "-q", package], capture_output=True, text=True)
+                    if libs32_check.returncode == 0:
+                        subprocess.run(["rpm", "-e", "--nodeps", package], capture_output=True, text=True)
+                        subprocess.run(["dnf", "install", "-y", "tesseract-libs.x86_64", "--refresh"], capture_output=True, text=True)
+                        subprocess.run(["dnf", "install", "-y", "tesseract-libs.i686", "--refresh"], capture_output=True, text=True)
+                else:
+                    subprocess.run(["rpm", "-e", "--nodeps", package], capture_output=True, text=True)
 
         # QUIRK 13: Clear plasmashell cache if a plasma-workspace update is available
         self.logger.info("QUIRK: Clear plasmashell cache if a plasma-workspace update is available.")
