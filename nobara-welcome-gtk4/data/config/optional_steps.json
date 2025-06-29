@@ -16,7 +16,7 @@
       "icon": "nobara-com.vysp3r.ProtonPlus",
       "button": "launch-label",
       "terminal": false,
-      "command": "/usr/bin/protonplus-next &"
+      "command": "/usr/bin/protonplus &"
     }
   ]
 }
