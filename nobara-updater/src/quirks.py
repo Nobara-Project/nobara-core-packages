@@ -507,7 +507,6 @@ class QuirkFixup:
         # QUIRK 10: Problematic package cleanup
         self.logger.info("QUIRK: Problematic package cleanup.")
         problematic = [
-            "unrar",
             "qt5-qtwebengine-freeworld",
             "qt6-qtwebengine-freeworld",
             "qgnomeplatform-qt6",
