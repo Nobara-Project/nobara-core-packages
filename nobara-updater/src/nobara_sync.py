@@ -326,7 +326,7 @@ def validate_mirrorlist(
     mirrorlist_url: str, session: requests.Session, headers: dict[str, str]
 ) -> bool:
     try:
-        response = session.get(mirrorlist_url, headers=headers)
+        response = session.get(mirrorlist_url, headers=headers, timeout=5)
         if response.status_code == 200:
             mirrors = response.text.splitlines()
             mirrors = [mirror for mirror in mirrors if mirror.strip()]
