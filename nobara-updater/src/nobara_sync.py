@@ -326,7 +326,7 @@ def validate_mirrorlist(
     mirrorlist_url: str, session: requests.Session, headers: dict[str, str]
 ) -> bool:
     try:
-        response = session.get(mirrorlist_url, headers=headers)
+        response = session.get(mirrorlist_url, headers=headers, timeout=5)
         if response.status_code == 200:
             mirrors = response.text.splitlines()
             mirrors = [mirror for mirror in mirrors if mirror.strip()]
@@ -1167,7 +1167,7 @@ def main() -> None:
         logger.info("Running CLI mode...")
         # Display updates.txt content
         try:
-            response = requests.get("https://updates.nobaraproject.org/updates.txt")
+            response = requests.get("https://updates.nobaraproject.org/updates.txt", timeout=5)
             if response.status_code == 200:
                 content = response.text
                 print("\n" + "="*50)
@@ -1448,7 +1448,7 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
 
     def update_nobara_notices(self):
         try:
-            response = requests.get("https://updates.nobaraproject.org/updates.txt")
+            response = requests.get("https://updates.nobaraproject.org/updates.txt", timeout=5)
             if response.status_code == 200:
                 content = response.text
                 buffer = self.nobara_notices_textview.get_buffer()
