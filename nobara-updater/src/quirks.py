@@ -670,6 +670,51 @@ class QuirkFixup:
                 perform_kernel_actions = 1
                 perform_reboot_request = 1
 
+        # QUIRK: Post N41 mesa update
+        self.logger.info("QUIRK: Update old N41 mesa packages to current versions.")
+
+        # Run the first command and capture the output
+        cmd = "dnf list --installed | grep mesa | grep fc41 | cut -d ' ' -f 1"
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+        # Split output into a list of package names
+        packages = result.stdout.strip().split("\n")
+
+        # Run rpm -e --nodeps with all packages at once
+        if packages and packages != ['']:
+            rpm_cmd = ["rpm", "-e", "--nodeps"] + packages
+            subprocess.run(rpm_cmd)
+
+            # Step 2: Install required mesa packages
+            to_install = [
+                "mesa-compat-libOSMesa.x86_64",
+                "mesa-dri-drivers.i686",
+                "mesa-dri-drivers.x86_64",
+                "mesa-filesystem.i686",
+                "mesa-filesystem.x86_64",
+                "mesa-libEGL.i686",
+                "mesa-libEGL.x86_64",
+                "mesa-libGL.i686",
+                "mesa-libGL.x86_64",
+                "mesa-libGLU.i686",
+                "mesa-libGLU.x86_64",
+                "mesa-libOpenCL.x86_64",
+                "mesa-libgallium.i686",
+                "mesa-libgallium.x86_64",
+                "mesa-libgbm.i686",
+                "mesa-libgbm.x86_64",
+                "mesa-libxatracker.x86_64",
+                "mesa-va-drivers.i686",
+                "mesa-va-drivers.x86_64",
+                "mesa-vdpau-drivers.i686",
+                "mesa-vdpau-drivers.x86_64",
+                "mesa-vulkan-drivers.i686",
+                "mesa-vulkan-drivers.x86_64",
+            ]
+
+            dnf_cmd = ["dnf", "install", "-y"] + to_install
+            subprocess.run(dnf_cmd)
+
         # QUIRK 15: Swap old AMD ROCm packages with upstream Fedora ROCm versions.
         self.logger.info("QUIRK: Swap old AMD ROCm packages with upstream Fedora ROCm versions.")
 
