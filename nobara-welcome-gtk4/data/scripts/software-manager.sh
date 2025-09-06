@@ -1,2 +1,2 @@
 #!/bin/bash
-yumex --flatpak
+flatpost

@@ -2,24 +2,15 @@
   "recommended_addons": [
     {
       "id": 0,
-      "title": "blender-title",
-      "subtitle": "blender-subtitle",
-      "icon": "nobara-blender",
-      "pkgman": "pkcon",
-      "checkpkg": "blender",
-      "packages": "blender"
+      "title": "discord-title",
+      "subtitle": "discord-subtitle",
+      "icon": "nobara-discord",
+      "pkgman": "flatpak",
+      "checkpkg": "com.discordapp.Discord",
+      "packages": "com.discordapp.Discord"
     },
     {
       "id": 1,
-      "title": "kdenlive-title",
-      "subtitle": "kdenlive-subtitle",
-      "icon": "nobara-kdenlive",
-      "pkgman": "pkcon",
-      "checkpkg": "kdenlive",
-      "packages": "kdenlive"
-    },
-    {
-      "id": 2,
       "title": "obs-title",
       "subtitle": "obs-subtitle",
       "icon": "nobara-obs",
@@ -28,13 +19,40 @@
       "packages": "obs-studio"
     },
     {
+      "id": 2,
+      "title": "gpu-screen-recorder-title",
+      "subtitle": "gpu-screen-recorder-subtitle",
+      "icon": "nobara-gpu-screen-recorder",
+      "pkgman": "pkcon",
+      "checkpkg": "gpu-screen-recorder-ui",
+      "packages": "gpu-screen-recorder-ui"
+    },
+    {
       "id": 3,
-      "title": "discord-title",
-      "subtitle": "discord-subtitle",
-      "icon": "nobara-discord",
-      "pkgman": "flatpak",
-      "checkpkg": "com.discordapp.Discord",
-      "packages": "com.discordapp.Discord"
+      "title": "kdenlive-title",
+      "subtitle": "kdenlive-subtitle",
+      "icon": "nobara-kdenlive",
+      "pkgman": "pkcon",
+      "checkpkg": "kdenlive",
+      "packages": "kdenlive"
+    },
+    {
+      "id": 4,
+      "title": "blender-title",
+      "subtitle": "blender-subtitle",
+      "icon": "nobara-blender",
+      "pkgman": "pkcon",
+      "checkpkg": "blender",
+      "packages": "blender"
+    },
+    {
+      "id": 5,
+      "title": "install-snaps-title",
+      "subtitle": "install-snaps-subtitle",
+      "icon": "nobara-snap",
+      "pkgman": "pkcon",
+      "checkpkg": "snapd",
+      "packages": "snapd"
     }
   ]
 }

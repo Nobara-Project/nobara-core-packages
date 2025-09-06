@@ -26,24 +26,6 @@
       "button": "launch-label",
       "terminal": false,
       "command": "/usr/bin/nobara-tweak-tool &"
-    },
-    {
-      "id": 3,
-      "title": "open-software-manager-title",
-      "subtitle": "open-software-manager-subtitle",
-      "icon": "nobara-media-floppy",
-      "button": "launch-label",
-      "terminal": false,
-      "command": "/usr/lib/nobara/nobara-welcome/scripts/software-manager.sh &"
-    },
-    {
-      "id": 4,
-      "title": "open-webapp-manager-title",
-      "subtitle": "open-webapp-manager-subtitle",
-      "icon": "nobara-applications-internet",
-      "button": "launch-label",
-      "terminal": false,
-      "command": "/usr/lib/nobara/nobara-welcome/scripts/webapp-manager.sh &"
     }
   ]
 }
