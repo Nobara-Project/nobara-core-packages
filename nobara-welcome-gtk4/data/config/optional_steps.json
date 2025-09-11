@@ -11,21 +11,21 @@
     },
     {
       "id": 1,
-      "title": "open-webapp-manager-title",
-      "subtitle": "open-webapp-manager-subtitle",
-      "icon": "nobara-applications-internet",
-      "button": "launch-label",
-      "terminal": false,
-      "command": "/usr/lib/nobara/nobara-welcome/scripts/webapp-manager.sh &"
-    },
-    {
-      "id": 2,
       "title": "open-protonplus-title",
       "subtitle": "open-protonplus-subtitle",
       "icon": "nobara-com.vysp3r.ProtonPlus",
       "button": "launch-label",
       "terminal": false,
       "command": "/usr/bin/protonplus &"
+    },
+    {
+      "id": 2,
+      "title": "open-webapp-manager-title",
+      "subtitle": "open-webapp-manager-subtitle",
+      "icon": "nobara-applications-internet",
+      "button": "launch-label",
+      "terminal": false,
+      "command": "/usr/lib/nobara/nobara-welcome/scripts/webapp-manager.sh &"
     },
     {
       "id": 3,

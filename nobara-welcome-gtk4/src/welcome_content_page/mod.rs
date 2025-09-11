@@ -159,8 +159,8 @@ pub fn welcome_content_page(window: &adw::ApplicationWindow, content_box: &gtk::
         &window_banner,
     );
     setup_steps_page(&welcome_content_page_stack, &window);
-    recommended_addons_page(&welcome_content_page_stack, &window);
     optional_steps_page(&welcome_content_page_stack, &window);
+    recommended_addons_page(&welcome_content_page_stack, &window);
     troubleshoot_page(&welcome_content_page_stack, &window);
     community_page(&welcome_content_page_stack, &window);
     contribute_page(&welcome_content_page_stack, &window);
