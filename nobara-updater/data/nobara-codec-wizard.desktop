@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Nobara Codec Wizard
+MimeType=application/x-rpm
+Exec=/usr/bin/nobara-codec-wizard
+Icon=media-tape
+Type=Application
+Categories=Utility;

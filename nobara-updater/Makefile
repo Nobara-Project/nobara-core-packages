@@ -2,8 +2,8 @@ PYTHON_SITE_PACKAGES := $(shell python3 -c "import site; print(site.getsitepacka
 TARGET_DIR := $(DESTDIR)$(PYTHON_SITE_PACKAGES)/nobara_updater
 BIN_DIR := $(DESTDIR)/usr/bin
 DESKTOP_DIR := $(DESTDIR)/usr/share/applications
+CODEC_WIZARD_DIR := $(DESTDIR)/usr/share/nobara-codec-wizard
 ICON_DIR := $(DESTDIR)/usr/share/icons/hicolor/64x64/apps
-BROWSER_SELECT_DIR := $(DESTDIR)/usr/share/nobara-gamescope/browser-select/
 LICENSE_DIR := $(DESTDIR)/usr/share/licenses/nobara-updater
 
 .PHONY: all install symlinks clean
@@ -23,19 +23,20 @@ install:
 	@echo "Installing desktop file to $(DESKTOP_DIR)"
 	mkdir -p $(DESKTOP_DIR)
 	install -m 644 data/nobara-updater.desktop $(DESKTOP_DIR)/nobara-updater.desktop
-	install -m 644 data/nobara-tweak-tool.desktop $(DESKTOP_DIR)/nobara-tweak-tool.desktop
+	install -m 644 data/nobara-drive-mount-manager.desktop $(DESKTOP_DIR)/nobara-drive-mount-manager.desktop
+	install -m 644 data/nobara-codec-wizard.desktop $(DESKTOP_DIR)/nobara-codec-wizard.desktop
 	install -m 644 data/nobara-rpm-installer.desktop $(DESKTOP_DIR)/nobara-rpm-installer.desktop
+
+	@echo "Installing codec wizard files to $(CODEC_WIZARD_DIR)"
+	mkdir -p $(CODEC_WIZARD_DIR)
+	install -m 755 data/nobara-codec-wizard/main.py $(CODEC_WIZARD_DIR)/main.py
+	install -m 755 data/nobara-codec-wizard/process.py $(CODEC_WIZARD_DIR)/process.py
+	install -m 644 data/nobara-codec-wizard/main.ui $(CODEC_WIZARD_DIR)/main.ui
+	install -m 644 data/nobara-codec-wizard/process.ui $(CODEC_WIZARD_DIR)/process.ui
 
 	@echo "Installing icon file to $(ICON_DIR)"
 	mkdir -p $(ICON_DIR)
 	install -m 644 icons/hicolor/64x64/apps/nobara-updater.svg $(ICON_DIR)/nobara-updater.svg
-
-	@echo "Installing gamescope browser select files to $(BROWSER_SELECT_DIR)"
-	mkdir -p $(BROWSER_SELECT_DIR)
-	install -m 644 icons/browser-select/brave_icon.png $(BROWSER_SELECT_DIR)/brave_icon.png
-	install -m 644 icons/browser-select/chrome_icon.png $(BROWSER_SELECT_DIR)/chrome_icon.png
-	install -m 644 icons/browser-select/edge_icon.png $(BROWSER_SELECT_DIR)/edge_icon.png
-	install -m 644 icons/browser-select/firefox_icon.png $(BROWSER_SELECT_DIR)/firefox_icon.png
 
 	@echo "Installing license file to $(LICENSE_DIR)"
 	mkdir -p $(LICENSE_DIR)
@@ -49,25 +50,19 @@ install:
 	mkdir -p $(BIN_DIR)
 	install -m 755 src/rpm_installer.py $(BIN_DIR)/nobara-rpm-installer
 
-	@echo "Gamescope browser choice executable file to $(BIN_DIR)"
+	@echo "Drive mount manager executable file to $(BIN_DIR)"
 	mkdir -p $(BIN_DIR)
-	install -m 755 src/browser_select.py $(BIN_DIR)/nobara-browser-select
-
-	@echo "Tweak tool executable file to $(BIN_DIR)"
-	mkdir -p $(BIN_DIR)
-	install -m 755 src/nobara_tweak_tool.py $(BIN_DIR)/nobara-tweak-tool
+	install -m 755 src/nobara_drive_mount_manager.py $(BIN_DIR)/nobara-drive-mount-manager
 
 symlinks:
 	@echo "Creating symlinks in $(BIN_DIR)"
 	ln -sf /usr/bin/nobara-updater $(BIN_DIR)/nobara-sync
+	ln -sf /usr/share/nobara-codec-wizard/main.py $(BIN_DIR)/nobara-codec-wizard
 
 clean:
 	@echo "Cleaning up installed files and symlinks"
 	rm -rf $(TARGET_DIR)
-	rm -f $(BIN_DIR)/nobara-sync
-	rm -f $(BIN_DIR)/nobara-updater
-	rm -f $(BIN_DIR)/nobara-browser-select
-	rm -f $(BIN_DIR)/nobara-tweak-tool
-	rm -f $(DESKTOP_DIR)/nobara-updater.desktop
-	rm -f $(DESKTOP_DIR)/nobara-tweak-tool
-	rm -f $(ICON_DIR)/nobara-updater.svg
+	rm -rf $(BIN_DIR)
+	rm -rf $(DESKTOP_DIR)
+	rm -rf $(ICON_DIR)
+	rm -rf $(CODEC_WIZARD_DIR)

@@ -31,6 +31,11 @@ gi.require_version("Flatpak", "1.0")
 from typing import Any
 
 from gi.repository import Flatpak, GLib, Gtk  # type: ignore[import]
+
+settings = Gtk.Settings.get_default()
+settings.set_property("gtk-theme-name", "adw-gtk3-dark")  # Replace with the exact theme name if different
+settings.set_property("gtk-application-prefer-dark-theme", True)
+
 #from yumex.constants import BACKEND  # type: ignore[import]
 # still need to repair DNF5, use DNF4 for now
 BACKEND = "DNF4"
@@ -615,10 +620,10 @@ def install_fixups() -> None:
         except Exception as e:
             logger.error(f"Failed to relaunch script: {e}")
 
-    # Check for media codec fixup first
-    if fixups_available == 1:
-        logger.info("Problems with Media Packages detected, asking user for repair...")
-        prompt_media_fixup()
+    # Old code, no longer used. triggers if fixups_available (media_fixups) returns > 0
+    # # if fixups_available == 1:
+    #    logger.info("Problems with Media Packages detected, asking user for repair...")
+    #    prompt_media_fixup()
 
     if is_running_with_sudo_or_pkexec() == 1:
         sudo_user = os.environ.get('SUDO_USER', '')
@@ -844,44 +849,10 @@ def attempt_distro_sync() -> None:
 def prompt_media_fixup() -> None:
     global media_fixup_event
     media_fixup_event.set()
-    if is_running_with_sudo_or_pkexec() == 2:
-        dialog = Gtk.MessageDialog(
-            modal=True,
-            destroy_with_parent=True,
-            message_type=Gtk.MessageType.QUESTION,
-            buttons=Gtk.ButtonsType.YES_NO,
-            text="We have found some missing optional video and/or audio codec packages. Do you want to install them now (recommended)?",
-        )
-        response = dialog.run()
-        dialog.destroy()  # Close the dialog immediately after getting the response
-
-        if response == Gtk.ResponseType.YES:
-            logger.info("User chose to repair media packages.")
-            media_fixup()
-            media_fixup_event.wait()
-        else:
-            logger.info("User chose not to repair media packages.")
-    else:
-        while True:
-            response = (
-                input(
-                    "We have found some missing optional video and/or audio codec packages. Do you want to install them now (recommended)? (yes/no): "
-                )
-                .strip()
-                .lower()
-            )
-            if response in ["yes", "y"]:
-                logger.info("User chose to repair media packages.")
-                media_fixup()
-                media_fixup_event.wait()
-                break
-            if response in ["no", "n"]:
-                logger.info("User chose not to repair media packages.")
-                break
-            logger.error("Invalid input. Please enter 'y' or 'yes' or 'n' or 'no'.")
+    media_fixup()
+    media_fixup_event.wait()
 
 def media_fixup() -> None:
-    global fixups_available
     global media_fixup_event
     hard_removal = [
         "ffmpeg.x86_64",
@@ -979,6 +950,11 @@ def media_fixup() -> None:
         "pipewire-codec-aptx",
     ]
 
+    # enable the nobara-pikaos-additional repo first
+    subprocess.run(
+            ["dnf", "config-manager", "setopt", "nobara-pikaos-additional.enabled=1"], capture_output=True, text=True
+        )
+
     action_log_string = "Performing clean media package installation..."
     indented_install = ["    " + line for line in install]
     logger.info("%s\n\n%s\n", action_log_string, chr(10).join(indented_install))
@@ -993,44 +969,9 @@ def media_fixup() -> None:
 
     if install_list:
         PackageUpdater(install_list, "install", None)
-    fixups_available = 0
 
 def prompt_reboot() -> None:
-    if "gamescope" in os.environ.get('XDG_CURRENT_DESKTOP', '').lower():
-        subprocess.run(["reboot"], check=True)
-    if is_running_with_sudo_or_pkexec() == 2:
-        dialog = Gtk.MessageDialog(
-            modal=True,
-            destroy_with_parent=True,
-            message_type=Gtk.MessageType.QUESTION,
-            buttons=Gtk.ButtonsType.YES_NO,
-            text="System updates require a reboot. Do you want to reboot now?",
-        )
-        response = dialog.run()
-        dialog.destroy()  # Close the dialog immediately after getting the response
-
-        if response == Gtk.ResponseType.YES:
-            logger.info("User chose to reboot the system.")
-            subprocess.run(["reboot"], check=True)
-        else:
-            logger.info("User chose to reboot later.")
-    else:
-        while True:
-            response = (
-                input(
-                    "System updates require a reboot. Do you want to reboot now? (yes/no): "
-                )
-                .strip()
-                .lower()
-            )
-            if response in ["yes", "y"]:
-                logger.info("User chose to reboot the system.")
-                subprocess.run(["reboot"], check=True)
-                break
-            if response in ["no", "n"]:
-                logger.info("User chose to reboot later.")
-                break
-            logger.error("Invalid input. Please enter 'y' or 'yes' or 'n' or 'no'.")
+    logger.info("UPDATES COMPLETE. A REBOOT IS REQUIRED. PLEASE REBOOT WHEN POSSIBLE.")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Update System")
@@ -1045,6 +986,10 @@ def parse_args() -> argparse.Namespace:
     subparsers.add_parser("repair", help="Attempts repair using distro-sync.")
     subparsers.add_parser(
         "install-fixups", help="Performs a series of known problem fixes."
+    )
+    subparsers.add_parser(
+        "install-codecs",
+        help="Performs media codec installation.",
     )
     cli_parser = subparsers.add_parser("cli", help="Run in CLI mode, defaults to install-updates")
     cli_parser.add_argument("username", help="Specify the username", nargs='?')  # Optional positional argument
@@ -1070,14 +1015,6 @@ def check_root_privileges(args: Namespace) -> None:
             # Log the command line for debugging
             logger.info(f"Parent process command line: {parent_cmdline}")
 
-            # Check if the command line contains /usr/bin/nobara-updater-gamescope-gui
-            if any("/usr/bin/nobara-updater-gamescope-gui" in arg for arg in parent_cmdline):
-                # Get user information using the pwd module
-                user_info = pwd.getpwnam(args.username)
-                os.environ['ORIGINAL_USER_HOME'] = user_info.pw_dir  # User's home directory
-                os.environ['ORIG_USER'] = str(user_info.pw_uid)      # User's UID
-                os.environ['SUDO_USER'] = str(user_info.pw_uid)      # User's UID (as SUDO_USER)
-                os.environ['XDG_CURRENT_DESKTOP'] = "gamescope"      # User's UID (as SUDO_USER)
         except psutil.NoSuchProcess:
             logger.info("Error: Process does not exist.")
             sys.exit(1)
@@ -1106,7 +1043,11 @@ def check_root_privileges(args: Namespace) -> None:
                 + sys.argv[1:],
             )
         else:
-            subprocess.run(["xhost", "si:localuser:root"])
+            subprocess.run(["xhost", "si:localuser:root"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+            )
             os.execvp(
                 "pkexec",
                 [
@@ -1153,7 +1094,11 @@ def request_update_status() -> None:
 def cleanup_xhost():
     """Cleanup function to run xhost on exit"""
     try:
-        subprocess.run(["xhost", "-si:localuser:root"])
+        subprocess.run(["xhost", "-si:localuser:root"],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+        )
     except Exception as e:
         logger.error(f"Failed to run xhost cleanup: {e}")
 
@@ -1188,6 +1133,9 @@ def main() -> None:
             install_updates()
             check_updates()
             request_update_status()
+            exit(0)
+        if args.command == "install-codecs":
+            prompt_media_fixup()
             exit(0)
         if args.command == "install-fixups":
             check_updates()

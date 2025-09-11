@@ -969,83 +969,6 @@ class QuirkFixup:
         except subprocess.CalledProcessError as e:
             self.logger.info(f"An error occurred: {e}")
 
-        # QUIRK 18: Media fixup
-        media_fixup = 0
-        if "gamescope" not in os.environ.get('XDG_CURRENT_DESKTOP', '').lower():
-            self.logger.info("QUIRK: Media fixup.")
-            media = [
-                "ffmpeg-libs.x86_64",
-                "ffmpeg-libs.i686",
-                "x264.x86_64",
-                "x265.x86_64",
-                "noopenh264.x86_64",
-                "noopenh264.i686",
-                "libavcodec-free.x86_64",
-                "libavcodec-free.i686",
-                "mesa-va-drivers.x86_64",
-                "mesa-vdpau-drivers.x86_64",
-                "x264-libs.x86_64",
-                "x264-libs.i686",
-                "x265-libs.x86_64",
-                "x265-libs.i686",
-                "libavcodec-freeworld.x86_64",
-                "libavcodec-freeworld.i686",
-                "openh264.x86_64",
-                "openh264.i686",
-                "mesa-va-drivers-freeworld.x86_64",
-                "mesa-vdpau-drivers-freeworld.x86_64",
-                "gstreamer1-plugins-bad-free-extras.x86_64",
-                "gstreamer1-plugins-bad-free-extras.i686",
-                "mozilla-openh264.x86_64",
-                "mesa-demos",
-                "libheif.x86_64",
-                "libheif.i686",
-                "libheif-freeworld.x86_64",
-                "libheif-freeworld.i686",
-                "pipewire-codec-aptx",
-            ]
-
-            for package in media:
-                media_fixup_check = subprocess.run(
-                    ["rpm", "-q", package], capture_output=True, text=True
-                )
-                if package in [
-                    "x264-libs.x86_64",
-                    "x264-libs.i686",
-                    "x265-libs.x86_64",
-                    "x265-libs.i686",
-                    "libavcodec-freeworld.x86_64",
-                    "libavcodec-freeworld.i686",
-                    "openh264.x86_64",
-                    "openh264.i686",
-                    "mesa-va-drivers-freeworld.x86_64",
-                    "mesa-vdpau-drivers-freeworld.x86_64",
-                    "gstreamer1-plugins-bad-free-extras.x86_64",
-                    "gstreamer1-plugins-bad-free-extras.i686",
-                    "mozilla-openh264.x86_64",
-                    "libheif-freeworld.x86_64",
-                    "libheif-freeworld.i686",
-                    "pipewire-codec-aptx",
-
-                ]:
-                    if media_fixup_check.returncode != 0:
-                        media_fixup = 1
-                        break
-                else:
-                    if package in [
-                        "ffmpeg-libs.x86_64",
-                        "ffmpeg-libs.i686",
-                        "x264.x86_64",
-                        "x265.x86_64",
-                        "noopenh264.x86_64",
-                        "noopenh264.i686",
-                        "mesa-va-drivers.x86_64",
-                        "mesa-vdpau-drivers.x86_64",
-                    ]:
-                        if media_fixup_check.returncode == 0:
-                            media_fixup = 1
-                            break
-
         # END QUIRKS LIST
         # Check if any packages contain "kernel" or "akmod"
         if "gamescope" in os.environ.get('XDG_CURRENT_DESKTOP', '').lower():
@@ -1066,7 +989,7 @@ class QuirkFixup:
         return (
             perform_kernel_actions,
             perform_reboot_request,
-            media_fixup,
+            0, # This used to be for media fixups, now is just a placeholder so code does not break
             perform_refresh,
         )
 
