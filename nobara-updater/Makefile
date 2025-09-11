@@ -23,7 +23,6 @@ install:
 	@echo "Installing desktop file to $(DESKTOP_DIR)"
 	mkdir -p $(DESKTOP_DIR)
 	install -m 644 data/nobara-updater.desktop $(DESKTOP_DIR)/nobara-updater.desktop
-	install -m 644 data/nobara-drive-mount-manager.desktop $(DESKTOP_DIR)/nobara-drive-mount-manager.desktop
 	install -m 644 data/nobara-codec-wizard.desktop $(DESKTOP_DIR)/nobara-codec-wizard.desktop
 	install -m 644 data/nobara-rpm-installer.desktop $(DESKTOP_DIR)/nobara-rpm-installer.desktop
 
@@ -49,10 +48,6 @@ install:
 	@echo "RPM Installer $(BIN_DIR)"
 	mkdir -p $(BIN_DIR)
 	install -m 755 src/rpm_installer.py $(BIN_DIR)/nobara-rpm-installer
-
-	@echo "Drive mount manager executable file to $(BIN_DIR)"
-	mkdir -p $(BIN_DIR)
-	install -m 755 src/nobara_drive_mount_manager.py $(BIN_DIR)/nobara-drive-mount-manager
 
 symlinks:
 	@echo "Creating symlinks in $(BIN_DIR)"
