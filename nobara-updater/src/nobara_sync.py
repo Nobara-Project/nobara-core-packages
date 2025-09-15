@@ -1,10 +1,7 @@
 #!/usr/bin/python3
 import argparse
 import html
-import importlib
-import json
 import logging
-import multiprocessing
 import os
 import platform
 import pwd
@@ -15,7 +12,6 @@ import threading
 import xml.etree.ElementTree as ElementTree
 from argparse import Namespace
 from pathlib import Path
-import atexit
 
 import gi  # type: ignore[import]
 import psutil
@@ -28,13 +24,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("GLib", "2.0")
 gi.require_version("Flatpak", "1.0")
 
-from typing import Any
-
 from gi.repository import Flatpak, GLib, Gtk  # type: ignore[import]
-
-settings = Gtk.Settings.get_default()
-settings.set_property("gtk-theme-name", "adw-gtk3-dark")  # Replace with the exact theme name if different
-settings.set_property("gtk-application-prefer-dark-theme", True)
 
 #from yumex.constants import BACKEND  # type: ignore[import]
 # still need to repair DNF5, use DNF4 for now
@@ -1203,6 +1193,11 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
             self.perform_reboot_request = perform_reboot_request
             self.fp_system_updates: list[Flatpak.Ref] | None = None
             self.fp_user_updates: list[Flatpak.Ref] | None = None
+
+        settings = Gtk.Settings.get_default()
+        settings.set_property("gtk-theme-name", "adw-gtk3-dark")  # Replace with the exact theme name if different
+        settings.set_property("gtk-application-prefer-dark-theme", True)
+
 
         self.main_context = GLib.MainContext.default()
         self.set_border_width(10)
