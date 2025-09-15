@@ -1,0 +1,29 @@
+[Unit]
+Description=Nobara automount manager for %i
+PartOf=%i.mount
+After=%i.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Load per-instance env (written by your GUI at /run/nobara/%I.env)
+# Contains: RWUSER=..., UUID=..., FSTYPE=...
+EnvironmentFile=-/etc/nobara/automount/%I.env
+
+ExecStartPre=/usr/libexec/nobara-automount --reset --uuid "${UUID}"
+
+# mount (older systemd-mount: no --unit/--mkdir flags)
+ExecStart=/usr/bin/systemd-mount --no-block --type "${FSTYPE}" --options "${OPTS}" "/dev/disk/by-uuid/${UUID}" "/run/media/${RWUSER}/${UUID}"
+
+# Do your post-mount work (create shortcut, etc.)
+ExecStartPost=/usr/libexec/nobara-automount --mount --uuid "${UUID}"
+
+ExecStop=/usr/bin/systemd-umount "/run/media/${RWUSER}/${UUID}"
+
+# On stop (manual umount or toggle-off), systemd stops this service due to PartOf=%i.
+# Cleanly unmount and cleanup:
+ExecStopPost=/usr/libexec/nobara-automount --cleanup --uuid "${UUID}"
+
+[Install]
+WantedBy=multi-user.target

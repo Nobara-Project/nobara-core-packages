@@ -1,16 +1,21 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GLib, Gdk
 
-import subprocess, os, grp, getpass, sys
+import subprocess, os, grp, getpass, sys, textwrap, pwd, grp, shlex, threading, tempfile, shutil
 from pathlib import Path
 from functools import partial
+import configparser
 
 APP_TITLE = "Nobara Drive Mount Manager"
 CONFIG_PATH = "/etc/nobara/automount/enabled.conf"
+
+ENV_DIR = "/etc/nobara/automount/"
+
+RULE_TEMPLATE = ( 'ACTION=="add|change", SUBSYSTEM=="block", ' 'ENV{{ID_FS_USAGE}}=="filesystem", ' 'ENV{{ID_FS_TYPE}}!="crypto_LUKS", ' 'ENV{{ID_FS_UUID}}=="{uuid}", ' 'TAG+="systemd", ' 'ENV{{SYSTEMD_WANTS}}+="nobara-automount@%E{{ID_FS_UUID}}.service"\n' )
 
 # -----------------------------
 # Theme & CSS (pulled from Flatpost)
@@ -93,6 +98,65 @@ def relaunch_with_pkexec():
         )
 
 # -----------------------------
+# Env
+# -----------------------------
+def ensure_env_file(unit_or_instance: str, uuid: str, user: str, fstype: str, opts: str) -> str:
+    """
+    Create /etc/nobara/automount/%I.env where %I is the unescaped instance string
+    (e.g. run/media/<user>/<uuid>.mount). Accepts either:
+      - escaped unit name (e.g. run-media-user-UUID.mount)  -> will unescape to %I
+      - unescaped instance/path (e.g. run/media/user/UUID.mount or /run/media/user/UUID.mount)
+    Returns the absolute path to the env file.
+    """
+    inst = unit_or_instance.strip()
+
+    # Convert escaped unit name to an unescaped instance (%I) using systemd-escape -u
+    if inst.endswith(".mount") and not inst.startswith("/"):
+        # Looks like a unit name (run-media-… .mount)
+        try:
+            inst_unescaped = subprocess.run(
+                ["systemd-escape", "-u", inst],
+                check=True, text=True, capture_output=True
+            ).stdout.strip()
+        except Exception:
+            # Fallback best-effort: de-escape \x2d and turn dashes into slashes
+            tmp = inst[:-6]  # drop ".mount"
+            tmp = tmp.replace("\\x2d", "-")
+            inst_unescaped = "/" + tmp.replace("-", "/")
+            inst_unescaped += ".mount"
+    else:
+        # Already an instance/path; normalize leading slash and ensure trailing ".mount"
+        inst_unescaped = inst
+        if not inst_unescaped.startswith("/"):
+            inst_unescaped = "/" + inst_unescaped
+        if not inst_unescaped.endswith(".mount"):
+            inst_unescaped += ".mount"
+
+    # Build /etc/nobara/automount/%I.env (strip leading "/" so we create subdirs under ENV_DIR)
+    rel = inst_unescaped.lstrip("/")
+    env_path = Path(ENV_DIR) / f"{rel}.env"
+
+    # Ensure parent dirs exist (because %I contains slashes)
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rw_uid = pwd.getpwnam(user).pw_uid
+    rw_gid = pwd.getpwnam(user).pw_gid
+
+    # Write the env file (include RWUSER and UUID)
+    tmp = env_path.with_suffix(env_path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(f"RWUSER={user}\n")
+        f.write(f"RW_UID={rw_uid}\n")
+        f.write(f"RW_GID={rw_gid}\n")
+        f.write(f"UUID={uuid}\n")
+        f.write(f"FSTYPE={fstype}\n")
+        f.write(f"OPTS={opts}\n")
+    os.replace(tmp, env_path)
+    os.chmod(env_path, 0o644)
+
+    return str(env_path)
+
+# -----------------------------
 # Core logic
 # -----------------------------
 def check_wheel_group(status_fn):
@@ -138,28 +202,83 @@ def set_partition_enabled(partition, enabled):
         raise RuntimeError(f"Error updating config: {e}")
 
 def get_partitions():
+    """
+    Returns:
+      unmounted: (path, fstype, uuid, size_str, model_str)
+      mounted:   (path, fstype, uuid, mountpoint, size_str, model_str)
+    """
     try:
+        # -P for key="value" (handles spaces), -b for bytes
         out = subprocess.run(
-            ["lsblk", "-rno", "NAME,UUID,FSTYPE,MOUNTPOINT"],
-            capture_output=True, text=True
+            ['lsblk', '-b', '-P', '-o', 'NAME,PKNAME,UUID,FSTYPE,SIZE,MODEL,MOUNTPOINT'],
+            capture_output=True, text=True, check=True
         ).stdout
-        unmounted, mounted = [], []
+
+        rows = []
         for line in out.splitlines():
-            parts = line.split()
-            if len(parts) not in (3, 4):
+            if not line.strip():
                 continue
-            name, uuid, fstype = parts[0], parts[1], parts[2]
-            name_valid = (not name.startswith("loop")) and ("p" in name or "sd" in name)
-            fs_valid = fstype in ("ext3","ext4","exfat","xfs","btrfs","ntfs","f2fs")
-            if not (name_valid and fs_valid):
+            fields = {}
+            for tok in shlex.split(line):
+                if '=' in tok:
+                    k, v = tok.split('=', 1)
+                    fields[k] = v.strip('"')
+            rows.append(fields)
+
+        # Build a map: NAME -> MODEL for parent devices
+        model_by_name = {}
+        for f in rows:
+            name  = f.get('NAME') or ''
+            model = (f.get('MODEL') or '').strip()
+            if model:
+                model_by_name[name] = model
+
+        unmounted, mounted = [], []
+
+        for f in rows:
+            name       = f.get('NAME') or ''
+            pkname     = f.get('PKNAME') or ''
+            uuid       = f.get('UUID') or ''
+            fstype     = (f.get('FSTYPE') or '').lower()
+            size_bytes = f.get('SIZE') or '0'
+            mnt        = f.get('MOUNTPOINT') or ''
+            model      = (f.get('MODEL') or '').strip()
+
+            if not _is_partition_name(name):
                 continue
-            if len(parts) == 3:
-                unmounted.append((f"/dev/disk/by-uuid/{uuid}", fstype, uuid))
+            if not uuid:
+                continue
+            if fstype and fstype not in ALLOWED_FS:
+                continue
+
+            # Inherit model from parent if missing
+            if not model:
+                model = model_by_name.get(pkname, '') or model_by_name.get(name, '')
+            model_str = model if model else "Unknown"
+
+            size_str = human_size(size_bytes)
+            devpath  = f"/dev/disk/by-uuid/{uuid}"
+
+            if mnt:
+                mounted.append((devpath, fstype, uuid, mnt, size_str, model_str))
             else:
-                mountpoint = parts[3]
-                mounted.append((f"/dev/disk/by-uuid/{uuid}", fstype, uuid, mountpoint))
+                unmounted.append((devpath, fstype, uuid, size_str, model_str))
+
         return unmounted, mounted
-    except Exception:
+
+    except Exception as e:
+        try:
+            self.status(f"Failed to scan partitions: {e}")
+        except Exception:
+            pass
+        return [], []
+
+    except Exception as e:
+        # If you have a status() method, surface the error; otherwise silently return empties.
+        try:
+            self.status(f"Failed to scan partitions: {e}")
+        except Exception:
+            pass
         return [], []
 
 def get_mountpoint_for_uuid(uuid):
@@ -181,6 +300,43 @@ def get_mountpoint_for_uuid(uuid):
         pass
     return None
 
+def find_desktop_name_for_mount(mountpoint: str) -> str | None:
+    """
+    Return the Name= from a .desktop file that refers to this mountpoint, or None.
+    We check Desktop Entry fields Path=, URL= (file://), and Exec= containing the mountpoint.
+    """
+    user = os.environ.get("SUDO_USER")
+    user_home = Path(pwd.getpwnam(user).pw_dir)
+    candidates = [
+        user_home / "Desktop",
+    ]
+
+    for base in candidates:
+        try:
+            if not base.is_dir():
+                continue
+            for desktop in base.glob("*.desktop"):
+                cp = configparser.ConfigParser(interpolation=None)
+                try:
+                    cp.read(desktop, encoding="utf-8")
+                except Exception:
+                    continue
+                if "Desktop Entry" not in cp:
+                    continue
+                de = cp["Desktop Entry"]
+                name = de.get("Name")
+                url  = de.get("URL")
+
+                # URL=file://... exact match
+                if mountpoint in str(url):
+                    return str(name)
+
+        except Exception:
+            # ignore unreadable entries/dirs
+            continue
+
+    return None
+
 def cleanup_xhost():
     try:
         subprocess.run(["xhost", "-si:localuser:root"],
@@ -190,6 +346,106 @@ def cleanup_xhost():
         )
     except Exception:
         pass
+
+ALLOWED_FS = {
+    "ext3","ext4","exfat","xfs","btrfs","ntfs","ntfs3","f2fs","vfat","fat","fat32"
+}
+
+def human_size(nbytes_str):
+    try:
+        n = float(nbytes_str)
+    except Exception:
+        return "—"
+    units = ["B","KiB","MiB","GiB","TiB","PiB"]
+    i = 0
+    while n >= 1024 and i < len(units)-1:
+        n /= 1024.0
+        i += 1
+    return f"{n:.1f} {units[i]}" if i >= 2 else f"{int(n)} {units[i]}"
+
+def _is_partition_name(name: str) -> bool:
+    return (
+        name.startswith(("sd", "nvme", "mmcblk"))
+        and not name.startswith(("loop", "dm-"))
+    )
+
+def compute_mount_opts(uuid: str, fstype: str, rw_uid: int, rw_gid: int, rwuser: str):
+    """
+    Returns (fstype_out, opts) for systemd-mount.
+    Mirrors the old bash case, with safe btrfs probing for subvol=@.
+    """
+    devpath = f"/dev/disk/by-uuid/{uuid}"
+    fs = fstype or ""
+
+    # normalize ntfs -> ntfs-3g for systemd-mount
+    if fs == "ntfs":
+        fs_out = "ntfs-3g"
+    else:
+        fs_out = fs
+
+    # defaults
+    base = "rw,noatime,lazytime"
+
+    if fs in ("ext4", "xfs", "ext3", "ext2"):
+        opts = base
+
+    elif fs == "f2fs":
+        # ensure f2fs is listed in /etc/filesystems (optional parity)
+        try:
+            need = True
+            if os.path.exists("/etc/filesystems"):
+                with open("/etc/filesystems", "r", encoding="utf-8", errors="ignore") as f:
+                    need = ("f2fs" not in f.read().split())
+            if need:
+                with open("/etc/filesystems", "a") as f:
+                    f.write("f2fs\n")
+        except Exception:
+            pass
+        opts = base + ",compress_algorithm=zstd,compress_chksum,atgc,gc_merge"
+
+    elif fs == "btrfs":
+        opts = base + ",compress-force=zstd,space_cache=v2,autodefrag,ssd_spread"
+
+        # Probe for a default subvolume '@' safely
+        tmpmp = None
+        try:
+            tmpmp = tempfile.mkdtemp(prefix=".btrfs_probe_", dir=f"/run/media/{rwuser}")
+            # read-only probe mount
+            subprocess.run(["mount", "-t", "btrfs", "-o", "ro", devpath, tmpmp],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            sub = "@"
+            # if @ exists and is a subvolume, include it
+            if os.path.isdir(os.path.join(tmpmp, sub)):
+                # btrfs subvolume show returns 0 for a subvolume
+                if subprocess.run(["btrfs", "subvolume", "show", os.path.join(tmpmp, sub)],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+                    opts += f",subvol={sub}"
+        except Exception:
+            pass
+        finally:
+            # best-effort cleanup
+            try:
+                subprocess.run(["umount", "-l", tmpmp], check=False,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+            if tmpmp:
+                try: os.rmdir(tmpmp)
+                except Exception: pass
+
+    elif fs == "vfat":
+        opts = f"{base},uid={rw_uid},gid={rw_gid},utf8=1"
+
+    elif fs == "exfat":
+        opts = f"{base},uid={rw_uid},gid={rw_gid}"
+
+    elif fs == "ntfs":  # (handled via fs_out above → ntfs-3g)
+        opts = f"{base},uid={rw_uid},gid={rw_gid},big_writes,umask=0022"
+
+    else:
+        opts = base
+
+    return fs_out or fstype, opts
 
 # -----------------------------
 # UI helpers (Flatpost-style)
@@ -224,6 +480,9 @@ class MainWindow(Gtk.Window):
         self.set_icon_name("drive-harddisk")
         self.sidebar_rows = {}
         self.enabled = set()
+
+        self._inflight = set()          # partitions currently being changed
+        self._cooldown_ms = 1500        # adjust to taste (1.5s)
 
         # top bar (matches Flatpost bar)
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -338,6 +597,17 @@ class MainWindow(Gtk.Window):
         self.stack.connect("notify::visible-child-name", self.on_stack_changed)
 
     # ------------- behavior -------------
+    def _refresh_when_mounted(self, uuid, attempts=10, interval_ms=150):
+        """Poll for the new mountpoint; refresh as soon as it exists."""
+        def _tick(count):
+            mp = get_mountpoint_for_uuid(uuid)
+            if mp or count <= 0:
+                self.refresh()
+                return False  # stop polling
+            GLib.timeout_add(interval_ms, _tick, count - 1)
+            return False
+        GLib.timeout_add(0, _tick, attempts)
+
     def on_stack_changed(self, *_):
         # whenever stack page changes, update the sidebar highlight
         name = self.stack.get_visible_child_name()
@@ -368,26 +638,50 @@ class MainWindow(Gtk.Window):
 
         self.enabled = read_enabled_partitions()
         unmounted, mounted = get_partitions()
-        mp_by_uuid = {uuid: mnt for (_p, _fs, uuid, mnt) in mounted}
+        mp_by_uuid = {uuid: mnt for (_p, _fs, uuid, mnt, _sz, _model) in mounted}
 
-        to_display = unmounted + [(p, fs, uuid) for p, fs, uuid, _ in mounted if p in self.enabled]
-
+        # normalize to (path, fstype, uuid, size, model) for display
+        to_display = list(unmounted) + [
+            (p, fs, uuid, sz, model)
+            for (p, fs, uuid, _mnt, sz, model) in mounted
+            if p in self.enabled
+        ]
+        to_display.sort(key=lambda t: (t[0] not in self.enabled, t[0]))
         if to_display:
-            for partition, fstype, uuid in to_display:
+            self.partition_info = {}
+            for partition, fstype, uuid, size_str, model_str in to_display:
+                self.partition_info[partition] = {
+                    "fstype": fstype,
+                    "uuid": uuid,
+                    "size": size_str,
+                    "model": model_str,
+                }
                 row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-
                 col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+
                 title = Gtk.Label(label=partition, xalign=0)
-                sub_fs = Gtk.Label(label=f"Filesystem: {fstype}", xalign=0)
+
+                sub_fs = Gtk.Label(label=f"Filesystem: {fstype} • Size: {size_str}", xalign=0)
                 sub_fs.get_style_context().add_class("dim-label")
+
+                sub_model = Gtk.Label(label=f"Model: {model_str}", xalign=0)
+                sub_model.get_style_context().add_class("dim-label")
+
                 col.pack_start(title, False, False, 0)
                 col.pack_start(sub_fs, False, False, 0)
+                col.pack_start(sub_model, False, False, 0)
 
-                # NEW: show mount location ONLY if currently mounted
                 if uuid in mp_by_uuid:
+                    mountpoint = mp_by_uuid[uuid]
                     sub_mp = Gtk.Label(label=f"Mount location: {mp_by_uuid[uuid]} (mounted)", xalign=0)
                     sub_mp.get_style_context().add_class("dim-label")
                     col.pack_start(sub_mp, False, False, 0)
+                    # add Name= from any desktop shortcut that points to this mount
+                    desktop_name = find_desktop_name_for_mount(mountpoint)
+                    if desktop_name:
+                        sub_dn = Gtk.Label(label=f"Desktop shortcut: {desktop_name}", xalign=0)
+                        sub_dn.get_style_context().add_class("dim-label")
+                        col.pack_start(sub_dn, False, False, 0)
 
                 sw = Gtk.Switch()
                 sw.set_active(partition in self.enabled)
@@ -395,9 +689,13 @@ class MainWindow(Gtk.Window):
                 sw.set_valign(Gtk.Align.CENTER)
                 sw.set_halign(Gtk.Align.CENTER)
                 sw.set_hexpand(False); sw.set_vexpand(False)
-                sw.connect("notify::active", partial(self.on_switch_toggled, partition))
+                hid = sw.connect("state-set", partial(self.on_switch_state_set, partition))
+                sw._state_set_hid = hid
 
                 row.pack_start(col, True, True, 0)
+                # Add a separator line right after the row
+                sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+                self.parts_list.pack_start(sep, False, True, 4)  # extra spacing of 4px
                 row.pack_end(sw, False, False, 0)
                 self.parts_list.pack_start(row, False, False, 0)
         else:
@@ -405,106 +703,214 @@ class MainWindow(Gtk.Window):
 
 
         any_notice = False
-        for partition, fstype, _uuid, mnt in mounted:
-            if partition not in self.enabled:
-                any_notice = True
-                self.notices_box.pack_start(
-                    Gtk.Label(label=f"{partition} — Type: {fstype} — Mounted at: {mnt}", xalign=0),
-                    False, False, 0
-                )
+        # mounted tuples are: (path, fstype, uuid, mnt, size_str, model_str)
+        for partition, fstype, _uuid, mnt, size_str, model_str in mounted:
+            if partition in self.enabled:
+                continue  # skip ones managed by automount
+
+            any_notice = True
+
+            # separator before each entry
+            sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+            self.notices_box.pack_start(sep, False, True, 6)
+
+            row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+
+            # Title (path)
+            title = Gtk.Label(label=partition, xalign=0)
+
+            # FS + Size
+            fs_sz = Gtk.Label(label=f"Filesystem: {fstype} • Size: {size_str}", xalign=0)
+            fs_sz.get_style_context().add_class("dim-label")
+
+            # Model
+            model_lbl = Gtk.Label(label=f"Model: {model_str}", xalign=0)
+            model_lbl.get_style_context().add_class("dim-label")
+
+            # Mountpoint
+            mp_lbl = Gtk.Label(label=f"Mounted at: {mnt}", xalign=0)
+            mp_lbl.get_style_context().add_class("dim-label")
+
+            row.pack_start(title, False, False, 0)
+            row.pack_start(fs_sz, False, False, 0)
+            row.pack_start(model_lbl, False, False, 0)
+            row.pack_start(mp_lbl, False, False, 0)
+
+            self.notices_box.pack_start(row, False, False, 6)
+
         if not any_notice:
             self.notices_box.pack_start(Gtk.Label(label="No conflicts detected.", xalign=0), False, False, 0)
 
         self.parts_list.show_all()
         self.notices_box.show_all()
 
-    def on_switch_toggled(self, partition, switch, _pspec):
-        active = switch.get_active()
+    def _show_busy(self, text="Applying changes, please wait…"):
+        dlg = Gtk.Dialog(
+            title=None, transient_for=self, modal=True, destroy_with_parent=True,
+            flags=Gtk.DialogFlags.MODAL
+        )
+        box = dlg.get_content_area()
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        spinner = Gtk.Spinner(); spinner.start()
+        label = Gtk.Label(label=text, xalign=0)
+        row.pack_start(spinner, False, False, 0)
+        row.pack_start(label, True, True, 0)
+        box.set_border_width(12)
+        box.pack_start(row, True, True, 0)
+        dlg.set_resizable(False)
+        dlg.show_all()
+
+        # ensure it renders before we block on subprocess.run()
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+
+        return dlg, spinner
+
+    def _close_busy(self, dlg, spinner):
         try:
-            set_partition_enabled(partition, active)
-            sudo_user = os.environ.get("SUDO_USER")
-            if active:
-                # try to unmount it first in case it's already mounted or a bad unmount previously occurred
-                uuid = partition.rsplit("/", 1)[-1]
-                mp = get_mountpoint_for_uuid(uuid)
+            spinner.stop()
+        except Exception:
+            pass
+        try:
+            dlg.destroy()
+        except Exception:
+            pass
 
-                # Remove the mount folder if it is the expected temp dir
-                user = os.environ.get("SUDO_USER") or getpass.getuser()
-                expected_root = os.path.join("/run/media", user)
-                expected_path = os.path.join(expected_root, uuid)
+    def on_switch_state_set(self, partition, switch, requested_state: bool):
+        """
+        requested_state=True => user asked to enable
+        requested_state=False => user asked to disable
+        Return True to prevent GTK from toggling automatically.
+        """
+        if partition in self._inflight:
+            return
 
-                if mp:
-                    # Unmount the mountpoint (lazy unmount stays fine)
-                    subprocess.run(["umount", "-l", mp], check=True)
+        self._inflight.add(partition)
 
-                    # Only remove if it’s exactly /run/media/<user>/<UUID> (safety guard)
-                    if os.path.normpath(mp) == os.path.normpath(expected_path):
-                        try:
-                            os.rmdir(mp)  # should be empty after unmount
-                        except OSError:
-                            # If something re-created it or left files, leave it alone
-                            pass
-                    self.status(f"Partition {partition} unmounted from {mp}.")
-                else:
-                    if os.path.ismount(expected_path):
-                        subprocess.run(["umount", "-l", expected_path], check=True)
-                        # Only remove if it’s exactly /run/media/<user>/<UUID> (safety guard)
+        uuid = partition.rsplit("/", 1)[-1]
+        sudo_user = os.environ.get("SUDO_USER") or getpass.getuser()
+        info = self.partition_info.get(partition, {})
+        fstype = info.get("fstype", "")
+        switch.set_sensitive(True)  # or False if you want to block while working
+        mountpoint = f"/run/media/{sudo_user}/{uuid}"
 
-                        try:
-                            os.rmdir(expected_path)  # should be empty after unmount
-                        except OSError:
-                            # If something re-created it or left files, leave it alone
-                            pass
-                        self.status(f"Partition {partition} unmounted from {expected_path}.")
+        instance = subprocess.run(
+            ["systemd-escape", "-p", "--suffix=mount", mountpoint],
+            check=True,
+            text=True,
+            capture_output=True
+        ).stdout.strip()
+
+        # Prevent repeated clicks on this switch
+        switch.set_sensitive(False)
+        busy, spin = self._show_busy("Applying changes, please wait…")
+
+        try:
+            set_partition_enabled(partition, requested_state)
+
+            if requested_state:
+                rw_uid = pwd.getpwnam(sudo_user).pw_uid
+                rw_gid = grp.getgrnam(sudo_user).gr_gid if hasattr(grp, "getgrnam") else rw_uid
+                fstype_out, opts = compute_mount_opts(uuid, fstype, rw_uid, rw_gid, sudo_user)
+
+                ensure_env_file(instance, uuid, sudo_user, fstype_out, opts)
+
+                # Make the .mount WANT the helper (creates wants/ symlink)
+                subprocess.run(
+                    ["systemctl", "add-wants", instance, f"nobara-automount@{instance}.service"],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+
+                # Enable and start the helper for this instance
+                subprocess.run(
+                    ["systemctl", "enable", f"nobara-automount@{instance}.service"],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+
+                # Enable and start the helper for this instance
+                subprocess.run(
+                    ["systemctl", "start", f"nobara-automount@{instance}.service"],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+
+                self.status(f"Enabled automount for {partition}.")
+            else:
+                # Enable and start the helper for this instance
+                subprocess.run(
+                    ["systemctl", "stop", f"nobara-automount@{instance}.service"],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
 
                 subprocess.run(
-                    ["/usr/libexec/nobara-automount", sudo_user],
-                    check=True, env={**os.environ, "USER": sudo_user}
+                    ["systemctl", "disable", f"nobara-automount@{instance}.service"],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
                 )
-                self.status(f"Partition {partition} mounted.")
-            else:
-                # try to unmount it first in case it's already mounted or a bad unmount previously occurred
-                uuid = partition.rsplit("/", 1)[-1]
-                mp = get_mountpoint_for_uuid(uuid)
 
-                # Remove the mount folder if it is the expected temp dir
-                user = os.environ.get("SUDO_USER") or getpass.getuser()
-                expected_root = os.path.join("/run/media", user)
-                expected_path = os.path.join(expected_root, uuid)
+                subprocess.run(
+                    ["systemctl", "remove-wants", instance, f"nobara-automount@{instance}.service"],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
 
-                if mp:
-                    # Unmount the mountpoint (lazy unmount stays fine)
-                    subprocess.run(["umount", "-l", mp], check=True)
+                try:
+                    os.remove(f"/etc/nobara/automount/run/media/{sudo_user}/{uuid}.mount.env")
+                except FileNotFoundError:
+                    pass
 
-                    # Only remove if it’s exactly /run/media/<user>/<UUID> (safety guard)
-                    if os.path.normpath(mp) == os.path.normpath(expected_path):
-                        try:
-                            os.rmdir(mp)  # should be empty after unmount
-                        except OSError:
-                            # If something re-created it or left files, leave it alone
-                            pass
-                    self.status(f"Partition {partition} unmounted from {mp}.")
-                else:
-                    if os.path.ismount(expected_path):
-                        subprocess.run(["umount", "-l", expected_path], check=True)
-                        # Only remove if it’s exactly /run/media/<user>/<UUID> (safety guard)
+                self.status(f"Disabled automount for {partition}.")
 
-                        try:
-                            os.rmdir(expected_path)  # should be empty after unmount
-                        except OSError:
-                            # If something re-created it or left files, leave it alone
-                            pass
-                        self.status(f"Partition {partition} unmounted from {expected_path}.")
+            # === VISUAL STATE ===
+            # Prevent re-entry when we set_active() ourselves
+            if hasattr(switch, "_state_set_hid"):
+                switch.handler_block(switch._state_set_hid)
+
+            switch.set_active(requested_state)
+            # <-- color updates immediately
+
+            if hasattr(switch, "_state_set_hid"):
+                switch.handler_unblock(switch._state_set_hid)
+
+            # Rebuild list so "Mount location:" and "Desktop shortcut:" appear/disappear now
+            # If you want to keep UI snappy, schedule it on idle:
+            GLib.idle_add(self.refresh)
+
+            return True
 
         except PermissionError:
-            self.status("Error: Permission denied. Run as administrator."); switch.set_active(not active)
-        except FileNotFoundError:
-            if active:
-                with open(CONFIG_PATH, "w") as f: f.write(partition + "\n")
+            self.status("Error: Permission denied. Run as administrator.")
+            # Do NOT flip the switch here; leaving it as-is keeps UX honest
+
         except subprocess.CalledProcessError as e:
-            self.status(f"Command failed: {e}"); switch.set_active(not active)
+            self.status(f"Command failed: {e}")
+            print(f"{e}")
+
         except Exception as e:
-            self.status(str(e)); switch.set_active(not active)
+            self.status(f"Error: {e}")
+            # Stop GTK from toggling automatically; we set it ourselves on success
+            return True
+
+        finally:
+            # Close busy UI and re-enable after a short cooldown
+            self._close_busy(busy, spin)
+
+            def _reenable():
+                try:
+                    switch.set_sensitive(True)
+                finally:
+                    self._inflight.discard(partition)
+                return False
+            GLib.timeout_add(self._cooldown_ms, _reenable)
 
     def status(self, text):
         self.status_label.set_text(text)

@@ -2,6 +2,7 @@ BIN_DIR := $(DESTDIR)/usr/bin
 DESKTOP_DIR := $(DESTDIR)/usr/share/applications
 POLKIT_DIR := $(DESTDIR)/usr/share/polkit-1/actions
 LIBEXEC_DIR := $(DESTDIR)/usr/libexec
+SERVICE_DIR := $(DESTDIR)/usr/lib/systemd/system
 LICENSE_DIR := $(DESTDIR)/usr/share/licenses/nobara-automount
 
 .PHONY: all install symlinks clean
@@ -21,6 +22,10 @@ install:
 	mkdir -p $(LIBEXEC_DIR)
 	install -m 755 data/nobara-automount/usr/libexec/nobara-automount $(LIBEXEC_DIR)/nobara-automount
 
+	@echo "Installing automount service unit files to $(SERVICE_DIR)"
+	mkdir -p $(SERVICE_DIR)
+	install -m 755 data/nobara-automount/usr/lib/systemd/system/nobara-automount@.service $(SERVICE_DIR)/nobara-automount@.service
+
 	@echo "Installing license file to $(LICENSE_DIR)"
 	mkdir -p $(LICENSE_DIR)
 	install -m 644 licenses/LICENSE $(LICENSE_DIR)/LICENSE
@@ -29,11 +34,6 @@ install:
 	mkdir -p $(BIN_DIR)
 	install -m 755 src/nobara_drive_mount_manager.py $(BIN_DIR)/nobara-drive-mount-manager
 
-symlinks:
-	@echo "Creating symlinks in $(BIN_DIR)"
-	ln -sf /usr/bin/nobara-updater $(BIN_DIR)/nobara-sync
-	ln -sf /usr/share/nobara-codec-wizard/main.py $(BIN_DIR)/nobara-codec-wizard
-
 clean:
 	@echo "Cleaning up installed files and symlinks"
 	rm -rf $(TARGET_DIR)
@@ -41,4 +41,5 @@ clean:
 	rm -rf $(DESKTOP_DIR)
 	rm -rf $(POLKIT_DIR)
 	rm -rf $(LIBEXEC_DIR)
+	rm -rf $(SERVICE_DIR)
 	rm -rf $(LICENSE_DIR)
