@@ -13,8 +13,6 @@ install_no_build:
 	chmod 755 $(DESTDIR)/usr/bin/nobara-welcome
 	cp -vf data/bin/nobara-welcome-autostart $(DESTDIR)/usr/bin/
 	chmod 755 $(DESTDIR)/usr/bin/nobara-welcome-autostart
-	cp -vf data/bin/nobara-resolve-wizard $(DESTDIR)/usr/bin/
-	chmod 755 $(DESTDIR)/usr/bin/nobara-resolve-wizard
 	mkdir -p $(DESTDIR)/usr/share/glib-2.0/schemas/
 	mkdir -p $(DESTDIR)/usr/share/
 	mkdir -p $(DESTDIR)/usr/lib/nobara/nobara-welcome/
@@ -39,8 +37,6 @@ install:
 	chmod 755 $(DESTDIR)/usr/bin/nobara-welcome
 	cp -vf data/bin/nobara-welcome-autostart $(DESTDIR)/usr/bin/
 	chmod 755 $(DESTDIR)/usr/bin/nobara-welcome-autostart
-	cp -vf data/bin/nobara-resolve-wizard $(DESTDIR)/usr/bin/
-	chmod 755 $(DESTDIR)/usr/bin/nobara-resolve-wizard
 	mkdir -p $(DESTDIR)/usr/share/glib-2.0/schemas/
 	mkdir -p $(DESTDIR)/usr/share/
 	mkdir -p $(DESTDIR)/usr/lib/nobara/nobara-welcome/

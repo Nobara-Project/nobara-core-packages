@@ -1,0 +1,48 @@
+#!/bin/python3
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+import shutil
+
+LIBDIR = Path("/opt/resolve/libs")
+RUNTIME_DIR = Path("/opt/nobara-resolve-runtime")
+
+# Check if the correct number of arguments were provided
+if len(sys.argv) != 2:
+    print("Usage: python script.py <run_file>")
+    sys.exit(1)
+
+run_file = sys.argv[1]
+
+# Step 1: Install necessary packages as root
+subprocess.run(["dnf", "install", "-y", "rocm-meta", "nobara-resolve-runtime", "zlib", "libxcrypt-compat"], check=True)
+
+# Step 2: Remove old version if it exists
+os.chmod(run_file, 0o775)
+subprocess.run(["bash", "-c", f"SKIP_PACKAGE_CHECK=1 {run_file} -u -y -a"], check=True)
+
+# Step 3: Run the .run file as the user
+subprocess.run(["bash", "-c", f"SKIP_PACKAGE_CHECK=1 {run_file} -i -r -y -a"], check=True)
+
+# Step 4: Fix broken resolve-shipped libraries
+# Remove the resolve-shipped libs that conflict
+for pattern in ("libglib-*", "libgobject-*", "libgmodule-*", "libgio-*"):
+    for p in LIBDIR.glob(pattern):
+        try:
+            if p.is_dir():
+                shutil.rmtree(p)  # just in case a directory matches
+            else:
+                p.unlink()
+        except FileNotFoundError:
+            pass  # already gone
+        except PermissionError as e:
+            print(f"Permission error removing {p}: {e}")
+
+# Copy the system-provided .so.* files into Resolve's lib directory
+for sofile in RUNTIME_DIR.glob("*.so.*"):
+    try:
+        shutil.copy2(sofile, LIBDIR / sofile.name)
+    except PermissionError as e:
+        print(f"Permission error copying {sofile}: {e}")
