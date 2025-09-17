@@ -11,6 +11,8 @@ RemainAfterExit=yes
 # Contains: RWUSER=..., UUID=..., FSTYPE=...
 EnvironmentFile=-/etc/nobara/automount/%I.env
 
+ExecCondition=/usr/bin/test -e "/dev/disk/by-uuid/${UUID}"
+
 ExecStartPre=/usr/libexec/nobara-automount --reset --uuid "${UUID}"
 
 # mount (older systemd-mount: no --unit/--mkdir flags)
