@@ -121,17 +121,6 @@ if [[ ${USER:-} != "liveuser" ]]; then
     local mp="/run/media/${rwuser}/${UUID_FILTER}"
     local unit="$(systemd-escape -p --suffix=mount "$mp")"
 
-    #mountpoint -q "$mp" && systemd-umount "$mp" 2>/dev/null || true
-    #mountpoint -q "$mp" && umount -l "$mp" 2>/dev/null || true
-
-    local pids
-    pids=$(fuser -m "$mp" 2>/dev/null | tr ' ' '\n' | sed '/^$/d') || true
-    [ -n "$pids" ] && kill -TERM $pids 2>/dev/null || true
-    sleep 0.3
-    pids=$(fuser -m "$mp" 2>/dev/null | tr ' ' '\n' | sed '/^$/d') || true
-    [ -n "$pids" ] && kill -KILL $pids 2>/dev/null || true
-
-    #systemctl stop "$unit" || true
     systemctl reset-failed "$unit" 2>/dev/null || true
 
     rm -f "/run/systemd/transient/$unit" 2>/dev/null || true
