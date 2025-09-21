@@ -1,5 +1,5 @@
 [Unit]
-Description=Nobara automount manager for %i
+Description=Nobara automount manager for %I
 PartOf=%i.mount
 After=%i.mount
 
@@ -19,7 +19,7 @@ ExecStartPre=/usr/libexec/nobara-automount --reset --uuid "${UUID}"
 ExecStart=/usr/bin/systemd-mount --no-block --type "${FSTYPE}" --options "${OPTS}" "/dev/disk/by-uuid/${UUID}" "/run/media/${RWUSER}/${UUID}"
 
 # Do your post-mount work (create shortcut, etc.)
-ExecStartPost=/usr/libexec/nobara-automount --mount --uuid "${UUID}"
+ExecStartPost=/usr/libexec/nobara-automount --mount --uuid "${UUID}" --fstype "${FSTYPE}"
 
 ExecStop=/usr/bin/systemd-umount "/run/media/${RWUSER}/${UUID}"
 

@@ -18,6 +18,7 @@ if [[ ${USER:-} != "liveuser" ]]; then
   DO_CLEANUP=0
   MOUNTPOINT=""
   UNIT_ARG=""
+  FSTYPE=""
   DO_PRE_RESET=0
 
   # NEW: prefer RWUSER env (written by your GUI)
@@ -30,6 +31,7 @@ if [[ ${USER:-} != "liveuser" ]]; then
       --mountpoint) UNIT_ARG="$2"; shift 2;;
       --mount) DO_CLEANUP=0; shift;;
       --cleanup) DO_CLEANUP=1; shift;;
+      --fstype) FSTYPE="$2"; shift 2;;
       --reset) DO_PRE_RESET=1; shift;;
       *)  # keep compatibility if GUI ever passes the user positionally
           if [[ -z "${rwuser}" || "${rwuser}" == "root" ]]; then rwuser="$1"; fi
@@ -55,17 +57,37 @@ if [[ ${USER:-} != "liveuser" ]]; then
   if [[ "$DO_CLEANUP" == "1" ]]; then
     [[ -z "$UUID_FILTER" ]] && exit 0
     mp="/run/media/${rwuser}/${UUID_FILTER}"
-    desktop_dir="$(getent passwd "$rwuser" | cut -d: -f6)/Desktop"
+    if [[ -f /etc/nobara/automount/desktop_shortcuts.conf ]]; then
+      if ! grep -Fq "$UUID_FILTER" /etc/nobara/automount/desktop_shortcuts.conf; then
+        log "Skipping desktop shortcut creation for $mp not in desktop_shortcuts.conf"
+        [[ -z "$UUID_FILTER" ]] && exit 0
+        desktop_dir="$(getent passwd "$rwuser" | cut -d: -f6)/Desktop"
 
-    # loop over all .desktop files and check contents for UUID_FILTER
-    for f in "$desktop_dir"/*.desktop; do
-        [[ -e "$f" ]] || continue   # skip if no matches
-        if grep -q "$UUID_FILTER" "$f"; then
-            rm -f "$f"
-            break   # stop after first match (remove this if you want to delete all matches)
-        fi
-    done
-    rmdir "$mp" 2>/dev/null || true
+        # loop over all .desktop files and check contents for UUID_FILTER
+        for f in "$desktop_dir"/*.desktop; do
+            [[ -e "$f" ]] || continue   # skip if no matches
+            if grep -q "$UUID_FILTER" "$f"; then
+                rm -f "$f"
+            fi
+        done
+      fi
+    else
+      log "desktop_shortcut.conf not found; skipping desktop shortcut creation for $mp"
+      [[ -z "$UUID_FILTER" ]] && exit 0
+      desktop_dir="$(getent passwd "$rwuser" | cut -d: -f6)/Desktop"
+
+      # loop over all .desktop files and check contents for UUID_FILTER
+      for f in "$desktop_dir"/*.desktop; do
+          [[ -e "$f" ]] || continue   # skip if no matches
+          if grep -q "$UUID_FILTER" "$f"; then
+              rm -f "$f"
+              break   # stop after first match (remove this if you want to delete all matches)
+          fi
+      done
+    fi
+    if ! mountpoint -q -- "$mp" && [ -d "$mp" ] && [ -z "$(ls -A -- "$mp")" ]; then
+        rmdir -- "$mp" 2>/dev/null || true
+    fi
     exit 0
   fi
 
@@ -73,48 +95,60 @@ if [[ ${USER:-} != "liveuser" ]]; then
   RW_GID="$(id -g "$rwuser")"
   log "Mounts will be owned by ${rwuser} (uid=${RW_UID}, gid=${RW_GID})."
 
-  get_mount_opts() {
-    local fstype="$1"
-    local devpath="$2"
-    local opts=""
+  post_mount_fixup_unix_fs() {
+    log "Setting mount permissions for ext*/btrfs/xfs"
+    local dev="/dev/disk/by-uuid/${UUID_FILTER}"
+    # Find the live mountpoint for this device (fallback to your default path)
+    local mp
+    mp="$(findmnt -n -o TARGET --source "$dev" 2>/dev/null)" || true
+    [[ -z "$mp" ]] && mp="/run/media/${rwuser}/${UUID_FILTER}"
+    log "Mount point reported: $mp"
+    # Wait up to 30s for the mountpoint to appear
+    for i in {1..30}; do
+      if mountpoint -q -- "$mp"; then
+        break
+      fi
+      sleep 1
+    done
+
+    # If still not mounted after 5s, nothing to do
+    if ! mountpoint -q -- "$mp"; then
+      log "Error: No partition mounted at $mp"
+      return 1
+    fi
+    log "Mount point found: $mp"
+    # Detect filesystem type actually mounted there
+    local fstype
+    fstype="${FSTYPE}" || true
+    [[ -z "$fstype" ]] && fstype="$(blkid -o value -s TYPE "$dev" 2>/dev/null)" || true
+    log "Found fstype: $fstype"
     case "$fstype" in
-      ext4|xfs|ext3|ext2)
-        opts="rw,noatime,lazytime"
-        ;;
-      f2fs)
-        if [[ ! -f /etc/filesystems ]] || ! grep -q '\bf2fs\b' /etc/filesystems; then
-          echo "f2fs" >> /etc/filesystems
+      ext3|ext4|btrfs|xfs)
+        # Resolve UID/GID
+        local uid gid
+        if [[ -n "$RW_UID" && -n "$RW_GID" ]]; then
+          uid="$RW_UID"; gid="$RW_GID"
+        else
+          uid="$(id -u "$RWUSER")"; gid="$(id -g "$RWUSER")"
         fi
-        opts="rw,noatime,lazytime,compress_algorithm=zstd,compress_chksum,atgc,gc_merge"
-        ;;
-      btrfs)
-        opts="rw,noatime,lazytime,compress-force=zstd,space_cache=v2,autodefrag,ssd_spread"
-        local tmpmp="/run/media/${rwuser}/.btrfs_probe.$$"
-        mkdir -p "$tmpmp"
-        if mount -t btrfs -o ro "$devpath" "$tmpmp" 2>/dev/null; then
-          local sub="@"
-          if [[ -d "$tmpmp/$sub" ]] && btrfs subvolume show "$tmpmp/$sub" &>/dev/null; then
-            opts+=",subvol=${sub}"
-          fi
-          umount -l "$tmpmp" || true
+
+        # If already owned correctly, skip
+        local cur_owner
+        cur_owner="$(stat -c '%u:%g' -- "$mp" 2>/dev/null || echo ':')"
+        if [[ "$cur_owner" != "${uid}:${gid}" ]]; then
+          chown "$uid:$gid" -- "$mp" || true
         fi
-        rmdir "$tmpmp" 2>/dev/null || true
-        ;;
-      vfat)
-        opts="rw,noatime,lazytime,uid=${RW_UID},gid=${RW_GID},utf8=1"
-        ;;
-      exfat)
-        opts="rw,noatime,lazytime,uid=${RW_UID},gid=${RW_GID}"
-        ;;
-      ntfs)
-        # FUSE ntfs-3g → drop unsupported options
-        opts="rw,noatime,lazytime,uid=${RW_UID},gid=${RW_GID},big_writes,umask=0022"
+
+        # Ensure directory is writable by owner (don’t relax group/world more than needed)
+        chmod u+rwx,go+rx -- "$mp" || true
+
+        # Optional: give the user default ACLs so *new* subdirs/files are user-writable
+        # setfacl -m u:${uid}:rwx -d -m u:${uid}:rwx -- "$mp" || true
         ;;
       *)
-        opts="rw,noatime,lazytime"
+        log "non-UNIX FS $fstype should be handled via mount options uid=/gid=/umask="
         ;;
     esac
-    printf '%s' "$opts"
   }
 
   preflight_reset_mount() {
@@ -137,43 +171,21 @@ if [[ ${USER:-} != "liveuser" ]]; then
 
   # Enumerate candidate partitions
   while IFS= read -r line; do
-    typ="$(awk '{print $1}' <<<"$line")"
     uuid="$(awk '{print $2}' <<<"$line")"
-    fstype="$(awk '{print $3}' <<<"$line")"
-    mntp="$(awk '{print $4}' <<<"$line")"
 
-    [[ "$typ" == "part" ]] || continue
     [[ -n "$uuid" ]] || continue
-    [[ -z "$mntp" ]] || continue
-    [[ "$fstype" != "crypto_LUKS" ]] || continue
 
-    partition_name="$uuid"
-    tomount="/dev/disk/by-uuid/$partition_name"
-    [[ -n "$fstype" ]] || continue
-
-    [[ -n "$UUID_FILTER" && "$uuid" != "$UUID_FILTER" ]] && continue
-
-    # ---- Relaxed allow-list check (matches your original behavior) ----
-    if [[ -f /etc/nobara/automount/enabled.conf ]]; then
-      if ! grep -Fq "$partition_name" /etc/nobara/automount/enabled.conf; then
-        log "Skipping $partition_name ($fstype): not in enabled.conf"
-        continue
-      fi
-    else
-      log "enabled.conf not found; skipping $partition_name (preserving original behavior)"
+    if [[ -n "$UUID_FILTER" && "$DO_PRE_RESET" == "0" && "$uuid" != "$UUID_FILTER" ]]; then
       continue
     fi
+    post_mount_fixup_unix_fs
+
+    partition_name="$uuid"
+
     # -------------------------------------------------------------------
-
-    if [[ "$fstype" == "ntfs" ]]; then
-      ntfsfix "$tomount" &>/dev/null || true
-    fi
-
-    mountopts="$(get_mount_opts "$fstype" "$tomount")"
 
     MP="/run/media/$rwuser/$partition_name"
     UNIT="$(systemd-escape -p --suffix=mount "$MP")"
-
     pretty="$uuid"
     label="$(blkid -o value -s LABEL "/dev/disk/by-uuid/$uuid" 2>/dev/null || true)"
     [[ -n "$label" ]] && pretty="$label"
@@ -184,94 +196,85 @@ if [[ ${USER:-} != "liveuser" ]]; then
     url="file://${mp}"
     icon_path="${desktop_dir}/${pretty}.desktop"
 
-    if [[ -d "$desktop_dir" ]]; then
-      # 1) size like "7.3T"
-      dev="$(readlink -f "/dev/disk/by-uuid/$uuid")"
+    resolve_model_for_base() {
+      local base="$1" name="" model=""
+      name="$(lsblk -b -P -o PKNAME,UUID,MODEL | grep $base | cut -d " " -f 1 | cut -d "=" -f 2 | sed 's/"//g')"
+      parent="$(lsblk -no PKNAME "/dev/$name" | head -n1 2>/dev/null)"
+      model="$(lsblk -dn -o MODEL "/dev/$parent" 2>/dev/null)"
 
-      # Get the parent whole device (strip partition suffix)
-      parent="$(lsblk -no PKNAME -- "$dev" 2>/dev/null)"
-
-      # Get the size of the parent device (e.g. 256G)
-      if [[ -n "$parent" ]]; then
-        size_str="$(lsblk -dno SIZE "/dev/$parent" 2>/dev/null)"
-      else
-        # fallback: just query this node
-        size_str="$(lsblk -dno SIZE "$dev" 2>/dev/null)"
+      # If not luks encrypted then the parent is the name.
+      if [[ -z $model ]]; then
+        model="$(lsblk -dn -o MODEL "/dev/$name" 2>/dev/null)"
       fi
-      [[ -z "$size_str" ]] && size_str="${label:-$uuid}"
+      printf '%s\n' "$model"
+    }
 
-      # Escape '.' for regex use
-      size_re="${size_str//./\\.}"
+    # 1) size like "7.3T"
+    dev="$(readlink -f "/dev/disk/by-uuid/$uuid")"
+    model=""
+    model="$(resolve_model_for_base "$uuid")"
+    log "$model"
 
-      # 2) collect used numbers for this size across existing desktop shortcuts
-      declare -A used=()
-      shopt -s nullglob
-      for f in "$desktop_dir"/*.desktop; do
-        [[ "$f" == "$icon_path" ]] && continue   # ignore our own file when (re)creating
-        name_line="$(grep -m1 '^Name=' "$f" 2>/dev/null | cut -d= -f2-)"
-        if [[ "$name_line" =~ ^${size_re}\ Disk\ ([0-9]+)$ ]]; then
-          used["${BASH_REMATCH[1]}"]=1
+    size_str="$(lsblk -dno SIZE "$dev" 2>/dev/null)"
+
+    [[ -z "$size_str" ]] && size_str="${label:-$uuid}"
+
+    # Escape '.' for regex use
+    size_re="${size_str//./\\.}"
+
+    # 2) collect used numbers for this size across existing desktop shortcuts
+    declare -A used=()
+    shopt -s nullglob
+    for f in "$desktop_dir"/*.desktop; do
+        [[ -e "$f" ]] || continue   # skip if no matches
+        if grep -q "$UUID_FILTER" "$f"; then
+            exit 0   # stop after first match (remove this if you want to delete all matches)
         fi
-      done
+    done
+    for f in "$desktop_dir"/*.desktop; do
+      [[ "$f" == "$icon_path" ]] && continue   # ignore our own file when (re)creating
+      name_line="$(grep -m1 '^Name=' "$f" 2>/dev/null | cut -d= -f2-)"
+      if [[ "$name_line" =~ ^${size_re}\ Disk\ ([0-9]+)$ ]]; then
+        used["${BASH_REMATCH[1]}"]=1
+      fi
+    done
+    # 3) pick the smallest free N>=1
+    n=1
+    while :; do
+      [[ -z "${used[$n]+x}" ]] && break
+      ((n++))
+    done
+    pretty="${size_str} Disk ${n}"
 
-      # 3) pick the smallest free N>=1
-      n=1
-      while :; do
-        [[ -z "${used[$n]+x}" ]] && break
-        ((n++))
-      done
-      pretty="${size_str} Disk ${n}"
-
-      # If our UUID file already exists and already has a matching "size Disk N"
-      # that's not taken by others, keep it (avoid renumbering on replug)
-      if [[ -f "$icon_path" ]]; then
-        current_name="$(grep -m1 '^Name=' "$icon_path" 2>/dev/null | cut -d= -f2-)"
-        if [[ "$current_name" =~ ^${size_re}\ Disk\ ([0-9]+)$ ]]; then
-          currn="${BASH_REMATCH[1]}"
-          if [[ -z "${used[$currn]+x}" ]]; then
-            pretty="$current_name"
-          fi
+    # If our UUID file already exists and already has a matching "size Disk N"
+    # that's not taken by others, keep it (avoid renumbering on replug)
+    if [[ -f "$icon_path" ]]; then
+      current_name="$(grep -m1 '^Name=' "$icon_path" 2>/dev/null | cut -d= -f2-)"
+      if [[ "$current_name" =~ ^${size_re}\ Disk\ ([0-9]+)$ ]]; then
+        currn="${BASH_REMATCH[1]}"
+        if [[ -z "${used[$currn]+x}" ]]; then
+          pretty="$current_name"
         fi
       fi
+    fi
 
-      dev="/dev/disk/by-uuid/$uuid"
-      node="$(readlink -f -- "$dev")"
-      parent="$(lsblk -no PKNAME -- "$node" 2>/dev/null)"
-
-      model=""
-      if [[ -n "$parent" ]]; then
-        # Query the whole-disk node
-        model="$(lsblk -no MODEL -- "/dev/$parent" 2>/dev/null)"
-      fi
-
-      # Fallback: udev property (works for partitions too)
-      if [[ -z "$model" ]]; then
-        model="$(udevadm info --query=property --name="$node" 2>/dev/null \
-                | sed -n 's/^ID_MODEL=//p')"
-      fi
-
-      # Normalize a bit
-      model="${model//_/ }"                      # underscores -> spaces (common on NVMe)
-      model="$(sed 's/[[:space:]]\+$//' <<<"$model")"   # trim trailing space
-
-      if [[ -n "$model" ]]; then
-        pretty="$pretty ($model)"
-      fi
-      icon_path="${desktop_dir}/${pretty}.desktop"
-      # 4) write/update the .desktop (filename stays <uuid>.desktop)
-      tmp="$(mktemp)"
-      cat > "$tmp" <<EOF
+    if [[ -n "$model" ]]; then
+      pretty="$pretty ($model)"
+    fi
+    icon_path="${desktop_dir}/${pretty}.desktop"
+    # 4) write/update the .desktop (filename stays <uuid>.desktop)
+    tmp="$(mktemp)"
+    cat > "$tmp" <<EOF
 [Desktop Entry]
 Type=Link
 Name=${pretty}
 Icon=drive-removable-media
 URL=file:///run/media/${rwuser}/${uuid}
 EOF
-      install -o "$RW_UID" -g "$RW_GID" -m 0644 "$tmp" "$icon_path"
-      rm -f "$tmp"
-    fi
+    install -o "$RW_UID" -g "$RW_GID" -m 0644 "$tmp" "$icon_path"
+    rm -f "$tmp"
 
-    log "Created desktop icon '${pretty}.desktop' (owner $rwuser)."
+  log "Created desktop icon '${pretty}.desktop' (owner $rwuser)."
 
-  done < <(lsblk -rno TYPE,UUID,FSTYPE,MOUNTPOINT | grep '^part ')
+  done < <(lsblk -rno TYPE,UUID,FSTYPE,MOUNTPOINT | awk '$1=="part"||$1=="crypt"{print}')
 fi
