@@ -25,7 +25,7 @@
       "icon": "nobara-gpu-screen-recorder",
       "pkgman": "pkcon",
       "checkpkg": "gpu-screen-recorder-ui",
-      "packages": "gpu-screen-recorder-ui"
+      "packages": "gpu-screen-recorder-ui gpu-screen-recorder-gtk"
     },
     {
       "id": 3,
