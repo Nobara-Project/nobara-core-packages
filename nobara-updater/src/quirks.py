@@ -39,7 +39,7 @@ class QuirkFixup:
         perform_refresh = 0
         # START QUIRKS LIST
 
-        # QUIRK 0: Make sure to refresh the repositories and gpg-keys before anything
+        # QUIRK: Make sure to refresh the repositories and gpg-keys before anything
         self.logger.info("QUIRK: Make sure to refresh the repositories and gpg-keys before anything.")
         critical_packages = [
             "fedora-gpg-keys",
@@ -68,7 +68,7 @@ class QuirkFixup:
                 perform_refresh,
             )
             self.logger.info(log_message)
-        # QUIRK 1: Make sure to update the updater itself and refresh before anything
+        # QUIRK: Make sure to update the updater itself and refresh before anything
         self.logger.info("QUIRK: Make sure to update the updater itself and refresh before anything.")
         if "nobara-updater" in package_names:
             log_message = "An update for the Update System app has been detected, updating self...\n"
@@ -82,7 +82,7 @@ class QuirkFixup:
                 perform_refresh,
             )
             self.logger.info(log_message)
-        # QUIRK 2: Cleanup outdated kernel modules
+        # QUIRK: Cleanup outdated kernel modules
         self.logger.info("QUIRK: Cleanup outdated kernel modules.")
         try:
             # Run the command and capture the output
@@ -113,7 +113,7 @@ class QuirkFixup:
         except subprocess.CalledProcessError as e:
             print(f"An error occurred: {e}")
 
-        # QUIRK 3: Make sure to reinstall rpmfusion repos if they do not exist
+        # QUIRK: Make sure to reinstall rpmfusion repos if they do not exist
         self.logger.info("QUIRK: Make sure to reinstall rpmfusion repos if they do not exist.")
         if (
             self.check_and_install_rpmfusion(
@@ -145,7 +145,7 @@ class QuirkFixup:
         ):
             perform_refresh = 1
 
-        # QUIRK 5: Make sure to run both dracut and akmods if any kmods  or kernel packages were updated.
+        # QUIRK: Make sure to run both dracut and akmods if any kmods  or kernel packages were updated.
         self.logger.info("QUIRK: Make sure to run both dracut and akmods if any kmods  or kernel packages were updated.")
         # Check if any packages contain "kernel" or "akmod"
         kernel_kmod_packages = [
@@ -155,7 +155,7 @@ class QuirkFixup:
             perform_kernel_actions = 1
             perform_reboot_request = 1
 
-        # QUIRK 6: If kwin or mutter are being updated, ask for a reboot.
+        # QUIRK: If kwin or mutter are being updated, ask for a reboot.
         self.logger.info("QUIRK: If kwin or mutter are being updated, ask for a reboot.")
         de_update_packages = [
             pkg for pkg in package_names if "kwin" in pkg or "mutter" in pkg
@@ -163,7 +163,7 @@ class QuirkFixup:
         if de_update_packages:
             perform_reboot_request = 1
 
-        # QUIRK 7: Install InputPlumber for Controller input, install steam firmware for steamdecks. Cleanup old packages.
+        # QUIRK: Install InputPlumber for Controller input, install steam firmware for steamdecks. Cleanup old packages.
         remove_names = []
         updatelist  = []
 
@@ -504,7 +504,7 @@ class QuirkFixup:
             if len(steamdeck_install) > 0:
                 PackageUpdater(steamdeck_install, "install", None)
 
-        # QUIRK 10: Problematic package cleanup
+        # QUIRK: Problematic package cleanup
         self.logger.info("QUIRK: Problematic package cleanup.")
         problematic = [
             "qt5-qtwebengine-freeworld",
@@ -514,7 +514,6 @@ class QuirkFixup:
             "musescore",
             "okular5-libs",
             "fedora-workstation-repositories",
-            "mesa-demos",
             "deckyloader"
         ]
         problematic_names = []
@@ -557,7 +556,7 @@ class QuirkFixup:
                 else:
                     subprocess.run(["rpm", "-e", "--nodeps", package], capture_output=True, text=True)
 
-        # QUIRK 13: Clear plasmashell cache if a plasma-workspace update is available
+        # QUIRK: Clear plasmashell cache if a plasma-workspace update is available
         self.logger.info("QUIRK: Clear plasmashell cache if a plasma-workspace update is available.")
         # Function to run the rpm command and get the output
         def check_update():
@@ -597,7 +596,7 @@ class QuirkFixup:
             for home_dir in get_all_user_home_directories():
                 delete_qmlcache(home_dir)
 
-        # QUIRK 14: Fix Nvidia epoch so it matches that of negativo17 for cross compatibility
+        # QUIRK: Fix Nvidia epoch so it matches that of negativo17 for cross compatibility
         self.logger.info("QUIRK: Fix Nvidia epoch so it matches that of negativo17 for cross compatibility.")
 
         # Run the dnf list installed command and capture the output
@@ -715,7 +714,7 @@ class QuirkFixup:
             dnf_cmd = ["dnf", "install", "-y"] + to_install
             subprocess.run(dnf_cmd)
 
-        # QUIRK 15: Swap old AMD ROCm packages with upstream Fedora ROCm versions.
+        # QUIRK: Swap old AMD ROCm packages with upstream Fedora ROCm versions.
         self.logger.info("QUIRK: Swap old AMD ROCm packages with upstream Fedora ROCm versions.")
 
         try:
@@ -758,7 +757,7 @@ class QuirkFixup:
         except Exception as e:
             print(f"An error occurred: {e}")
 
-        # QUIRK 16: mesa-vulkan-drivers fixup
+        # QUIRK: mesa-vulkan-drivers fixup
         self.logger.info("QUIRK: mesa-vulkan-drivers fixup.")
         try:
             result = subprocess.run(
@@ -783,7 +782,7 @@ class QuirkFixup:
         except Exception as e:
             print(f"An error occurred: {e}")
 
-        # QUIRK 18: vaapi fixup
+        # QUIRK: vaapi fixup
         self.logger.info("QUIRK: vaapi fixup.")
         mesa_fixup_check = subprocess.run(
             ["rpm", "-q", "mesa-libgallium-freeworld.x86_64"], capture_output=True, text=True
@@ -934,7 +933,7 @@ class QuirkFixup:
                         capture_output=True, text=True
                     )
 
-        # QUIRK 18: Kernel 6.12.9 fixup
+        # QUIRK: Kernel 6.12.9 fixup
         self.logger.info("QUIRK: Kernel fsync->nobara conversion update.")
         try:
             # Get the full kernel version
@@ -969,6 +968,124 @@ class QuirkFixup:
         except subprocess.CalledProcessError as e:
             self.logger.info(f"An error occurred: {e}")
 
+        # QUIRK 18: Media fixup
+        media_fixup = 0
+
+        def repo_enabled(repo_name="nobara-pikaos-additional"):
+            try:
+                # Run `dnf -q repolist --enabled`
+                result = subprocess.run(
+                    ["dnf", "-q", "repolist", "--enabled"],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+
+                # Extract repo IDs (skip the first line like `awk 'NR>1 {print $1}'`)
+                repos = [line.split()[0] for line in result.stdout.strip().splitlines()[1:]]
+
+                # Check if repo_name exists in list
+                return repo_name in repos
+            except subprocess.CalledProcessError:
+                return False
+
+        def broken_codecs():
+            if not repo_enabled():
+                try:
+                    # Run the rpm command and capture output
+                    result = subprocess.run(
+                        ["rpm", "-qa"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        check=True
+                    )
+                    # Look for "freeworld" in the output
+                    if "freeworld" in result.stdout:
+                        return True
+                except subprocess.CalledProcessError as e:
+                    # Handle rpm command failure
+                    print(f"Error checking rpm packages: {e}")
+            return False
+
+        if broken_codecs():
+            media_fixup = 1
+
+        if repo_enabled() and media_fixup == 0:
+            self.logger.info("QUIRK: Media fixup.")
+            def rpm_installed(name: str) -> bool:
+                """Return True if rpm -q <name> reports installed."""
+                return subprocess.run(["rpm", "-q", name], capture_output=True).returncode == 0
+
+            # These must be installed; if any is missing -> media_fixup = 1
+            MUST_BE_INSTALLED = {
+                "x264-libs.x86_64",
+                "x264-libs.i686",
+                "x265-libs.x86_64",
+                "x265-libs.i686",
+                "libavcodec-freeworld.x86_64",
+                "libavcodec-freeworld.i686",
+                "libavcodec-free.x86_64",
+                "libavcodec-free.i686",
+                "openh264.x86_64",
+                "openh264.i686",
+                "mesa-va-drivers-freeworld.x86_64",
+                "mesa-va-drivers-freeworld.i686",
+                "mesa-vdpau-drivers-freeworld.x86_64",
+                "mesa-vdpau-drivers-freeworld.i686",
+                "mesa-libgallium-freeworld.x86_64",
+                "mesa-libgallium-freeworld.i686",
+                "gstreamer1-plugins-bad-free-extras.x86_64",
+                "gstreamer1-plugins-bad-free-extras.i686",
+                "mozilla-openh264.x86_64",
+                "libheif-freeworld.x86_64",
+                "libheif-freeworld.i686",
+                "libheif.x86_64",
+                "libheif.i686",
+                "pipewire-codec-aptx",
+            }
+
+            MUST_NOT_BE_INSTALLED = {
+                "ffmpeg-libs.x86_64",
+                "ffmpeg-libs.i686",
+                "x264.x86_64",
+                "x265.x86_64",
+                "noopenh264.x86_64",
+                "noopenh264.i686",
+                "mesa-va-drivers.x86_64",
+                "mesa-va-drivers.i686",
+                "mesa-vdpau-drivers.x86_64",
+                "mesa-vdpau-drivers.i686",
+                "mesa-libgallium.x86_64",
+                "mesa-libgallium.i686",
+                "mesa-vulkan-drivers.x86_64",
+                "mesa-vulkan-drivers.i686",
+                "mesa-vulkan-drivers-git.x86_64",
+                "mesa-vulkan-drivers-git.i686",
+            }
+
+            media_fixup = 0
+
+            # 1) Anything that must be installed but isn’t -> fixup
+            for pkg in MUST_BE_INSTALLED:
+                if not rpm_installed(pkg):
+                    self.logger.info(f"Found missing media package: {pkg}")
+                    media_fixup = 1
+                    break
+
+            # 2) If still clean: anything that must NOT be installed but is -> fixup
+            if media_fixup == 0:
+                for pkg in MUST_NOT_BE_INSTALLED:
+                    if rpm_installed(pkg):
+                        self.logger.info(f"Found incorrect media package: {pkg}")
+                        media_fixup = 1
+                        break
+
+        if media_fixup == 1:
+            # do fixup
+            pass
+
+
         # END QUIRKS LIST
         # Check if any packages contain "kernel" or "akmod"
         if "gamescope" in os.environ.get('XDG_CURRENT_DESKTOP', '').lower():
@@ -989,7 +1106,7 @@ class QuirkFixup:
         return (
             perform_kernel_actions,
             perform_reboot_request,
-            0, # This used to be for media fixups, now is just a placeholder so code does not break
+            media_fixup,
             perform_refresh,
         )
 

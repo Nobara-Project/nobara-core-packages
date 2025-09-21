@@ -476,7 +476,7 @@ def check_updates(return_texts: bool = False) -> None | tuple[str | None, str | 
     # Get the original user's UID and GID
     orig_user = os.environ.get("ORIG_USER")
     if orig_user is None:
-        raise ValueError("ORIG_USER environment variable is not set.")
+        orig_user = "0"
     orig_user_uid = int(orig_user)
     pw_record = pwd.getpwuid(orig_user_uid)
     orig_user_gid = pw_record.pw_gid
@@ -610,10 +610,9 @@ def install_fixups() -> None:
         except Exception as e:
             logger.error(f"Failed to relaunch script: {e}")
 
-    # Old code, no longer used. triggers if fixups_available (media_fixups) returns > 0
-    # # if fixups_available == 1:
-    #    logger.info("Problems with Media Packages detected, asking user for repair...")
-    #    prompt_media_fixup()
+    if fixups_available == 1:
+        logger.info("Problems with Media Packages detected, repairing...")
+        prompt_media_fixup()
 
     if is_running_with_sudo_or_pkexec() == 1:
         sudo_user = os.environ.get('SUDO_USER', '')
@@ -630,7 +629,7 @@ def install_fixups() -> None:
     # Get the original user's UID and GID
     orig_user = os.environ.get("ORIG_USER")
     if orig_user is None:
-        raise ValueError("ORIG_USER environment variable is not set.")
+        orig_user = "0"
     orig_user_uid = int(orig_user)
     pw_record = pwd.getpwuid(orig_user_uid)
     orig_user_gid = pw_record.pw_gid
@@ -706,7 +705,7 @@ def install_updates() -> None:
     # Get the original user's UID and GID
     orig_user = os.environ.get("ORIG_USER")
     if orig_user is None:
-        raise ValueError("ORIG_USER environment variable is not set.")
+        orig_user="0"
     orig_user_uid = int(orig_user)
     pw_record = pwd.getpwuid(orig_user_uid)
     orig_user_gid = pw_record.pw_gid
@@ -843,6 +842,7 @@ def prompt_media_fixup() -> None:
     media_fixup_event.wait()
 
 def media_fixup() -> None:
+    global fixups_available
     global media_fixup_event
     hard_removal = [
         "ffmpeg.x86_64",
@@ -959,6 +959,7 @@ def media_fixup() -> None:
 
     if install_list:
         PackageUpdater(install_list, "install", None)
+    fixups_available = 0
 
 def prompt_reboot() -> None:
     logger.info("UPDATES COMPLETE. A REBOOT IS REQUIRED. PLEASE REBOOT WHEN POSSIBLE.")
@@ -1083,14 +1084,16 @@ def request_update_status() -> None:
 
 def cleanup_xhost():
     """Cleanup function to run xhost on exit"""
-    try:
-        subprocess.run(["xhost", "-si:localuser:root"],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-        )
-    except Exception as e:
-        logger.error(f"Failed to run xhost cleanup: {e}")
+    args = parse_args()
+    if "DISPLAY" not in os.environ or args.command is not None:
+        try:
+            subprocess.run(["xhost", "-si:localuser:root"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+            )
+        except Exception as e:
+            logger.error(f"Failed to run xhost cleanup: {e}")
 
 def main() -> None:
 
