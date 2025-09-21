@@ -21,10 +21,7 @@ if (panel.formFactor === "horizontal") {
     }
 }
 
-var kickoff = panel.addWidget("org.kde.plasma.kickoff")
-kickoff.currentConfigGroup = ["Shortcuts"]
-kickoff.writeConfig("global", "Alt+F1")
-
+panel.addWidget("org.kde.plasma.kickoff")
 //panel.addWidget("org.kde.plasma.showActivityManager")
 panel.addWidget("org.kde.plasma.pager")
 panel.addWidget("org.kde.plasma.icontasks")
@@ -41,36 +38,36 @@ panel.addWidget("com.kde.plasma.nobara.runcommand")
  * of common distributions. */
 
 var langIds = ["as",    // Assamese
-               "bn",    // Bengali
-               "bo",    // Tibetan
-               "brx",   // Bodo
-               "doi",   // Dogri
-               "gu",    // Gujarati
-               "hi",    // Hindi
-               "ja",    // Japanese
-               "kn",    // Kannada
-               "ko",    // Korean
-               "kok",   // Konkani
-               "ks",    // Kashmiri
-               "lep",   // Lepcha
-               "mai",   // Maithili
-               "ml",    // Malayalam
-               "mni",   // Manipuri
-               "mr",    // Marathi
-               "ne",    // Nepali
-               "or",    // Odia
-               "pa",    // Punjabi
-               "sa",    // Sanskrit
-               "sat",   // Santali
-               "sd",    // Sindhi
-               "si",    // Sinhala
-               "ta",    // Tamil
-               "te",    // Telugu
-               "th",    // Thai
-               "ur",    // Urdu
-               "vi",    // Vietnamese
-               "zh_CN", // Simplified Chinese
-               "zh_TW"] // Traditional Chinese
+"bn",    // Bengali
+"bo",    // Tibetan
+"brx",   // Bodo
+"doi",   // Dogri
+"gu",    // Gujarati
+"hi",    // Hindi
+"ja",    // Japanese
+"kn",    // Kannada
+"ko",    // Korean
+"kok",   // Konkani
+"ks",    // Kashmiri
+"lep",   // Lepcha
+"mai",   // Maithili
+"ml",    // Malayalam
+"mni",   // Manipuri
+"mr",    // Marathi
+"ne",    // Nepali
+"or",    // Odia
+"pa",    // Punjabi
+"sa",    // Sanskrit
+"sat",   // Santali
+"sd",    // Sindhi
+"si",    // Sinhala
+"ta",    // Tamil
+"te",    // Telugu
+"th",    // Thai
+"ur",    // Urdu
+"vi",    // Vietnamese
+"zh_CN", // Simplified Chinese
+"zh_TW"] // Traditional Chinese
 
 if (langIds.indexOf(languageId) != -1) {
     panel.addWidget("org.kde.plasma.kimpanel");
@@ -78,6 +75,5 @@ if (langIds.indexOf(languageId) != -1) {
 
 panel.addWidget("org.kde.plasma.systemtray")
 panel.addWidget("org.kde.plasma.digitalclock")
-//panel.addWidget("org.kde.plasma.win7showdesktop")
 panel.addWidget("org.kde.plasma.nobara.showdesktop")
 
