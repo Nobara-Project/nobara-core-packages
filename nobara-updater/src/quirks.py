@@ -21,7 +21,7 @@ gi.require_version("Flatpak", "1.0")
 # still need to repair DNF5, use DNF4 for now
 BACKEND = "DNF4"
 
-if BACKEND == "DNF5":
+if BACKEND == "DNF4":
     from nobara_updater.dnf5 import PackageUpdater, updatechecker  # type: ignore[import]
 else:
     from nobara_updater.dnf4 import PackageUpdater, updatechecker  # type: ignore[import]
@@ -587,9 +587,9 @@ class QuirkFixup:
                     shutil.rmtree(qmlcache_dir)
                     print(f"Deleted '{qmlcache_dir}' directory successfully")
                 except Exception as e:
-                    print(f"Failed to delete '{qmlcache_dir}': {e}")
+                    pass
             else:
-                print(f"Directory '{qmlcache_dir}' does not exist")
+                pass
 
         # Main script execution
         if check_update:
@@ -601,7 +601,7 @@ class QuirkFixup:
 
         # Run the dnf list installed command and capture the output
         check_nvidia_wrong_epoch = subprocess.run(
-            ["dnf4", "list", "installed"], capture_output=True, text=True
+            ["dnf", "list", "--installed"], capture_output=True, text=True
         )
 
         # Check if the command was successful
@@ -719,7 +719,7 @@ class QuirkFixup:
 
         try:
             result = subprocess.run(
-                "dnf4 list installed | grep @nobara-rocm-official",
+                "dnf list --installed | grep @nobara-rocm-official",
                 shell=True,
                 capture_output=True,
                 text=True
@@ -761,23 +761,17 @@ class QuirkFixup:
         self.logger.info("QUIRK: mesa-vulkan-drivers fixup.")
         try:
             result = subprocess.run(
-                "rpm -q mesa-vulkan-drivers | grep git",
+                "rpm -qa | grep mesa-vulkan-drivers",
                 shell=True,
                 capture_output=True,
                 text=True
             )
 
             # Check if there is any output
-            if result.stdout.strip():
+            if result.returncode !=0:
                 self.logger.info("mesa-vulkan-drivers fixup.")
                 subprocess.run(
-                    ["rpm", "-e", "--nodeps", "mesa-vulkan-drivers.x86_64"], capture_output=True, text=True
-                )
-                subprocess.run(
-                    ["rpm", "-e", "--nodeps", "mesa-vulkan-drivers.i686"], capture_output=True, text=True
-                )
-                subprocess.run(
-                    ["dnf4", "install", "-y", "mesa-vulkan-drivers.x86_64", "mesa-vulkan-drivers.i686"], capture_output=True, text=True
+                    ["dnf", "install", "-y", "mesa-vulkan-drivers.x86_64", "mesa-vulkan-drivers.i686"], capture_output=True, text=True
                 )
         except Exception as e:
             print(f"An error occurred: {e}")
@@ -974,7 +968,7 @@ class QuirkFixup:
         def repo_enabled(repo_name="nobara-pikaos-additional"):
             try:
                 # Run `dnf -q repolist --enabled`
-                result = subprocess.run(
+                dnfoverride = subprocess.run(
                     ["dnf", "-q", "repolist", "--enabled"],
                     capture_output=True,
                     text=True,
@@ -982,10 +976,26 @@ class QuirkFixup:
                 )
 
                 # Extract repo IDs (skip the first line like `awk 'NR>1 {print $1}'`)
-                repos = [line.split()[0] for line in result.stdout.strip().splitlines()[1:]]
+                repos = [line.split()[0] for line in dnfoverride.stdout.strip().splitlines()[1:]]
 
                 # Check if repo_name exists in list
-                return repo_name in repos
+                if repo_name in repos:
+                    return True
+            except subprocess.CalledProcessError:
+                return False
+
+        def repo_file_broken():
+            try:
+                dnffile = subprocess.run(
+                    ["grep", "enabled=1", "/etc/yum.repos.d/nobara-pikaos-additional.repo"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                if repo_enabled() and 'enabled=1' not in dnffile.stdout:
+                    media_fixup = 1
             except subprocess.CalledProcessError:
                 return False
 

@@ -881,6 +881,16 @@ def media_fixup() -> None:
     ]
     soft_removal = ["mozilla-openh264", "qt5-qtwebengine-freeworld"]
 
+    vulkan_standard = [
+        "mesa-vulkan-drivers.x86_64",
+        "mesa-vulkan-drivers.i686",
+    ]
+
+    vulkan_git = [
+        "mesa-vulkan-drivers-git.x86_64",
+        "mesa-vulkan-drivers-git.i686",
+    ]
+
     action_log_string = "Purging media packages for a clean slate..."
     combined_removal = hard_removal + soft_removal
     indented_combined_removal = ["    " + line for line in combined_removal]
@@ -899,6 +909,28 @@ def media_fixup() -> None:
             soft_removal_list.append(package)
     if soft_removal_list:
         PackageUpdater(soft_removal_list, "remove", None)
+
+    vulkan_standard_installed = 0
+    vulkan_git_installed = 0
+    for package in vulkan_standard:
+        removal_check_vulkan = subprocess.run(
+            ["rpm", "-q", package], capture_output=True, text=True
+        )
+        if removal_check_vulkan.returncode == 0:
+            subprocess.run(
+                ["rpm", "-e", "--nodeps", package], capture_output=True, text=True
+            )
+            vulkan_standard_installed = 1
+
+    for package in vulkan_git:
+        removal_check_vulkan_git = subprocess.run(
+            ["rpm", "-q", package], capture_output=True, text=True
+        )
+        if removal_check_vulkan_git.returncode == 0:
+            subprocess.run(
+                ["rpm", "-e", "--nodeps", package], capture_output=True, text=True
+            )
+            vulkan_git_installed = 1
 
     install = [
         "mesa-libgallium-freeworld.x86_64",
@@ -945,6 +977,12 @@ def media_fixup() -> None:
             ["dnf", "config-manager", "setopt", "nobara-pikaos-additional.enabled=1"], capture_output=True, text=True
         )
 
+    subprocess.run(
+        ["sed", "-i", "s/enabled=0/enabled=1/g", "/etc/yum.repos.d/nobara-pikaos-additional.repo"],
+        capture_output=True,
+        text=True
+    )
+
     action_log_string = "Performing clean media package installation..."
     indented_install = ["    " + line for line in install]
     logger.info("%s\n\n%s\n", action_log_string, chr(10).join(indented_install))
@@ -956,9 +994,36 @@ def media_fixup() -> None:
         if install_check.returncode != 0:
             install_list.append(package)
 
-
     if install_list:
         PackageUpdater(install_list, "install", None)
+
+    if vulkan_standard_installed == 1:
+        vulkan_standard_freeworld = [
+            "mesa-vulkan-drivers-freeworld.x86_64",
+            "mesa-vulkan-drivers-freeworld.i686",
+        ]
+        PackageUpdater(vulkan_standard_freeworld, "install", None)
+
+    if vulkan_git_installed == 1:
+        vulkan_git_freeworld = [
+            "mesa-vulkan-drivers-git-freeworld.x86_64",
+            "mesa-vulkan-drivers-git-freeworld.i686",
+        ]
+        PackageUpdater(vulkan_git_freeworld, "install", None)
+
+    vulkan_install_check_standard_freeworld = subprocess.run(
+        ["rpm", "-q", "mesa-vulkan-drivers-freeworld"], capture_output=True, text=True
+    )
+    vulkan_install_check_git_freeworld = subprocess.run(
+        ["rpm", "-q", "mesa-vulkan-drivers-git-freeworld"], capture_output=True, text=True
+    )
+    if vulkan_standard_installed == 0 and vulkan_git_installed == 0 and vulkan_install_check_standard_freeworld.returncode != 0 and vulkan_install_check_git_freeworld.returncode != 0:
+        vulkan_standard_freeworld = [
+            "mesa-vulkan-drivers-freeworld.x86_64",
+            "mesa-vulkan-drivers-freeworld.i686",
+        ]
+        PackageUpdater(vulkan_standard_freeworld, "install", None)
+
     fixups_available = 0
 
 def prompt_reboot() -> None:
@@ -1034,11 +1099,14 @@ def check_root_privileges(args: Namespace) -> None:
                 + sys.argv[1:],
             )
         else:
-            subprocess.run(["xhost", "si:localuser:root"],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-            )
+            try:
+                subprocess.run(["xhost", "si:localuser:root"],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+                )
+            except Exception:
+                pass
             os.execvp(
                 "pkexec",
                 [
@@ -1092,8 +1160,8 @@ def cleanup_xhost():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
             )
-        except Exception as e:
-            logger.error(f"Failed to run xhost cleanup: {e}")
+        except Exception:
+            pass
 
 def main() -> None:
 
