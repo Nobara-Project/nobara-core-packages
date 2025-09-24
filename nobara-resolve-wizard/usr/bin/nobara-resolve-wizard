@@ -347,20 +347,6 @@ class DaVinciInstaller(Gtk.Application):
                 fail(f"Unable to launch installer with pkexec: {e}")
                 return
 
-            # 4) Copy the desktop shortcut to the user's Desktop
-            try:
-                shortcut_file = "/usr/share/applications/com.blackmagicdesign.resolve.desktop"
-                user_home = os.path.expanduser("~")
-                desktop_path = os.path.join(user_home, "Desktop")
-                os.makedirs(desktop_path, exist_ok=True)
-                shutil.copy2(shortcut_file, desktop_path)
-            except FileNotFoundError:
-                fail("Desktop shortcut not found at /usr/share/applications/com.blackmagicdesign.resolve.desktop.")
-                return
-            except Exception as e:
-                fail(f"Failed to copy desktop shortcut: {e}")
-                return
-
             # 5) Bypass the onboarding screen by writing the version flag
             try:
                 config_dir = os.path.join(user_home, ".local", "share", "DaVinciResolve", "configs")
