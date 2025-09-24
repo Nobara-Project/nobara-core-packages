@@ -379,6 +379,8 @@ def write_shortcut_partitions(lines):
     os.makedirs(os.path.dirname(SHORTCUTS_CONFIG_PATH), exist_ok=True)
     with open(SHORTCUTS_CONFIG_PATH, "w") as f:
         f.writelines(clean)
+        f.flush()
+        os.fsync(f.fileno())
 
 def set_shortcut_enabled(partition, enabled):
     try:
@@ -1062,37 +1064,51 @@ class MainWindow(Gtk.Window):
         Desktop shortcut toggle. Only works if automount is active.
         Return True so we fully control the visual flip (no double-toggle).
         """
-        try:
-            # Guard: only allowed if automount is on
-            if not sw_auto.get_active():
-                self.status("Enable auto-mount first to use desktop shortcut.")
+        if requested_state:
+            try:
+                # Guard: only allowed if automount is on
+                if not sw_auto.get_active():
+                    self.status("Enable auto-mount first to use desktop shortcut.")
+                    with self._temporarily_block(sw_short):
+                        sw_short.set_state(requested_state)
+                    sw_short.set_state(False)
+                    sw_short.set_sensitive(False)
+                    sw_short.queue_draw()
+                    with self._temporarily_block(sw_short):
+                        sw_short.set_state(requested_state)
+                    self.refresh()
+                    return True  # stop default handler
+
+                # Persist to config
+                set_shortcut_enabled(partition, requested_state)
+                self.status(f"{'Enabled' if requested_state else 'Disabled'} desktop shortcut for {partition}.")
+
+                # Flip immediately (this is what fixes the "color needs refresh" issue)
                 with self._temporarily_block(sw_short):
                     sw_short.set_state(requested_state)
-                sw_short.set_state(False)
-                sw_short.set_sensitive(False)
-                sw_short.queue_draw()
+                sw_short.set_state(requested_state)
+                sw_short.set_sensitive(True)  # keep enabled so 'on' style renders correctly
+                sw_short.queue_draw()         # repaint now
                 with self._temporarily_block(sw_short):
                     sw_short.set_state(requested_state)
-                return True  # stop default handler
+                self.refresh()
+                return True  # prevent GTK's default toggle (we already did it)
 
-            # Persist to config
-            set_shortcut_enabled(partition, requested_state)
-            self.status(f"{'Enabled' if requested_state else 'Disabled'} desktop shortcut for {partition}.")
-
-            # Flip immediately (this is what fixes the "color needs refresh" issue)
-            with self._temporarily_block(sw_short):
-                sw_short.set_state(requested_state)
-            sw_short.set_state(requested_state)
-            sw_short.set_sensitive(True)  # keep enabled so 'on' style renders correctly
-            sw_short.queue_draw()         # repaint now
-            with self._temporarily_block(sw_short):
-                sw_short.set_state(requested_state)
-
-            return True  # prevent GTK's default toggle (we already did it)
-
-        except Exception as e:
-            self.status(f"Error: {e}")
-            # Revert visually if something failed
+            except Exception as e:
+                self.status(f"Error: {e}")
+                # Revert visually if something failed
+                try:
+                    with self._temporarily_block(sw_short):
+                        sw_short.set_state(requested_state)
+                    sw_short.set_state(not requested_state)
+                    sw_short.queue_draw()
+                finally:
+                    with self._temporarily_block(sw_short):
+                        sw_short.set_state(requested_state)
+                self.refresh()
+                return True
+        else:
+            set_shortcut_enabled(partition, False)
             try:
                 with self._temporarily_block(sw_short):
                     sw_short.set_state(requested_state)
@@ -1101,8 +1117,8 @@ class MainWindow(Gtk.Window):
             finally:
                 with self._temporarily_block(sw_short):
                     sw_short.set_state(requested_state)
+            self.refresh()
             return True
-
 
     # ------------- behavior -------------
     def _refresh_when_mounted(self, uuid, attempts=10, interval_ms=150):

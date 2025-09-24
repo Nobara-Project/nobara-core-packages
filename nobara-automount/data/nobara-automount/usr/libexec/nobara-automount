@@ -180,101 +180,105 @@ if [[ ${USER:-} != "liveuser" ]]; then
     fi
     post_mount_fixup_unix_fs
 
-    partition_name="$uuid"
+    if [[ -f /etc/nobara/automount/desktop_shortcuts.conf ]]; then
+      if grep -Fq "$UUID_FILTER" /etc/nobara/automount/desktop_shortcuts.conf; then
+        partition_name="$uuid"
 
-    # -------------------------------------------------------------------
+        # -------------------------------------------------------------------
 
-    MP="/run/media/$rwuser/$partition_name"
-    UNIT="$(systemd-escape -p --suffix=mount "$MP")"
-    pretty="$uuid"
-    label="$(blkid -o value -s LABEL "/dev/disk/by-uuid/$uuid" 2>/dev/null || true)"
-    [[ -n "$label" ]] && pretty="$label"
+        MP="/run/media/$rwuser/$partition_name"
+        UNIT="$(systemd-escape -p --suffix=mount "$MP")"
+        pretty="$uuid"
+        label="$(blkid -o value -s LABEL "/dev/disk/by-uuid/$uuid" 2>/dev/null || true)"
+        [[ -n "$label" ]] && pretty="$label"
 
-    user_home="$(getent passwd "$rwuser" | cut -d: -f6)"
-    desktop_dir="${user_home}/Desktop"
-    mp="/run/media/${rwuser}/${uuid}"
-    url="file://${mp}"
-    icon_path="${desktop_dir}/${pretty}.desktop"
+        user_home="$(getent passwd "$rwuser" | cut -d: -f6)"
+        desktop_dir="${user_home}/Desktop"
+        mp="/run/media/${rwuser}/${uuid}"
+        url="file://${mp}"
+        icon_path="${desktop_dir}/${pretty}.desktop"
 
-    resolve_model_for_base() {
-      local base="$1" name="" model=""
-      name="$(lsblk -b -P -o PKNAME,UUID,MODEL | grep $base | cut -d " " -f 1 | cut -d "=" -f 2 | sed 's/"//g')"
-      parent="$(lsblk -no PKNAME "/dev/$name" | head -n1 2>/dev/null)"
-      model="$(lsblk -dn -o MODEL "/dev/$parent" 2>/dev/null)"
+        resolve_model_for_base() {
+          local base="$1" name="" model=""
+          name="$(lsblk -b -P -o PKNAME,UUID,MODEL | grep $base | cut -d " " -f 1 | cut -d "=" -f 2 | sed 's/"//g')"
+          parent="$(lsblk -no PKNAME "/dev/$name" | head -n1 2>/dev/null)"
+          model="$(lsblk -dn -o MODEL "/dev/$parent" 2>/dev/null)"
 
-      # If not luks encrypted then the parent is the name.
-      if [[ -z $model ]]; then
-        model="$(lsblk -dn -o MODEL "/dev/$name" 2>/dev/null)"
-      fi
-      printf '%s\n' "$model"
-    }
+          # If not luks encrypted then the parent is the name.
+          if [[ -z $model ]]; then
+            model="$(lsblk -dn -o MODEL "/dev/$name" 2>/dev/null)"
+          fi
+          printf '%s\n' "$model"
+        }
 
-    # 1) size like "7.3T"
-    dev="$(readlink -f "/dev/disk/by-uuid/$uuid")"
-    model=""
-    model="$(resolve_model_for_base "$uuid")"
-    log "$model"
+        # 1) size like "7.3T"
+        dev="$(readlink -f "/dev/disk/by-uuid/$uuid")"
+        model=""
+        model="$(resolve_model_for_base "$uuid")"
+        log "$model"
 
-    size_str="$(lsblk -dno SIZE "$dev" 2>/dev/null)"
+        size_str="$(lsblk -dno SIZE "$dev" 2>/dev/null)"
 
-    [[ -z "$size_str" ]] && size_str="${label:-$uuid}"
+        [[ -z "$size_str" ]] && size_str="${label:-$uuid}"
 
-    # Escape '.' for regex use
-    size_re="${size_str//./\\.}"
+        # Escape '.' for regex use
+        size_re="${size_str//./\\.}"
 
-    # 2) collect used numbers for this size across existing desktop shortcuts
-    declare -A used=()
-    shopt -s nullglob
-    for f in "$desktop_dir"/*.desktop; do
-        [[ -e "$f" ]] || continue   # skip if no matches
-        if grep -q "$UUID_FILTER" "$f"; then
-            exit 0   # stop after first match (remove this if you want to delete all matches)
+        # 2) collect used numbers for this size across existing desktop shortcuts
+        declare -A used=()
+        shopt -s nullglob
+        for f in "$desktop_dir"/*.desktop; do
+            [[ -e "$f" ]] || continue   # skip if no matches
+            if grep -q "$UUID_FILTER" "$f"; then
+                exit 0   # stop after first match (remove this if you want to delete all matches)
+            fi
+        done
+        for f in "$desktop_dir"/*.desktop; do
+          [[ "$f" == "$icon_path" ]] && continue   # ignore our own file when (re)creating
+          name_line="$(grep -m1 '^Name=' "$f" 2>/dev/null | cut -d= -f2-)"
+          if [[ "$name_line" =~ ^${size_re}\ Disk\ ([0-9]+)$ ]]; then
+            used["${BASH_REMATCH[1]}"]=1
+          fi
+        done
+        # 3) pick the smallest free N>=1
+        n=1
+        while :; do
+          [[ -z "${used[$n]+x}" ]] && break
+          ((n++))
+        done
+        pretty="${size_str} Disk ${n}"
+
+        # If our UUID file already exists and already has a matching "size Disk N"
+        # that's not taken by others, keep it (avoid renumbering on replug)
+        if [[ -f "$icon_path" ]]; then
+          current_name="$(grep -m1 '^Name=' "$icon_path" 2>/dev/null | cut -d= -f2-)"
+          if [[ "$current_name" =~ ^${size_re}\ Disk\ ([0-9]+)$ ]]; then
+            currn="${BASH_REMATCH[1]}"
+            if [[ -z "${used[$currn]+x}" ]]; then
+              pretty="$current_name"
+            fi
+          fi
         fi
-    done
-    for f in "$desktop_dir"/*.desktop; do
-      [[ "$f" == "$icon_path" ]] && continue   # ignore our own file when (re)creating
-      name_line="$(grep -m1 '^Name=' "$f" 2>/dev/null | cut -d= -f2-)"
-      if [[ "$name_line" =~ ^${size_re}\ Disk\ ([0-9]+)$ ]]; then
-        used["${BASH_REMATCH[1]}"]=1
-      fi
-    done
-    # 3) pick the smallest free N>=1
-    n=1
-    while :; do
-      [[ -z "${used[$n]+x}" ]] && break
-      ((n++))
-    done
-    pretty="${size_str} Disk ${n}"
 
-    # If our UUID file already exists and already has a matching "size Disk N"
-    # that's not taken by others, keep it (avoid renumbering on replug)
-    if [[ -f "$icon_path" ]]; then
-      current_name="$(grep -m1 '^Name=' "$icon_path" 2>/dev/null | cut -d= -f2-)"
-      if [[ "$current_name" =~ ^${size_re}\ Disk\ ([0-9]+)$ ]]; then
-        currn="${BASH_REMATCH[1]}"
-        if [[ -z "${used[$currn]+x}" ]]; then
-          pretty="$current_name"
+        if [[ -n "$model" ]]; then
+          pretty="$pretty ($model)"
         fi
-      fi
-    fi
-
-    if [[ -n "$model" ]]; then
-      pretty="$pretty ($model)"
-    fi
-    icon_path="${desktop_dir}/${pretty}.desktop"
-    # 4) write/update the .desktop (filename stays <uuid>.desktop)
-    tmp="$(mktemp)"
-    cat > "$tmp" <<EOF
+        icon_path="${desktop_dir}/${pretty}.desktop"
+        # 4) write/update the .desktop (filename stays <uuid>.desktop)
+        tmp="$(mktemp)"
+        cat > "$tmp" <<EOF
 [Desktop Entry]
 Type=Link
 Name=${pretty}
 Icon=drive-removable-media
 URL=file:///run/media/${rwuser}/${uuid}
 EOF
-    install -o "$RW_UID" -g "$RW_GID" -m 0644 "$tmp" "$icon_path"
-    rm -f "$tmp"
+        install -o "$RW_UID" -g "$RW_GID" -m 0644 "$tmp" "$icon_path"
+        rm -f "$tmp"
 
-  log "Created desktop icon '${pretty}.desktop' (owner $rwuser)."
+        log "Created desktop icon '${pretty}.desktop' (owner $rwuser)."
+      fi
+    fi
 
   done < <(lsblk -rno TYPE,UUID,FSTYPE,MOUNTPOINT | awk '$1=="part"||$1=="crypt"{print}')
 fi
