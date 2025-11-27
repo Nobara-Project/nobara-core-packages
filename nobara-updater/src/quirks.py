@@ -37,6 +37,7 @@ class QuirkFixup:
         perform_kernel_actions = 0
         perform_reboot_request = 0
         perform_refresh = 0
+        current_release = 43
         # START QUIRKS LIST
 
         # QUIRK: Make sure to refresh the repositories and gpg-keys before anything
@@ -70,9 +71,19 @@ class QuirkFixup:
             self.logger.info(log_message)
         # QUIRK: Make sure to update the updater itself and refresh before anything
         self.logger.info("QUIRK: Make sure to update the updater itself and refresh before anything.")
+        # Update release packages on new release
+
+        result = subprocess.run("cat /etc/os-release | grep VERSION_ID", shell=True, capture_output=True, text=True, check=True)
+
+        # Split the output into lines
+        release = result.stdout.strip().split('\n')
+
+        if current_release not in release:
+            subprocess.run("dnf update -y --refresh nobara-release* --nogpgcheck", shell=True, capture_output=True, text=True, check=True)
+
         if "nobara-updater" in package_names:
             log_message = "An update for the Update System app has been detected, updating self...\n"
-            subprocess.run("dnf update -y --refresh nobara-updater --nogpgcheck", shell=True, capture_output=True, text=True, check=True)
+            subprocess.run("dnf update -y --refresh nobara-updater --nogpgcheck --best", shell=True, capture_output=True, text=True, check=True)
             perform_refresh = 1
             self.logger.info(perform_refresh)
             return (
@@ -705,8 +716,6 @@ class QuirkFixup:
                 "mesa-libxatracker.x86_64",
                 "mesa-va-drivers.i686",
                 "mesa-va-drivers.x86_64",
-                "mesa-vdpau-drivers.i686",
-                "mesa-vdpau-drivers.x86_64",
                 "mesa-vulkan-drivers.i686",
                 "mesa-vulkan-drivers.x86_64",
             ]
@@ -869,19 +878,7 @@ class QuirkFixup:
                         ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers.x86_64"], capture_output=True, text=True
-                    )
-                    subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers.i686"], capture_output=True, text=True
-                    )
-                    subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers-freeworld.x86_64"], capture_output=True, text=True
-                    )
-                    subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers-freeworld.i686"], capture_output=True, text=True
-                    )
-                    subprocess.run(
-                        ["dnf", "install", "-y", "mesa-libgallium-freeworld.x86_64", "mesa-libgallium-freeworld.i686", "mesa-va-drivers-freeworld.x86_64", "mesa-va-drivers-freeworld.i686", "mesa-vdpau-drivers-freeworld.x86_64", "mesa-vdpau-drivers-freeworld.i686", "--refresh"],
+                        ["dnf", "install", "-y", "mesa-libgallium-freeworld.x86_64", "mesa-libgallium-freeworld.i686", "mesa-va-drivers-freeworld.x86_64", "mesa-va-drivers-freeworld.i686", "--refresh"],
                         capture_output=True, text=True
                     )
                 # Otherwise correct to original
@@ -911,19 +908,7 @@ class QuirkFixup:
                         ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers.x86_64"], capture_output=True, text=True
-                    )
-                    subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers.i686"], capture_output=True, text=True
-                    )
-                    subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers-freeworld.x86_64"], capture_output=True, text=True
-                    )
-                    subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-vdpau-drivers-freeworld.i686"], capture_output=True, text=True
-                    )
-                    subprocess.run(
-                        ["dnf", "install", "-y", "mesa-libgallium.x86_64", "mesa-libgallium.i686", "mesa-va-drivers.x86_64", "mesa-va-drivers.i686", "mesa-vdpau-drivers.x86_64", "mesa-vdpau-drivers.i686", "--refresh"],
+                        ["dnf", "install", "-y", "mesa-libgallium.x86_64", "mesa-libgallium.i686", "mesa-va-drivers.x86_64", "mesa-va-drivers.i686", "--refresh"],
                         capture_output=True, text=True
                     )
 
@@ -1041,8 +1026,6 @@ class QuirkFixup:
                 "openh264.i686",
                 "mesa-va-drivers-freeworld.x86_64",
                 "mesa-va-drivers-freeworld.i686",
-                "mesa-vdpau-drivers-freeworld.x86_64",
-                "mesa-vdpau-drivers-freeworld.i686",
                 "mesa-libgallium-freeworld.x86_64",
                 "mesa-libgallium-freeworld.i686",
                 "gstreamer1-plugins-bad-free-extras.x86_64",
@@ -1064,8 +1047,6 @@ class QuirkFixup:
                 "noopenh264.i686",
                 "mesa-va-drivers.x86_64",
                 "mesa-va-drivers.i686",
-                "mesa-vdpau-drivers.x86_64",
-                "mesa-vdpau-drivers.i686",
                 "mesa-libgallium.x86_64",
                 "mesa-libgallium.i686",
                 "mesa-vulkan-drivers.x86_64",

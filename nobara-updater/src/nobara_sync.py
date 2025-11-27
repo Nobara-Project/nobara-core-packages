@@ -689,6 +689,7 @@ def install_updates() -> None:
         # Run the commands
         subprocess.run(["akmods"], check=True)
         subprocess.run(["dracut", "-f","--regenerate-all"], check=True)
+        perform_reboot_request = 1
 
     if is_running_with_sudo_or_pkexec() == 1:
         sudo_user = os.environ.get('SUDO_USER', '')
@@ -858,15 +859,11 @@ def media_fixup() -> None:
         "mesa-libgallium.x86_64",
         "mesa-libgallium.i686",
         "mesa-va-drivers.x86_64",
-        "mesa-vdpau-drivers.x86_64",
         "mesa-va-drivers.i686",
-        "mesa-vdpau-drivers.i686",
         "mesa-libgallium-freeworld.x86_64",
         "mesa-libgallium-freeworld.i686",
         "mesa-va-drivers-freeworld.x86_64",
-        "mesa-vdpau-drivers-freeworld.x86_64",
         "mesa-va-drivers-freeworld.i686",
-        "mesa-vdpau-drivers-freeworld.i686",
         "noopenh264.x86_64",
         "noopenh264.i686",
         "x264.x86_64",
@@ -936,9 +933,7 @@ def media_fixup() -> None:
         "mesa-libgallium-freeworld.x86_64",
         "mesa-libgallium-freeworld.i686",
         "mesa-va-drivers-freeworld.x86_64",
-        "mesa-vdpau-drivers-freeworld.x86_64",
         "mesa-va-drivers-freeworld.i686",
-        "mesa-vdpau-drivers-freeworld.i686",
         "ffmpeg-free.x86_64",
         "libavcodec-free.x86_64",
         "libavcodec-free.i686",
