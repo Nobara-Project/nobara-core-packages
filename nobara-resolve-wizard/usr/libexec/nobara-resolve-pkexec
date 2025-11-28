@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 import shutil
+import stat
 
 LIBDIR = Path("/opt/resolve/libs")
 RUNTIME_DIR = Path("/opt/nobara-resolve-runtime")
@@ -17,7 +18,7 @@ if len(sys.argv) != 2:
 run_file = sys.argv[1]
 
 # Step 1: Install necessary packages as root
-subprocess.run(["dnf", "install", "-y", "rocm-meta", "nobara-resolve-runtime", "zlib", "libxcrypt-compat"], check=True)
+subprocess.run(["dnf", "install", "-y", "rocm-meta", "nobara-resolve-runtime", "zlib", "libxcrypt-compat", "python3.11", "python3.11-libs", "alsa-plugins-pulseaudio"], check=True)
 
 # Step 2: Remove old version if it exists
 os.chmod(run_file, 0o775)
@@ -46,3 +47,23 @@ for sofile in RUNTIME_DIR.glob("*.so.*"):
         shutil.copy2(sofile, LIBDIR / sofile.name)
     except PermissionError as e:
         print(f"Permission error copying {sofile}: {e}")
+
+# Paths
+orig = "/opt/resolve/bin/resolve"
+real = "/opt/resolve/bin/resolve-real"
+
+# 1. Move original binary to resolve-real
+shutil.move(orig, real)
+
+# 2. Create the wrapper script
+wrapper_content = """#!/bin/bash
+export LD_PRELOAD=/usr/lib64/libpython3.11.so.1.0
+exec /opt/resolve/bin/resolve-real "$@"
+"""
+
+with open(orig, "w") as f:
+    f.write(wrapper_content)
+
+# 3. Make the wrapper executable (chmod +x)
+st = os.stat(orig)
+os.chmod(orig, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)

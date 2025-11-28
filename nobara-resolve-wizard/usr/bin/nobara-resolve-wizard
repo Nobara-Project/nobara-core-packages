@@ -349,6 +349,7 @@ class DaVinciInstaller(Gtk.Application):
 
             # 5) Bypass the onboarding screen by writing the version flag
             try:
+                user_home = os.path.expanduser("~")
                 config_dir = os.path.join(user_home, ".local", "share", "DaVinciResolve", "configs")
                 os.makedirs(config_dir, exist_ok=True)
                 version_file = os.path.join(config_dir, ".version")
