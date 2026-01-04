@@ -4,11 +4,13 @@ import threading
 import time
 import sys
 from logging.handlers import QueueHandler
-from typing import Any
+from typing import Any, List
 import inspect
 import dnf  # type: ignore[import]
 import gi  # type: ignore[import]
 import subprocess
+import os
+import contextlib
 
 gi.require_version("Gtk", "3.0")
 
@@ -43,6 +45,26 @@ class AttributeDict(dict[str, Any]):
                 f"'AttributeDict' object has no attribute '{attr}'"
             ) from err
 
+@contextlib.contextmanager
+def mute_loggers(names: list[str], level: int = logging.WARNING):
+    saved = []
+    for name in names:
+        lg = logging.getLogger(name)
+        saved.append((lg, lg.level, lg.disabled, lg.propagate, list(lg.handlers)))
+        # Make sure nothing prints
+        lg.setLevel(level)
+        lg.disabled = False
+        lg.propagate = False
+        lg.handlers = []          # detach handlers that print to console
+        lg.addHandler(logging.NullHandler())
+    try:
+        yield
+    finally:
+        for lg, old_level, old_disabled, old_propagate, old_handlers in saved:
+            lg.setLevel(old_level)
+            lg.disabled = old_disabled
+            lg.propagate = old_propagate
+            lg.handlers = old_handlers
 
 def repoindex(retries: int = 3, delay: int = 5) -> list[AttributeDict]:
     attempt = 0
@@ -50,8 +72,8 @@ def repoindex(retries: int = 3, delay: int = 5) -> list[AttributeDict]:
         base = dnf.Base()
         try:
             base.read_all_repos()
-            base.fill_sack(load_system_repo=True)
-
+            with mute_loggers(["dnf", "dnf.base", "dnf.plugin", "libdnf", "hawkey"], level=logging.WARNING):
+                base.fill_sack(load_system_repo=True)
             def metadata_refresh(base: dnf.Base) -> None:
                 for repo in base.repos.iter_enabled():
                     repo.metadata_expire = 0
@@ -126,8 +148,8 @@ def updatechecker(retries: int = 3, delay: int = 5) -> list[str]:
                 for pkg in query.run():
                     repos.add(pkg.reponame)
                 return list(repos)
-
-            base.fill_sack(load_system_repo=True)
+            with mute_loggers(["dnf", "dnf.base", "dnf.plugin", "libdnf", "hawkey"], level=logging.WARNING):
+                base.fill_sack(load_system_repo=True)
             q = base.sack.query()
             updates = q.upgrades().run()
 
@@ -252,112 +274,82 @@ class PackageUpdater:
         #self.update_packages(action)
         self.update_packages_dnf_command(action)
 
-    def update_packages(self, action: str, retries: int = 3, delay: int = 5) -> None:
-        attempt = 0
-        while attempt < retries:
-            if self.package_names:
-                try:
-                    base = dnf.Base()
-                    base.read_all_repos()
-                    self.logger.info("Read all repos")
-                    base.fill_sack()
-                    action_log_string = "Upgrading packages:"
-
-                    for package_name in self.package_names:
-                        if action == "upgrade":
-                            base.upgrade(package_name)
-                        elif action == "install":
-                            base.install(package_name)
-                            action_log_string = "Installing packages:"
-                        elif action == "remove":
-                            base.remove(package_name)
-                            action_log_string = "Removing packages:"
-
-                    self.logger.info(
-                        "%s\n%s", action_log_string, chr(10).join(self.package_names)
-                    )
-
-                    base.resolve()
-                    self.logger.info("Resolved dependencies")
-
-                    # Refresh metadata and download packages
-                    base.download_packages(base.transaction.install_set)
-                    self.logger.info("Downloaded packages")
-
-                    # Perform the transaction
-                    self.logger.info("Starting transaction")
-                    display = [CustomTransactionDisplay(len(self.package_names))]
-                    base.do_transaction(display)
-
-                    self.logger.info("Successfully updated packages!")
-                    return  # Exit the loop on success
-                except FileNotFoundError as e:
-                    if e.errno == 2:
-                        attempt += 1
-                        self.logger.info("Attempt %d failed with error: %s. Retrying in %d seconds...", attempt, e, delay)
-                        time.sleep(delay)
-                    else:
-                        raise
-                except Exception as e:
-                    self.logger.error("An unexpected error occurred: %s", e)
-                    raise
-                finally:
-                    try:
-                        base.close()
-                        attempt = 3
-                    except Exception as e:
-                        self.logger.error("Failed to close base: %s", e)
-        raise Exception("Failed to complete operation after %d attempts" % retries)
 
     def update_packages_dnf_command(self, action: str, retries: int = 3, delay: int = 5) -> None:
-        attempt = 0
-        while attempt < retries:
-            if self.package_names:
-                try:
-                    action_log_string = "Upgrading packages:" if action == "upgrade" else (
-                        "Installing packages:" if action == "install" else "Removing packages:"
-                    )
+        def _looks_like_dependency_conflict(lines: List[str]) -> bool:
+            needles = (
+                "Problem ",
+                "Skipping packages with conflicts",
+                "Skipping packages with broken dependencies",
+                "conflicts",
+                "broken dependencies",
+                "cannot install",
+                "Transaction check error",
+                "Error:",
+            )
+            return any(any(n in line for n in needles) for line in lines)
 
-                    package_list = " ".join(self.package_names)
-                    command = f"dnf {'update' if action == 'upgrade' else 'install' if action == 'install' else 'remove'} --refresh -y {package_list}"
+        if not self.package_names:
+            raise ValueError("No package names provided")
 
-                    self.logger.info("%s\n%s", action_log_string, "\n".join(self.package_names))
+        action_map = {"upgrade": "update", "install": "install", "remove": "remove"}
+        if action not in action_map:
+            raise ValueError(f"Invalid action: {action!r}")
 
-                    try:
-                        process = subprocess.Popen(
-                            command,
-                            shell=True,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT,
-                            text=True,
-                            encoding='latin-1'
-                        )
+        action_log_string = {
+            "upgrade": "Upgrading packages:",
+            "install": "Installing packages:",
+            "remove": "Removing packages:",
+        }[action]
 
-                        output_lines = []
-                        while True:
-                            line = process.stdout.readline()
-                            if not line:
-                                break
-                            output_lines.append(line.strip())
-                            if line.endswith('\n'):
-                                for ln in output_lines:
-                                    self.logger.info(ln)
-                                output_lines.clear()
-                    except UnicodeDecodeError as e:
-                        self.logger.error(f"Encoding error: {e}")
+        cmd = ["dnf", action_map[action], "--refresh", "-y", *self.package_names]
 
-                    self.logger.info("Successfully updated packages!")
-                    return  # Exit the loop on success
-                except FileNotFoundError as e:
-                    if e.errno == 2:
-                        attempt += 1
-                        self.logger.info("Attempt %d failed with error: %s. Retrying in %d seconds...", attempt, e, delay)
-                        time.sleep(delay)
-                    else:
-                        raise
-                except Exception as e:
-                    self.logger.error("An unexpected error occurred: %s", e)
-                    raise
-            else:
-                raise ValueError("No package names provided")
-        raise Exception("Failed to complete operation after %d attempts" % retries)
+        self.logger.info("%s\n%s", action_log_string, "\n".join(self.package_names))
+
+        for attempt in range(1, retries + 1):
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+
+                output_lines: List[str] = []
+                assert process.stdout is not None
+                for raw in process.stdout:
+                    line = raw.rstrip("\n")
+                    output_lines.append(line)
+                    self.logger.info(line)
+
+                rc = process.wait()
+
+                # Treat "conflict-style" output as failure even if rc == 0 (your example case)
+                if _looks_like_dependency_conflict(output_lines):
+                    self.logger.error("==================================================")
+                    self.logger.error("ERROR: DNF Package update are incomplete or failed due to conflicts/broken dependencies.")
+                    self.logger.error("ERROR: Please see ~/.local/share/logs/nobara-sync.log for more details")
+                    self.logger.error("ERROR: You can press the 'Open Log File' button on the Update System app to view it.")
+                    self.logger.error("==================================================")
+                    return  # <-- IMPORTANT: exit normally (0) so GUI can reset buttons
+
+                if rc != 0:
+                    self.logger.error("==================================================")
+                    self.logger.error("ERROR: DNF Package update are incomplete or failed due to conflicts/broken dependencies.")
+                    self.logger.error("ERROR: Please see ~/.local/share/logs/nobara-sync.log for more details")
+                    self.logger.error("ERROR: You can press the 'Open Log File' button on the Update System app to view it.")
+                    self.logger.error("==================================================")
+                    return  # <-- exit normally
+
+                self.logger.info("DNF System Updates complete!")
+                return
+
+            except Exception as e:
+                self.logger.error("Attempt %d/%d failed: %s", attempt, retries, e)
+                if attempt < retries:
+                    time.sleep(delay)
+                else:
+
+                    return  # <-- exit normally even on final failure

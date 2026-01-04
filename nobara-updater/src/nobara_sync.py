@@ -26,24 +26,12 @@ gi.require_version("Flatpak", "1.0")
 
 from gi.repository import Flatpak, GLib, Gtk  # type: ignore[import]
 
-#from yumex.constants import BACKEND  # type: ignore[import]
-# still need to repair DNF5, use DNF4 for now
-BACKEND = "DNF4"
-
-if BACKEND == "DNF5":
-    from nobara_updater.dnf5 import (  # type: ignore[import]
-        AttributeDict,
-        PackageUpdater,
-        repoindex,
-        updatechecker,
-    )
-else:
-    from nobara_updater.dnf4 import (  # type: ignore[import]
-        AttributeDict,
-        PackageUpdater,
-        repoindex,
-        updatechecker,
-    )
+from nobara_updater.dnf import (  # type: ignore[import]
+    AttributeDict,
+    PackageUpdater,
+    repoindex,
+    updatechecker,
+)
 
 original_user_home = Path("~").expanduser()
 
@@ -374,7 +362,6 @@ def check_repos() -> None:
         mirrorlist_repos,
         baseurl_repos,
     ) = get_repolist()
-
     log_messages = []
 
     # Create a session
@@ -1125,16 +1112,6 @@ def request_update_status() -> None:
     global updates_available
     global fixups_available
     have_updates = 0
-
-    logger.info("Finished known problem checking and repair")
-
-    # Check the same flag once more in case they declined prompt_media_fixup
-    # Use else statement this time to finalize the check
-    if fixups_available == 1:
-        have_updates = 1
-        logger.info("Fixups Available.")
-    else:
-        logger.info("No Fixups Available.")
 
     if updates_available == 1:
         have_updates = 1

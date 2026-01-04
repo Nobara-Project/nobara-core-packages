@@ -17,14 +17,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("GLib", "2.0")
 gi.require_version("Flatpak", "1.0")
 
-#from yumex.constants import BACKEND  # type: ignore[import]
-# still need to repair DNF5, use DNF4 for now
-BACKEND = "DNF4"
-
-if BACKEND == "DNF4":
-    from nobara_updater.dnf5 import PackageUpdater, updatechecker  # type: ignore[import]
-else:
-    from nobara_updater.dnf4 import PackageUpdater, updatechecker  # type: ignore[import]
+from nobara_updater.dnf import PackageUpdater, updatechecker  # type: ignore[import]
 
 
 class QuirkFixup:
@@ -941,8 +934,6 @@ class QuirkFixup:
                             perform_reboot_request = 1
                         except subprocess.CalledProcessError as e:
                             self.logger.info(f"Error installing new kernel: {e}")
-                else:
-                    self.logger.info(f"Current kernel version ({version_output}) is already up to date.")
 
         except subprocess.CalledProcessError as e:
             self.logger.info(f"An error occurred: {e}")
