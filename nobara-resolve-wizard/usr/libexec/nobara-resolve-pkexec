@@ -57,6 +57,7 @@ shutil.move(orig, real)
 
 # 2. Create the wrapper script
 wrapper_content = """#!/bin/bash
+export RUSTICL_ENABLE=""
 export LD_PRELOAD=/usr/lib64/libpython3.11.so.1.0
 exec /opt/resolve/bin/resolve-real "$@"
 """
