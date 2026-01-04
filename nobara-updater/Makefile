@@ -13,8 +13,7 @@ all: install symlinks
 install:
 	@echo "Installing Python files to $(TARGET_DIR)"
 	mkdir -p $(TARGET_DIR)
-	install -m 644 src/dnf4.py $(TARGET_DIR)/dnf4.py
-	install -m 644 src/dnf5.py $(TARGET_DIR)/dnf5.py
+	install -m 644 src/dnf.py $(TARGET_DIR)/dnf.py
 	install -m 644 src/quirks.py $(TARGET_DIR)/quirks.py
 	install -m 644 src/run_as.py $(TARGET_DIR)/run_as.py
 	install -m 644 src/run_as_user_target.py $(TARGET_DIR)/run_as_user_target.py
