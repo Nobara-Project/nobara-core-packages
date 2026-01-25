@@ -149,11 +149,11 @@ class QuirkFixup:
         ):
             perform_refresh = 1
 
-        # QUIRK: Make sure to run both dracut and akmods if any kmods  or kernel packages were updated.
-        self.logger.info("QUIRK: Make sure to run both dracut and akmods if any kmods  or kernel packages were updated.")
-        # Check if any packages contain "kernel" or "akmod"
+        # QUIRK: Make sure to run both dracut and dkms if any kmods  or kernel packages were updated.
+        self.logger.info("QUIRK: Make sure to run both dracut and dkms if any kmods  or kernel packages were updated.")
+        # Check if any packages contain "kernel" or "dkms"
         kernel_kmod_packages = [
-            pkg for pkg in package_names if "kernel" in pkg or "akmod" in pkg
+            pkg for pkg in package_names if "kernel" in pkg or "dkms" in pkg
         ]
         if kernel_kmod_packages:
             perform_kernel_actions = 1
@@ -515,7 +515,6 @@ class QuirkFixup:
             "qt6-qtwebengine-freeworld",
             "qgnomeplatform-qt6",
             "qgnomeplatform-qt5",
-            "musescore",
             "okular5-libs",
             "fedora-workstation-repositories",
             "deckyloader"
@@ -602,6 +601,7 @@ class QuirkFixup:
 
         # QUIRK: Fix Nvidia epoch so it matches that of negativo17 for cross compatibility
         self.logger.info("QUIRK: Fix Nvidia epoch so it matches that of negativo17 for cross compatibility.")
+        self.logger.info("QUIRK: Also swap akmod-nvidia for dkms-nvidia.")
 
         # Run the dnf list installed command and capture the output
         check_nvidia_wrong_epoch = subprocess.run(
@@ -613,12 +613,10 @@ class QuirkFixup:
             # Filter the output for lines containing 'nvidia' and '4:'
             output_lines = check_nvidia_wrong_epoch.stdout.splitlines()
             nvidia_wrong_epoch = any("nvidia" in line and "4:" in line for line in output_lines)
-
-            # Print the result
-            print("nvidia_wrong_epoch:", nvidia_wrong_epoch)
+            nvidia_akmod = any("akmod-nvidia" in line for line in output_lines)
 
             # Proceed if nvidia_wrong_epoch is True
-            if nvidia_wrong_epoch:
+            if nvidia_wrong_epoch or nvidia_akmod:
                 check_chromium = subprocess.run(
                     ["rpm", "-q", "chromium"], capture_output=True, text=True
                 )
@@ -640,7 +638,7 @@ class QuirkFixup:
 
                 # Add new
                 packages = [
-                    "akmod-nvidia",
+                    "dkms-nvidia",
                     "nvidia-driver",
                     "libnvidia-ml",
                     "libnvidia-ml.i686",
@@ -1069,7 +1067,7 @@ class QuirkFixup:
 
 
         # END QUIRKS LIST
-        # Check if any packages contain "kernel" or "akmod"
+        # Check if any packages contain "kernel" or "dkms"
         if "gamescope" in os.environ.get('XDG_CURRENT_DESKTOP', '').lower():
             gamescope_packages = [
                 pkg for pkg in package_names if "gamescope" in pkg

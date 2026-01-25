@@ -638,10 +638,10 @@ def install_updates() -> None:
     if package_names:
         # Now update our system packages
         PackageUpdater(package_names, action, None, logger)
-    # Perform akmods and dracut if kmods or kernel were updated.
+    # Perform dkms and dracut if kmods or kernel were updated.
     if perform_kernel_actions == 1:
         logger.info(
-            "Kernel or kernel module updates were performed. Running required 'akmods' and 'dracut -f'...\n"
+            "Kernel or kernel module updates were performed. Running required 'dkms' and 'dracut -f'...\n"
         )
         # Cleanup old modules first
         try:
@@ -674,7 +674,7 @@ def install_updates() -> None:
             print(f"An error occurred: {e}")
 
         # Run the commands
-        subprocess.run(["akmods"], check=True)
+        subprocess.run(["dkms", "autoinstall", "--rpm_safe_upgrade"], check=True)
         subprocess.run(["dracut", "-f","--regenerate-all"], check=True)
         perform_reboot_request = 1
 
@@ -795,12 +795,12 @@ def attempt_distro_sync() -> None:
     # Run the commands
     try:
         result = subprocess.run(
-            ["akmods"],
+            ["dkms", "autoinstall", "--rpm_safe_upgrade"],
             capture_output=True,
             text=True,
             check=True
         )
-        logger.info("akmods output:\n" + result.stdout)
+        logger.info("dkms output:\n" + result.stdout)
 
         result = subprocess.run(
             ["dracut", "-f","--regenerate-all"],
@@ -812,7 +812,7 @@ def attempt_distro_sync() -> None:
         logger.info("Distro-sync completed successfully")
 
     except subprocess.CalledProcessError as e:
-        logger.error(f"Error running akmods/dracut: {e}")
+        logger.error(f"Error running dkms/dracut: {e}")
         return
 
     try:
