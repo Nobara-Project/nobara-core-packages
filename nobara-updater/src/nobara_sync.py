@@ -638,10 +638,10 @@ def install_updates() -> None:
     if package_names:
         # Now update our system packages
         PackageUpdater(package_names, action, None, logger)
-    # Perform dkms and dracut if kmods or kernel were updated.
+    # Perform dracut if kernel was updated.
     if perform_kernel_actions == 1:
         logger.info(
-            "Kernel or kernel module updates were performed. Running required 'dkms' and 'dracut -f'...\n"
+            "Kernel or kernel module updates were performed. Running required 'dracut -f'...\n"
         )
         # Cleanup old modules first
         try:
@@ -674,7 +674,6 @@ def install_updates() -> None:
             print(f"An error occurred: {e}")
 
         # Run the commands
-        subprocess.run(["dkms", "autoinstall", "--rpm_safe_upgrade"], check=True)
         subprocess.run(["dracut", "-f","--regenerate-all"], check=True)
         perform_reboot_request = 1
 
@@ -795,14 +794,6 @@ def attempt_distro_sync() -> None:
     # Run the commands
     try:
         result = subprocess.run(
-            ["dkms", "autoinstall", "--rpm_safe_upgrade"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        logger.info("dkms output:\n" + result.stdout)
-
-        result = subprocess.run(
             ["dracut", "-f","--regenerate-all"],
             capture_output=True,
             text=True,
@@ -812,7 +803,7 @@ def attempt_distro_sync() -> None:
         logger.info("Distro-sync completed successfully")
 
     except subprocess.CalledProcessError as e:
-        logger.error(f"Error running dkms/dracut: {e}")
+        logger.error(f"Error running dracut: {e}")
         return
 
     try:
