@@ -416,6 +416,14 @@ perform_refresh = 0
 is_refreshing = 0
 media_fixup_event = threading.Event()
 
+def get_system_updates_available() -> int:
+    global system_updates_available
+    return system_updates_available
+
+def get_flatpak_updates_available() -> int:
+    global flatpak_updates_available
+    return flatpak_updates_available
+
 def toggle_refresh() -> None:
     global is_refreshing
 
@@ -435,8 +443,12 @@ def get_fixups_available() -> int:
 
 def check_updates(return_texts: bool = False) -> None | tuple[str | None, str | None, str | None]:
     global updates_available
+    global system_updates_available
+    global flatpak_updates_available
 
     updates_available = 0
+    system_updates_available = 0
+    flatpak_updates_available = 0
 
     sys_update_text = None
     fp_user_update_text = None
@@ -446,6 +458,7 @@ def check_updates(return_texts: bool = False) -> None | tuple[str | None, str | 
     package_names = updatechecker()
     if package_names:
         updates_available = 1
+        system_updates_available = 1
         sys_update_text = "\n".join(package_names)
 
     if is_running_with_sudo_or_pkexec() == 1:
@@ -469,17 +482,17 @@ def check_updates(return_texts: bool = False) -> None | tuple[str | None, str | 
     orig_user_gid = pw_record.pw_gid
 
     # Flatpak User Updates window
-    fp_user_updates = run_as_user(
-        orig_user_uid, orig_user_gid, "fp_get_user_updates"
-    )
+    fp_user_updates = run_as_user(orig_user_uid, orig_user_gid, "fp_get_user_updates")
     if fp_user_updates:
         updates_available = 1
+        flatpak_updates_available = 1
         fp_user_update_text = "\n".join(fp_user_updates)
 
     # Flatpak System Updates window
     fp_system_updates = fp_get_system_updates()
     if fp_system_updates:
         updates_available = 1
+        flatpak_updates_available = 1
         fp_sys_update_texts = [
             fp_system_update.get_appdata_name()
             for fp_system_update in fp_system_updates
@@ -512,6 +525,97 @@ def fp_get_system_updates() -> list[Flatpak.Ref] | None:
         if flatpak_sys_updates != []:
             return flatpak_sys_updates
         return []
+
+def get_orig_user_ids() -> tuple[int, int]:
+    if is_running_with_sudo_or_pkexec() == 1:
+        sudo_user = os.environ.get("SUDO_USER", "")
+        if sudo_user and not sudo_user.isdigit():
+            try:
+                orig_user_uid = pwd.getpwnam(sudo_user).pw_uid
+                os.environ["ORIG_USER"] = str(orig_user_uid)
+                original_user_home = pwd.getpwnam(sudo_user).pw_dir
+                os.environ["ORIGINAL_USER_HOME"] = str(original_user_home)
+            except KeyError:
+                print(f"User {sudo_user} not found")
+
+    orig_user = os.environ.get("ORIG_USER") or "0"
+    orig_user_uid = int(orig_user)
+    pw_record = pwd.getpwuid(orig_user_uid)
+    orig_user_gid = pw_record.pw_gid
+    return orig_user_uid, orig_user_gid
+
+def install_system_updates_only() -> None:
+    global perform_kernel_actions
+    global perform_reboot_request
+
+    package_names = updatechecker()
+
+    logger.info("Starting SYSTEM package updates, please do not turn off your computer...\n")
+    action = "upgrade"
+    if package_names:
+        PackageUpdater(package_names, action, None, logger)
+
+    # Perform dracut if kernel was updated.
+    if perform_kernel_actions == 1:
+        logger.info(
+            "Kernel or kernel module updates were performed. Running required 'dracut -f'...\n"
+        )
+        try:
+            result = subprocess.run(
+                "ls /boot/ | grep vmlinuz | grep -v rescue",
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            lines = result.stdout.strip().split("\n")
+            versions = [line.replace("vmlinuz-", "") for line in lines if line.startswith("vmlinuz-")]
+
+            result = subprocess.run(["ls", "/lib/modules"], capture_output=True, text=True, check=True)
+            modules = result.stdout.strip().split()
+
+            filtered_modules = [module for module in modules if module not in versions]
+            for directory in filtered_modules:
+                if directory:
+                    dir_path = os.path.join("/lib/modules", directory)
+                    if os.path.exists(dir_path):
+                        shutil.rmtree(dir_path)
+        except subprocess.CalledProcessError as e:
+            print(f"An error occurred: {e}")
+
+        subprocess.run(["dracut", "-f", "--regenerate-all"], check=True)
+        perform_reboot_request = 1
+
+    # Send update refresh request to systray service
+    orig_user_uid, orig_user_gid = get_orig_user_ids()
+    run_as_user(orig_user_uid, orig_user_gid, "yumex_sync_updates")
+
+    # Remove newinstall needs-update tracker
+    if Path.exists(Path("/etc/nobara/newinstall")):
+        try:
+            Path("/etc/nobara/newinstall").unlink()
+        except OSError as e:
+            logger.error("Error: %s", e.strerror)
+
+    if perform_reboot_request == 1:
+        logger.info("Kernel, kernel module, or desktop compositor update performed. Reboot required.")
+        prompt_reboot()
+
+def install_flatpak_updates_only() -> None:
+    logger.info("Starting FLATPAK updates, please do not turn off your computer...\n")
+
+    orig_user_uid, orig_user_gid = get_orig_user_ids()
+
+    # system flatpaks
+    install_system_flatpak_updates()
+
+    # user flatpaks
+    run_as_user(orig_user_uid, orig_user_gid, "install_user_flatpak_updates")
+
+    # refresh systray
+    run_as_user(orig_user_uid, orig_user_gid, "yumex_sync_updates")
+
+    logger.info("Flatpak updates complete!\n")
 
 
 def install_system_flatpak_updates() -> None:
@@ -628,100 +732,8 @@ def install_fixups() -> None:
 
 
 def install_updates() -> None:
-    global perform_kernel_actions
-    global perform_reboot_request
-
-    package_names = updatechecker()
-
-    logger.info("Starting package updates, please do not turn off your computer...\n")
-    action = "upgrade"
-    if package_names:
-        # Now update our system packages
-        PackageUpdater(package_names, action, None, logger)
-    # Perform dracut if kernel was updated.
-    if perform_kernel_actions == 1:
-        logger.info(
-            "Kernel or kernel module updates were performed. Running required 'dracut -f'...\n"
-        )
-        # Cleanup old modules first
-        try:
-            # Run the command and capture the output
-            result = subprocess.run("ls /boot/ | grep vmlinuz | grep -v rescue", shell=True, capture_output=True, text=True, check=True)
-
-            # Split the output into lines
-            lines = result.stdout.strip().split('\n')
-
-            # Extract version numbers by removing 'vmlinuz-' prefix
-            versions = [line.replace('vmlinuz-', '') for line in lines if line.startswith('vmlinuz-')]
-
-            # Run the ls command and capture the output
-            result = subprocess.run(['ls', '/lib/modules'], capture_output=True, text=True, check=True)
-
-            # Split the output into entries
-            modules = result.stdout.strip().split()
-
-            # Filter modules that do not match the kernel versions
-            filtered_modules = [module for module in modules if module not in versions]
-
-            # Remove filtered modules
-            for directory in filtered_modules:
-                if directory:  # Check if directory is not None or empty
-                    dir_path = os.path.join('/lib/modules', directory)
-                    if os.path.exists(dir_path):  # Check if the path exists
-                        shutil.rmtree(dir_path)
-
-        except subprocess.CalledProcessError as e:
-            print(f"An error occurred: {e}")
-
-        # Run the commands
-        subprocess.run(["dracut", "-f","--regenerate-all"], check=True)
-        perform_reboot_request = 1
-
-    if is_running_with_sudo_or_pkexec() == 1:
-        sudo_user = os.environ.get('SUDO_USER', '')
-        if sudo_user and not sudo_user.isdigit():
-            try:
-                orig_user_uid = pwd.getpwnam(sudo_user).pw_uid
-                os.environ['ORIG_USER'] = str(orig_user_uid)
-
-                original_user_home = pwd.getpwnam(sudo_user).pw_dir
-                os.environ['ORIGINAL_USER_HOME'] = str(original_user_home)
-            except KeyError:
-                print(f"User {sudo_user} not found")
-
-    # Get the original user's UID and GID
-    orig_user = os.environ.get("ORIG_USER")
-    if orig_user is None:
-        orig_user="0"
-    orig_user_uid = int(orig_user)
-    pw_record = pwd.getpwuid(orig_user_uid)
-    orig_user_gid = pw_record.pw_gid
-
-    # Now update our flatpaks
-    # system
-    install_system_flatpak_updates()
-    # user
-    run_as_user(
-        orig_user_uid, orig_user_gid, "install_user_flatpak_updates"
-    )
-
-    # Send update refresh request to systray service
-    run_as_user(
-        orig_user_uid, orig_user_gid, "yumex_sync_updates"
-    )
-
-    # Remove newinstall needs-update tracker
-    if Path.exists(Path("/etc/nobara/newinstall")):
-        try:
-            # Remove the file
-            Path("/etc/nobara/newinstall").unlink()
-        except OSError as e:
-            logger.error("Error: %s", e.strerror)
-
-    if perform_reboot_request == 1:
-        logger.info("Kernel, kernel module, or desktop compositor update performed. Reboot required.")
-        prompt_reboot()
-
+    install_system_updates_only()
+    install_flatpak_updates_only()
 
 def attempt_distro_sync() -> None:
     # Run dnf distro-sync first
@@ -1020,8 +1032,13 @@ def parse_args() -> argparse.Namespace:
         "install-codecs",
         help="Performs media codec installation.",
     )
-    cli_parser = subparsers.add_parser("cli", help="Run in CLI mode, defaults to install-updates")
-    cli_parser.add_argument("username", help="Specify the username", nargs='?')  # Optional positional argument
+    cli_parser = subparsers.add_parser("cli", help="Run in CLI mode, defaults to --all")
+    cli_parser.add_argument("username", help="Specify the username", nargs="?")
+    mode_group = cli_parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--system", action="store_true", help="Install only system package updates")
+    mode_group.add_argument("--flatpak", action="store_true", help="Install only flatpak updates")
+    mode_group.add_argument("--all", action="store_true", help="Install both system and flatpak updates (default)")
+
     subparsers.add_parser("check-repos", help="list enabled repo information")
 
     return parser.parse_args()
@@ -1150,11 +1167,35 @@ def main() -> None:
         except Exception as e:
             error_message = f"Error fetching updates: {str(e)}"
             print(error_message)
-        if args.command == "install-updates" or args.command == "cli":
+        if args.command == "install-updates":
             check_repos()
             check_updates()
             install_fixups()
-            install_updates()
+            install_updates()  # all (system + flatpak)
+            check_updates()
+            request_update_status()
+            exit(0)
+        if args.command == "cli":
+            # default to --all if none specified
+            if not (args.system or args.flatpak or args.all):
+                args.all = True
+
+            do_system = args.system or args.all
+            do_flatpak = args.flatpak or args.all
+
+            check_repos()
+            check_updates()
+
+            # Only run fixups if we're doing system (fixups are system/RPM-oriented)
+            if do_system:
+                install_fixups()
+
+            if do_system:
+                install_system_updates_only()
+
+            if do_flatpak:
+                install_flatpak_updates_only()
+
             check_updates()
             request_update_status()
             exit(0)
@@ -1330,9 +1371,13 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         nobara_notices_label.set_halign(Gtk.Align.START)
 
         # Create the button to install updates
-        self.install_button = Gtk.Button(label="No Updates Available")
+        self.install_button = Gtk.Button(label="No System Updates Available")
         GLib.idle_add(button_ensure_sensitivity, self.install_button, False)
-        self.install_button.connect("clicked", self.on_install_button_clicked)
+        self.install_button.connect("clicked", self.on_install_system_button_clicked)
+
+        self.install_flatpak_button = Gtk.Button(label="No Flatpak Updates Available")
+        GLib.idle_add(button_ensure_sensitivity, self.install_flatpak_button, False)
+        self.install_flatpak_button.connect("clicked", self.on_install_flatpak_button_clicked)
 
         # Create the button to refresh updates
         self.check_updates_button = Gtk.Button(label="Check for Updates/Fixups")
@@ -1384,33 +1429,15 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
             status_scrolled_window, 0, 5, 3, 1
         )  # Column 0, Row 3, spanning 3 columns
 
-        # Add the buttons to the grid
-        # Column 0, Row 4, spanning 3 columns
-        grid.attach(
-            self.install_button, 0, 6, 3, 1
-        )
-        # Column 0, Row 5, spanning 3 columns
-        grid.attach(
-            self.fixups_button, 0, 7, 3, 1
-        )
-        # Column 0, Row 6, spanning 3 columns
-        grid.attach(
-            self.check_updates_button, 0, 8, 3, 1
-        )
-        # Column 0, Row 9, spanning 3 columns
-        grid.attach(
-            self.open_repair_button, 0, 9, 3, 1
-        )
-        # Column 0, Row 7, spanning 3 columns
-        grid.attach(self.open_log_button, 0, 10, 3, 1)
-        # Column 0, Row 8, spanning 3 columns
-        grid.attach(
-            self.open_log_button_dir, 0, 11, 3, 1
-        )
-        # Column 0, Row 9, spanning 3 columns
-        grid.attach(
-            self.open_package_man_button, 0, 12, 3, 1
-        )
+        grid.attach(self.install_button, 0, 6, 3, 1)
+        grid.attach(self.install_flatpak_button, 0, 7, 3, 1)
+
+        grid.attach(self.fixups_button, 0, 8, 3, 1)
+        grid.attach(self.check_updates_button, 0, 9, 3, 1)
+        grid.attach(self.open_repair_button, 0, 10, 3, 1)
+        grid.attach(self.open_log_button, 0, 11, 3, 1)
+        grid.attach(self.open_log_button_dir, 0, 12, 3, 1)
+        grid.attach(self.open_package_man_button, 0, 13, 3, 1)
         self.add(grid)
 
         # Initialize the logger
@@ -1422,6 +1449,37 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         logger.info("Running GUI mode...")
         updater_thread = threading.Thread(target=self.run_updater)
         updater_thread.start()
+
+    def on_install_system_button_clicked_async(self):
+        toggle_refresh()
+        GLib.idle_add(self.toggle_buttons_during_refresh)
+        self.status_label_updates("Starting SYSTEM package updates, please do not turn off your computer...")
+        self.textview_updates()
+        install_system_updates_only()
+        self.textview_updates()
+        self.status_label_updates("System updates complete!")
+        toggle_refresh()
+        GLib.idle_add(self.toggle_buttons_during_refresh)
+        request_update_status()
+
+    def on_install_system_button_clicked(self, widget):
+        threading.Thread(target=self.on_install_system_button_clicked_async).start()
+
+    def on_install_flatpak_button_clicked_async(self):
+        toggle_refresh()
+        GLib.idle_add(self.toggle_buttons_during_refresh)
+        self.status_label_updates("Starting FLATPAK updates, please do not turn off your computer...")
+        self.textview_updates()
+        install_flatpak_updates_only()
+        self.textview_updates()
+        self.status_label_updates("Flatpak updates complete!")
+        toggle_refresh()
+        GLib.idle_add(self.toggle_buttons_during_refresh)
+        request_update_status()
+
+    def on_install_flatpak_button_clicked(self, widget):
+        threading.Thread(target=self.on_install_flatpak_button_clicked_async).start()
+
 
     def update_nobara_notices(self):
         try:
@@ -1560,45 +1618,66 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
 
     def toggle_buttons_during_refresh(self):
         if get_refresh() == 1:
-            GLib.idle_add(
-                button_ensure_sensitivity, self.check_updates_button, False
-            )
+            GLib.idle_add(button_ensure_sensitivity, self.check_updates_button, False)
             GLib.idle_add(
                 self.check_updates_button.set_label, "Performing tasks, please wait..."
             )
+
+            # System updates button (renamed behavior)
             GLib.idle_add(button_ensure_sensitivity, self.install_button, False)
             GLib.idle_add(
                 self.install_button.set_label, "Performing tasks, please wait..."
             )
+
+            # Flatpak updates button (NEW)
+            GLib.idle_add(button_ensure_sensitivity, self.install_flatpak_button, False)
+            GLib.idle_add(
+                self.install_flatpak_button.set_label, "Performing tasks, please wait..."
+            )
+
             GLib.idle_add(button_ensure_sensitivity, self.fixups_button, False)
             GLib.idle_add(
                 self.fixups_button.set_label, "Performing tasks, please wait..."
             )
+
             GLib.idle_add(button_ensure_sensitivity, self.open_repair_button, False)
             GLib.idle_add(
                 self.open_repair_button.set_label, "Performing tasks, please wait..."
             )
+
         else:
+            GLib.idle_add(button_ensure_sensitivity, self.check_updates_button, True)
             GLib.idle_add(
-                button_ensure_sensitivity, self.check_updates_button, True
+                self.check_updates_button.set_label, "Check for Updates/Fixups"
             )
-            GLib.idle_add(self.check_updates_button.set_label, "Check for Updates/Fixups")
-            GLib.idle_add(
-                button_ensure_sensitivity, self.open_repair_button, True
-            )
+
+            GLib.idle_add(button_ensure_sensitivity, self.open_repair_button, True)
             GLib.idle_add(self.open_repair_button.set_label, "Repair")
-            if get_updates_available() == 1:
+
+            # System install button
+            if get_system_updates_available() == 1:
                 GLib.idle_add(button_ensure_sensitivity, self.install_button, True)
-                GLib.idle_add(self.install_button.set_label, "Install Updates")
+                GLib.idle_add(self.install_button.set_label, "Install System Updates")
             else:
                 GLib.idle_add(button_ensure_sensitivity, self.install_button, False)
-                GLib.idle_add(self.install_button.set_label, "No Updates Available")
+                GLib.idle_add(self.install_button.set_label, "No System Updates Available")
+
+            # Flatpak install button
+            if get_flatpak_updates_available() == 1:
+                GLib.idle_add(button_ensure_sensitivity, self.install_flatpak_button, True)
+                GLib.idle_add(self.install_flatpak_button.set_label, "Install Flatpak Updates")
+            else:
+                GLib.idle_add(button_ensure_sensitivity, self.install_flatpak_button, False)
+                GLib.idle_add(self.install_flatpak_button.set_label, "No Flatpak Updates Available")
+
+            # Fixups button remains based on fixups availability
             if get_fixups_available() == 1:
                 GLib.idle_add(button_ensure_sensitivity, self.fixups_button, True)
                 GLib.idle_add(self.fixups_button.set_label, "Install Fixups")
             else:
                 GLib.idle_add(button_ensure_sensitivity, self.fixups_button, False)
                 GLib.idle_add(self.fixups_button.set_label, "No Fixups Available")
+
 
     def run_updater(self) -> None:
         toggle_refresh() # turn on perform-task toggle
