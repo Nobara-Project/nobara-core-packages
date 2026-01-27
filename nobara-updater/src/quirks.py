@@ -17,6 +17,10 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("GLib", "2.0")
 gi.require_version("Flatpak", "1.0")
 
+# Force UTF-8 locale for all child processes spawned from this Python process
+os.environ.setdefault("LANG", "C.UTF-8")
+os.environ.setdefault("LC_ALL", "C.UTF-8")
+
 from nobara_updater.dnf import PackageUpdater, updatechecker  # type: ignore[import]
 
 
@@ -614,14 +618,24 @@ class QuirkFixup:
             output_lines = check_nvidia_wrong_epoch.stdout.splitlines()
             nvidia_wrong_epoch = any("nvidia" in line and "4:" in line for line in output_lines)
             nvidia_akmod = any("akmod-nvidia" in line for line in output_lines)
+            kernel_conf_path = "/etc/nvidia/kernel.conf"
+            needs_kernel_open_fix = False
 
             # Proceed if nvidia_wrong_epoch is True
             if nvidia_wrong_epoch or nvidia_akmod:
+                try:
+                    with open(kernel_conf_path, "r", encoding="utf-8", errors="ignore") as f:
+                        contents = f.read()
+                    # This matches your sed: only useful if kernel-open is present
+                    needs_kernel_open_fix = ("MODULE_VARIANT=kernel-open" in contents)
+                except OSError:
+                    needs_kernel_open_fix = False
+
                 check_chromium = subprocess.run(
                     ["rpm", "-q", "chromium"], capture_output=True, text=True
                 )
                 reinstall_chromium = 0
-                if check_chromium == 0:
+                if check_chromium.returncode == 0:
                     reinstall_chromium = 1
 
                 # Remove old
@@ -665,8 +679,32 @@ class QuirkFixup:
                 # Add the '--refresh' option at the end
                 command = ["dnf", "install", "-y"] + packages + ["--refresh"]
 
-                # Run the command
-                subprocess.run(command)
+                # Run the command (capture returncode so we can gate post steps)
+                install_proc = subprocess.run(command)
+
+                # --- Convert to closed if previous was closed ---
+                if install_proc.returncode == 0 and needs_kernel_open_fix:
+                    subprocess.run(
+                        ["sed", "-i", "-e", "s/kernel-open$/kernel/g", kernel_conf_path],
+                        check=False,
+                    )
+                    subprocess.run(["dkms", "unbuild", "nvidia/580.119.02", "--all"], check=False)
+                    subprocess.run(["dkms", "autoinstall"], check=False)
+
+                subprocess.run(
+                    ["tee", "/etc/modprobe.d/nvidia-modeset.conf"],
+                    input="options nvidia-drm modeset=1 fbdev=1\n",
+                    text=True,
+                    check=False,
+                )
+                subprocess.run(
+                    ["tee", "-a", "/etc/modprobe.d/nvidia-modeset.conf"],
+                    input="options nvidia NVreg_EnableGpuFirmware=0\n",
+                    text=True,
+                    check=False,
+                )
+
+                subprocess.run(["chmod", "644", "/etc/modprobe.d/nvidia-modeset.conf"], check=False)
 
                 perform_kernel_actions = 1
                 perform_reboot_request = 1

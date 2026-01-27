@@ -33,6 +33,10 @@ from nobara_updater.dnf import (  # type: ignore[import]
     updatechecker,
 )
 
+# Force UTF-8 locale for all child processes spawned from this Python process
+os.environ.setdefault("LANG", "C.UTF-8")
+os.environ.setdefault("LC_ALL", "C.UTF-8")
+
 original_user_home = Path("~").expanduser()
 
 if "ORIGINAL_USER_HOME" in os.environ:
