@@ -847,6 +847,7 @@ class QuirkFixup:
                     or mesa_fixup_check1.returncode == 0
                     or mesa_fixup_check2.returncode == 0
                     or mesa_fixup_check3.returncode == 0
+                ):
                     subprocess.run(
                         ["rpm", "-e", "--nodeps", "mesa-libgallium.x86_64"], capture_output=True, text=True
                     )
@@ -1016,8 +1017,6 @@ class QuirkFixup:
                 "libavcodec-free.i686",
                 "openh264.x86_64",
                 "openh264.i686",
-                "mesa-va-drivers-freeworld.x86_64",
-                "mesa-va-drivers-freeworld.i686",
                 "mesa-libgallium-freeworld.x86_64",
                 "mesa-libgallium-freeworld.i686",
                 "gstreamer1-plugins-bad-free-extras.x86_64",
@@ -1037,8 +1036,6 @@ class QuirkFixup:
                 "x265.x86_64",
                 "noopenh264.x86_64",
                 "noopenh264.i686",
-                "mesa-va-drivers.x86_64",
-                "mesa-va-drivers.i686",
                 "mesa-libgallium.x86_64",
                 "mesa-libgallium.i686",
                 "mesa-vulkan-drivers.x86_64",
