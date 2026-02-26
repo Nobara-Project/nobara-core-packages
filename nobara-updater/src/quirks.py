@@ -822,54 +822,22 @@ class QuirkFixup:
         mesa_fixup_check1 = subprocess.run(
             ["rpm", "-q", "mesa-libgallium-freeworld.i686"], capture_output=True, text=True
         )
-        mesa_fixup_check2 = subprocess.run(
-            ["rpm", "-q", "mesa-va-drivers-freeworld.x86_64"], capture_output=True, text=True
-        )
-        mesa_fixup_check3 = subprocess.run(
-            ["rpm", "-q", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True
-        )
-        mesa_fixup_check4 = subprocess.run(
-            ["rpm", "-q", "mesa-va-drivers-freeworld.x86_64"], capture_output=True, text=True
-        )
-        mesa_fixup_check5 = subprocess.run(
-            ["rpm", "-q", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True
-        )
 
-        mesa_fixup_check6 = subprocess.run(
+        mesa_fixup_check2 = subprocess.run(
             ["rpm", "-q", "mesa-libgallium.x86_64"], capture_output=True, text=True
         )
-        mesa_fixup_check7 = subprocess.run(
+        mesa_fixup_check3 = subprocess.run(
             ["rpm", "-q", "mesa-libgallium.i686"], capture_output=True, text=True
-        )
-        mesa_fixup_check8 = subprocess.run(
-            ["rpm", "-q", "mesa-va-drivers.x86_64"], capture_output=True, text=True
-        )
-        mesa_fixup_check9 = subprocess.run(
-            ["rpm", "-q", "mesa-va-drivers.i686"], capture_output=True, text=True
-        )
-        mesa_fixup_check10 = subprocess.run(
-            ["rpm", "-q", "mesa-va-drivers.x86_64"], capture_output=True, text=True
-        )
-        mesa_fixup_check11 = subprocess.run(
-            ["rpm", "-q", "mesa-va-drivers.i686"], capture_output=True, text=True
         )
         # they should all either end in -freeworld or not, no mixing.
         if not (
             mesa_fixup_check.returncode == 0
             and mesa_fixup_check1.returncode == 0
-            and mesa_fixup_check2.returncode == 0
-            and mesa_fixup_check3.returncode == 0
-            and mesa_fixup_check4.returncode == 0
-            and mesa_fixup_check5.returncode == 0
         ):
             # If all of them are not freeworld, check if they are all standard:
             if not (
-                mesa_fixup_check6.returncode == 0
-                and mesa_fixup_check7.returncode == 0
-                and mesa_fixup_check8.returncode == 0
-                and mesa_fixup_check9.returncode == 0
-                and mesa_fixup_check10.returncode == 0
-                and mesa_fixup_check11.returncode == 0
+                mesa_fixup_check2.returncode == 0
+                and mesa_fixup_check3.returncode == 0
             ):
 
                 # looks like we have a mix of both, let's check if -any- of them are freeworld:
@@ -879,9 +847,6 @@ class QuirkFixup:
                     or mesa_fixup_check1.returncode == 0
                     or mesa_fixup_check2.returncode == 0
                     or mesa_fixup_check3.returncode == 0
-                    or mesa_fixup_check4.returncode == 0
-                    or mesa_fixup_check5.returncode == 0
-                ):
                     subprocess.run(
                         ["rpm", "-e", "--nodeps", "mesa-libgallium.x86_64"], capture_output=True, text=True
                     )
@@ -907,7 +872,7 @@ class QuirkFixup:
                         ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True
                     )
                     subprocess.run(
-                        ["dnf", "install", "-y", "mesa-libgallium-freeworld.x86_64", "mesa-libgallium-freeworld.i686", "mesa-va-drivers-freeworld.x86_64", "mesa-va-drivers-freeworld.i686", "--refresh"],
+                        ["dnf", "install", "-y", "mesa-libgallium-freeworld.x86_64", "mesa-libgallium-freeworld.i686", "--refresh"],
                         capture_output=True, text=True
                     )
                 # Otherwise correct to original
@@ -937,7 +902,7 @@ class QuirkFixup:
                         ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True
                     )
                     subprocess.run(
-                        ["dnf", "install", "-y", "mesa-libgallium.x86_64", "mesa-libgallium.i686", "mesa-va-drivers.x86_64", "mesa-va-drivers.i686", "--refresh"],
+                        ["dnf", "install", "-y", "mesa-libgallium.x86_64", "mesa-libgallium.i686", "--refresh"],
                         capture_output=True, text=True
                     )
 
