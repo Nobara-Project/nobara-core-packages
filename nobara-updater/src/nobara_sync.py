@@ -926,8 +926,6 @@ def media_fixup() -> None:
     install = [
         "mesa-libgallium-freeworld.x86_64",
         "mesa-libgallium-freeworld.i686",
-        "mesa-va-drivers-freeworld.x86_64",
-        "mesa-va-drivers-freeworld.i686",
         "ffmpeg-free.x86_64",
         "libavcodec-free.x86_64",
         "libavcodec-free.i686",
