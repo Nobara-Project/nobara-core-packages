@@ -7,6 +7,7 @@ import shutil
 import shlex
 import pwd
 import re
+import glob
 from datetime import datetime
 from pathlib import Path
 
@@ -618,37 +619,29 @@ class QuirkFixup:
             output_lines = check_nvidia_wrong_epoch.stdout.splitlines()
             nvidia_wrong_epoch = any("nvidia" in line and "4:" in line for line in output_lines)
             nvidia_akmod = any("akmod-nvidia" in line for line in output_lines)
+            chromium = any(line.startswith("chromium.") or line.startswith("chromium ") for line in output_lines)
             kernel_conf_path = "/etc/nvidia/kernel.conf"
-            needs_kernel_open_fix = False
+            prior_variant = "unknown"   # "open" / "closed" / "unknown"
 
-            # Proceed if nvidia_wrong_epoch is True
+            # Proceed if nvidia_wrong_epoch or nvidia_akmod is True
             if nvidia_wrong_epoch or nvidia_akmod:
                 try:
                     with open(kernel_conf_path, "r", encoding="utf-8", errors="ignore") as f:
                         contents = f.read()
-                    # This matches your sed: only useful if kernel-open is present
-                    needs_kernel_open_fix = ("MODULE_VARIANT=kernel-open" in contents)
+                    if "MODULE_VARIANT=kernel-open" in contents:
+                        prior_variant = "open"
+                    elif "MODULE_VARIANT=kernel" in contents:
+                        prior_variant = "closed"
                 except OSError:
-                    needs_kernel_open_fix = False
-
-                check_chromium = subprocess.run(
-                    ["rpm", "-q", "chromium"], capture_output=True, text=True
-                )
-                reinstall_chromium = 0
-                if check_chromium.returncode == 0:
-                    reinstall_chromium = 1
+                    prior_variant = "unknown"
 
                 # Remove old
-                commands = [
-                    ["dnf", "remove", "-y", "nvidia*"],
-                    ["dnf", "remove", "-y", "kmod-nvidia*"],
-                    ["dnf", "remove", "-y", "akmod-nvidia"],
-                    ["dnf", "remove", "-y", "dkms-nvidia"],
-                    ["rm", "-rf", "/var/lib/dkms/nvidia*"]
-                ]
+                remove_proc = subprocess.run(["dnf", "remove", "-y", "*nvidia*"], capture_output=True, text=True)
+                if remove_proc.returncode != 0:
+                    self.logger.warning("dnf remove *nvidia* failed: %s", remove_proc.stderr.strip())
 
-                for command in commands:
-                    subprocess.run(command, capture_output=False, text=True)
+                for path in glob.glob("/var/lib/dkms/nvidia*"):
+                    subprocess.run(["rm", "-rf", path], check=False)
 
                 # Add new
                 packages = [
@@ -668,12 +661,12 @@ class QuirkFixup:
                     "nvidia-persistenced",
                     "nvidia-settings",
                     "nvidia-xconfig",
-                    "nvidia-vaapi-driver",
+                    "libva-nvidia-driver",
                     "nvidia-gpu-firmware",
                     "libnvidia-cfg"
                 ]
 
-                if reinstall_chromium == 1:
+                if chromium:
                     packages.append("chromium")
 
                 # Add the '--refresh' option at the end
@@ -682,32 +675,26 @@ class QuirkFixup:
                 # Run the command (capture returncode so we can gate post steps)
                 install_proc = subprocess.run(command)
 
+                conf = "options nvidia-drm modeset=1 fbdev=1\n"
+
+                ok = (install_proc.returncode == 0)
                 # --- Convert to closed if previous was closed ---
-                if install_proc.returncode == 0 and needs_kernel_open_fix:
-                    subprocess.run(
-                        ["sed", "-i", "-e", "s/kernel-open$/kernel/g", kernel_conf_path],
-                        check=False,
-                    )
-                    subprocess.run(["dkms", "unbuild", "nvidia/580.119.02", "--all"], check=False)
-                    subprocess.run(["dkms", "autoinstall"], check=False)
+                if ok:
+                    if prior_variant == "closed":
+                        conf += "options nvidia NVreg_EnableGpuFirmware=0\n"
+                        if os.path.exists(kernel_conf_path):
+                            subprocess.run(["sed", "-i", "-e", "s/kernel-open$/kernel/g", kernel_conf_path], check=False)
+                        subprocess.run(["dkms", "autoinstall"], check=False)
 
-                subprocess.run(
-                    ["tee", "/etc/modprobe.d/nvidia-modeset.conf"],
-                    input="options nvidia-drm modeset=1 fbdev=1\n",
-                    text=True,
-                    check=False,
-                )
-                subprocess.run(
-                    ["tee", "-a", "/etc/modprobe.d/nvidia-modeset.conf"],
-                    input="options nvidia NVreg_EnableGpuFirmware=0\n",
-                    text=True,
-                    check=False,
-                )
+                    subprocess.run(["tee", "/etc/modprobe.d/nvidia-modeset.conf"],
+                                input=conf, text=True, check=False)
 
-                subprocess.run(["chmod", "644", "/etc/modprobe.d/nvidia-modeset.conf"], check=False)
+                    subprocess.run(["chmod", "644", "/etc/modprobe.d/nvidia-modeset.conf"], check=False)
 
-                perform_kernel_actions = 1
-                perform_reboot_request = 1
+                    perform_kernel_actions = 1
+                    perform_reboot_request = 1
+                else:
+                    self.logger.warning("dnf install nvidia stack failed with rc=%s", install_proc.returncode)
 
         # QUIRK: Post N41 mesa update
         self.logger.info("QUIRK: Update old N41 mesa packages to current versions.")
