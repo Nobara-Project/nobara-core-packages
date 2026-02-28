@@ -1,4 +1,9 @@
 import logging
+import libdnf5.base as dnf5_base
+import libdnf5.repo as dnf5_repo
+import libdnf5.rpm as dnf5_rpm
+import libdnf5.transaction as dnf5_trans
+from libdnf5.exception import OptionValueNotSetError
 import queue
 import threading
 import time
@@ -67,125 +72,99 @@ def mute_loggers(names: list[str], level: int = logging.WARNING):
             lg.handlers = old_handlers
 
 def repoindex(retries: int = 3, delay: int = 5) -> list[AttributeDict]:
+    def get_safe_value(option):
+        try:
+            return option.get_value()
+        except (OptionValueNotSetError, RuntimeError, AttributeError):
+            return None
+
     attempt = 0
     while attempt < retries:
-        base = dnf.Base()
+        base = dnf5_base.Base()
         try:
-            base.read_all_repos()
-            with mute_loggers(["dnf", "dnf.base", "dnf.plugin", "libdnf", "hawkey"], level=logging.WARNING):
-                base.fill_sack(load_system_repo=True)
-            def metadata_refresh(base: dnf.Base) -> None:
-                for repo in base.repos.iter_enabled():
-                    repo.metadata_expire = 0
-                    repo.load()
+            base.load_config()
+            base.setup()
 
-            metadata_refresh(base)
+            sack = base.get_repo_sack()
+            sack.create_repos_from_system_configuration()
+            sack.load_repos()
+            
+            enabled_repos = []
+            query = dnf5_repo.RepoQuery(base)
 
-            def get_enabled_repos(base: dnf.Base) -> list[AttributeDict]:
-                enabled_repos = []
-                for repo in base.repos.iter_enabled():
-                    id = repo.id
-                    metalink = None
-                    mirrorlist = None
-                    baseurl = None
+            for repo in query:
+                config = repo.get_config()
+                enabled = get_safe_value(config.get_enabled_option())
+                if enabled:
+                    repo_id = repo.get_id()
+                    metalink = get_safe_value(config.get_metalink_option())
+                    mirrorlist = get_safe_value(config.get_mirrorlist_option())
+                    raw_baseurl = get_safe_value(config.get_baseurl_option())
+                    baseurl = list(raw_baseurl) if raw_baseurl is not None else None
+                    enabled_repos.append(AttributeDict(repo_id, metalink, mirrorlist, baseurl))
 
-                    if repo.metalink:
-                        metalink = repo.metalink
-                    if repo.mirrorlist:
-                        mirrorlist = repo.mirrorlist
-                    if repo.baseurl:
-                        baseurl = []
-                        for url in repo.baseurl:
-                            baseurl.append(url)
+            return enabled_repos
 
-                    repo_info = AttributeDict(
-                        id=id,
-                        metalink=metalink,
-                        mirrorlist=mirrorlist,
-                        baseurl=baseurl,
-                    )
-                    enabled_repos.append(repo_info)
-                return enabled_repos
-
-            return get_enabled_repos(base)
-        except FileNotFoundError as e:
-            if e.errno == 2:
-                attempt += 1
-                logger.info("Attempt %d failed with error: %s. Retrying in %d seconds...", attempt, e, delay)
+        except Exception as e:
+            attempt += 1
+            logger.error("Attempt %d failed with error: %s. Retrying...", attempt, e)
+            if attempt < retries:
                 time.sleep(delay)
             else:
-                raise
-        except Exception as e:
-            logger.error("An unexpected error occurred: %s", e)
-            raise
+                raise Exception(f"Failed to complete operation after {retries} attempts")
         finally:
-            try:
-                base.close()
-            except Exception as e:
-                logger.error("Failed to close base: %s", e)
-    raise Exception("Failed to complete operation after %d attempts" % retries)
-
+            del base
 
 def updatechecker(retries: int = 3, delay: int = 5) -> list[str]:
     attempt = 0
     while attempt < retries:
-        base = dnf.Base()
+        base = dnf5_base.Base()
         try:
-            base.read_all_repos()
+            config = base.get_config()
+            config.get_metadata_expire_option().from_string("0")
+            config.get_obsoletes_option().from_string("true")
 
-            def metadata_refresh(base: dnf.Base = base) -> None:
-                for repo in base.repos.iter_enabled():
-                    repo.metadata_expire = 0
-                    repo.load()
+            base.load_config()
+            base.setup()
 
-            def get_repo_priority(repo_name: str, base: dnf.Base = base) -> int:
-                repo = base.repos.get(repo_name)
-                return repo.priority if repo else 99
+            sack = base.get_repo_sack()
+            sack.create_repos_from_system_configuration()
+            sack.load_repos()
 
-            def get_package_repos(package_name: str, base: dnf.Base = base) -> list[str]:
-                repos: set[str] = set()
-                query = base.sack.query().available().filter(name=package_name)
-                for pkg in query.run():
-                    repos.add(pkg.reponame)
-                return list(repos)
-            with mute_loggers(["dnf", "dnf.base", "dnf.plugin", "libdnf", "hawkey"], level=logging.WARNING):
-                base.fill_sack(load_system_repo=True)
-            q = base.sack.query()
-            updates = q.upgrades().run()
+            goal = dnf5_base.Goal(base)
+            goal.add_upgrade("*")
 
-            metadata_refresh(base)
-
-            latest_versions: dict[str, dnf.package.Package] = {}
-            for pkg in updates:
-                repos = get_package_repos(pkg.name, base)
-                repo_priorities = [get_repo_priority(repo, base) for repo in repos]
-                lowest_priority = min(repo_priorities) if repo_priorities else 99
-                pkg_repo_priority = pkg.repo.priority
-
-                if pkg_repo_priority == lowest_priority:
-                    if pkg.name in latest_versions:
-                        if pkg.evr > latest_versions[pkg.name].evr:
-                            latest_versions[pkg.name] = pkg
-                    else:
-                        latest_versions[pkg.name] = pkg
-            return [update.name for update in list(latest_versions.values())]
-        except FileNotFoundError as e:
-            if e.errno == 2:
-                attempt += 1
-                logger.info("Attempt %d failed with error: %s. Retrying in %d seconds...", attempt, e, delay)
-                time.sleep(delay)
-            else:
-                raise
-        except Exception as e:
-            logger.error("An unexpected error occurred: %s", e)
-            raise
-        finally:
             try:
-                base.close()
-            except Exception as e:
-                logger.error("Failed to close base: %s", e)
-    raise Exception("Failed to complete operation after %d attempts" % retries)
+                install_only_names = config.installonlypkgs
+            except AttributeError:
+                install_only_names = []
 
+            for name in install_only_names:
+                goal.add_upgrade(name)
+
+            transaction = goal.resolve()
+            upgrades = []
+            t_pkgs = transaction.get_transaction_packages()
+            for t_pkg in t_pkgs:
+                action = t_pkg.get_action()
+                valid_actions = [
+                    dnf5_trans.TransactionItemAction_UPGRADE,
+                    dnf5_trans.TransactionItemAction_INSTALL
+                ]
+
+                if action in valid_actions:
+                    upgrades.append(t_pkg.get_package().get_name())
+
+            return list(set(upgrades))
+
+        except Exception as e:
+            attempt += 1
+            logger.error(f"Update check attempt {attempt} failed: {e}")
+            if attempt >= retries:
+                raise
+            time.sleep(delay)
+        finally:
+            del base
 
 class CustomTransactionDisplay(dnf.yum.rpmtrans.LoggingTransactionDisplay):
     def __init__(self, total_packages):
@@ -302,7 +281,7 @@ class PackageUpdater:
             "remove": "Removing packages:",
         }[action]
 
-        cmd = ["dnf", action_map[action], "--refresh", "-y", *self.package_names]
+        cmd = ["dnf5", action_map[action], "--refresh", "-y", *self.package_names]
 
         self.logger.info("%s\n%s", action_log_string, "\n".join(self.package_names))
 
