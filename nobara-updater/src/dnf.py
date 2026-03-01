@@ -274,6 +274,29 @@ class PackageUpdater:
         action_map = {"upgrade": "update", "install": "install", "remove": "remove"}
         if action not in action_map:
             raise ValueError(f"Invalid action: {action!r}")
+            
+        installed_set = set()
+        try:
+            temp_base = dnf5_base.Base()
+            temp_base.load_config()
+            temp_base.setup()
+            sack = temp_base.get_repo_sack()
+            sack.create_repos_from_system_configuration()
+            sack.load_repos() 
+            installed_query = dnf5_rpm.PackageQuery(temp_base)
+            installed_query.filter_installed()
+            installed_set = {pkg.get_name() for pkg in installed_query}
+            del installed_query
+            del sack
+            del temp_base
+        except Exception as e:
+            self.logger.warning("Could not pre-filter installed packages: %s", e)
+        if action == "upgrade":
+            targets = [p for p in self.package_names if p in installed_set]
+            if not targets:
+                targets = self.package_names
+        else:
+            targets = self.package_names
 
         action_log_string = {
             "upgrade": "Upgrading packages:",
@@ -281,7 +304,7 @@ class PackageUpdater:
             "remove": "Removing packages:",
         }[action]
 
-        cmd = ["dnf5", action_map[action], "--refresh", "-y", *self.package_names]
+        cmd = ["dnf5", action_map[action], "--refresh", "-y", *targets]
 
         self.logger.info("%s\n%s", action_log_string, "\n".join(self.package_names))
 
@@ -294,6 +317,7 @@ class PackageUpdater:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
+                    bufsize=1,
                 )
 
                 output_lines: List[str] = []
