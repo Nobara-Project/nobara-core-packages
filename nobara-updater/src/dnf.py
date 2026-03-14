@@ -333,7 +333,7 @@ class PackageUpdater:
                 if _looks_like_dependency_conflict(output_lines):
                     self.logger.error("==================================================")
                     self.logger.error("ERROR: DNF Package update are incomplete or failed due to conflicts/broken dependencies.")
-                    self.logger.error("ERROR: Please see ~/.local/share/logs/nobara-sync.log for more details")
+                    self.logger.error("ERROR: Please see ~/.local/share/nobara-updater/nobara-sync.log for more details")
                     self.logger.error("ERROR: You can press the 'Open Log File' button on the Update System app to view it.")
                     self.logger.error("==================================================")
                     return  # <-- IMPORTANT: exit normally (0) so GUI can reset buttons
@@ -341,7 +341,7 @@ class PackageUpdater:
                 if rc != 0:
                     self.logger.error("==================================================")
                     self.logger.error("ERROR: DNF Package update are incomplete or failed due to conflicts/broken dependencies.")
-                    self.logger.error("ERROR: Please see ~/.local/share/logs/nobara-sync.log for more details")
+                    self.logger.error("ERROR: Please see ~/.local/share/nobara-updater/nobara-sync.log for more details")
                     self.logger.error("ERROR: You can press the 'Open Log File' button on the Update System app to view it.")
                     self.logger.error("==================================================")
                     return  # <-- exit normally
