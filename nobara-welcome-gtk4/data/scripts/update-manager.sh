@@ -1,4 +1,4 @@
 #!/bin/bash
-nobara-updater "$@"
+dnf-app-center --update
 
 ### Put an update script that output info to terminal stdout

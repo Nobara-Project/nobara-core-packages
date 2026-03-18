@@ -4,7 +4,7 @@
       "id": 0,
       "title": "open-software-manager-title",
       "subtitle": "open-software-manager-subtitle",
-      "icon": "nobara-flatpost",
+      "icon": "dnf-app-center",
       "button": "launch-label",
       "terminal": false,
       "command": "/usr/lib/nobara/nobara-welcome/scripts/software-manager.sh &"

@@ -5,9 +5,9 @@
       "title": "discord-title",
       "subtitle": "discord-subtitle",
       "icon": "nobara-discord",
-      "pkgman": "flatpak",
-      "checkpkg": "com.discordapp.Discord",
-      "packages": "com.discordapp.Discord"
+      "pkgman": "pkcon",
+      "checkpkg": "discord",
+      "packages": "discord"
     },
     {
       "id": 1,
@@ -47,6 +47,15 @@
     },
     {
       "id": 5,
+      "title": "install-flatpaks-title",
+      "subtitle": "install-flatpaks-subtitle",
+      "icon": "nobara-flatpak",
+      "pkgman": "flatpak",
+      "checkpkg": "io.github.kolunmi.Bazaar",
+      "packages": "com.github.tchx84.Flatseal io.github.kolunmi.Bazaar"
+    },
+    {
+      "id": 6,
       "title": "install-snaps-title",
       "subtitle": "install-snaps-subtitle",
       "icon": "nobara-snap",
