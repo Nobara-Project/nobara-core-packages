@@ -41,25 +41,8 @@ PlasmoidItem {
 
     readonly property bool vertical: Plasmoid.location === PlasmaCore.Types.RightEdge || Plasmoid.location === PlasmaCore.Types.LeftEdge
 
-    /**
-     * @c true if the current applet is Minimize All, @c false if the
-     * current applet is Show Desktop.
-     */
-    readonly property bool isMinimizeAll: Plasmoid.pluginName === "org.kde.plasma.minimizeall"
-
-    readonly property Controller primaryController: isMinimizeAll ? minimizeAllController : peekController
-
-    readonly property Controller activeController: {
-        if (Plasmoid.containment.corona.editMode) {
-            return primaryController;
-        } else if (minimizeAllController.active) {
-            return minimizeAllController;
-        } else if (peekController.active) {
-            return peekController;
-        } else {
-            return primaryController;
-        }
-    }
+    readonly property Controller primaryController: minimizeAllController
+    readonly property Controller activeController: minimizeAllController
 
     MouseArea {
         id: mouseArea
@@ -85,10 +68,6 @@ PlasmoidItem {
         Accessible.description: toolTipSubText
         Accessible.role: Accessible.Button
         Accessible.onPressAction: Plasmoid.activated()
-
-        PeekController {
-            id: peekController
-        }
 
         MinimizeAllController {
             id: minimizeAllController
@@ -181,18 +160,9 @@ PlasmoidItem {
     Plasmoid.contextualActions: [
         PlasmaCore.Action {
             text: minimizeAllController.title
-            icon.name: minimizeAllController.active ? "nobara-desktop-show-symbolic" :  "nobara-desktop-hide-symbolic"
+            icon.name: minimizeAllController.active ? "nobara-desktop-show-symbolic" : "nobara-desktop-hide-symbolic"
             toolTip: minimizeAllController.description
-            enabled: !peekController.active
             onTriggered: minimizeAllController.toggle()
-        },
-        PlasmaCore.Action {
-            text: peekController.title
-            icon.name: peekController.active ? "nobara-desktop-show-symbolic" :  "nobara-desktop-hide-symbolic"
-            toolTip: peekController.description
-            enabled: !minimizeAllController.active
-            onTriggered: peekController.toggle()
         }
     ]
 }
-
