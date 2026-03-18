@@ -81,7 +81,8 @@ class QuirkFixup:
 
         if "nobara-updater" in package_names:
             log_message = "An update for the Update System app has been detected, updating self...\n"
-            subprocess.run("dnf update -y --refresh nobara-updater --nogpgcheck --best", shell=True, capture_output=True, text=True, check=True)
+            subprocess.run("rpm -e --nodeps nobara-updater", shell=True, capture_output=True, text=True, check=True)
+            self.ensure_package_installed("nobara-updater")
             perform_refresh = 1
             self.logger.info(perform_refresh)
             return (
@@ -122,37 +123,91 @@ class QuirkFixup:
         except subprocess.CalledProcessError as e:
             print(f"An error occurred: {e}")
 
-        # QUIRK: Make sure to reinstall rpmfusion repos if they do not exist
-        self.logger.info("QUIRK: Make sure to reinstall rpmfusion repos if they do not exist.")
-        if (
-            self.check_and_install_rpmfusion(
-                "/etc/yum.repos.d/rpmfusion-free.repo", "rpmfusion-free-release"
-            )
-            == 1
-        ):
+        # QUIRK: Remove RPM Fusion release packages if they exist, we use Terra and they conflict.
+        self.logger.info("QUIRK: Remove RPM Fusion release packages if they exist, we use Terra and they conflict.")
+        rpmfusion_packages = [
+            "rpmfusion-free-release",
+            "rpmfusion-nonfree-release",
+            "rpmfusion-free-release-tainted",
+            "rpmfusion-nonfree-release-tainted",
+            "rpmfusion-free-release-rawhide",
+            "rpmfusion-nonfree-release-rawhide",
+        ]
+        if self.remove_installed_packages(rpmfusion_packages) == 1:
             perform_refresh = 1
+
+        self.logger.info("QUIRK: maliit-keyboard, as plasma-keyboard is now default.")
+        rpmfusion_packages = [
+            "maliit-keyboard",
+        ]
+        self.remove_installed_packages(rpmfusion_packages)
+
+        # QUIRK: Repair incomplete TigerVNC server package set.
+        self.logger.info("QUIRK: Repair incomplete TigerVNC server package set.")
+        tigervnc_installed = [
+            "tigervnc-license",
+            "tigervnc-server-minimal",
+        ]
+        tigervnc_missing = [
+            "tigervnc-x11-server",
+            "tigervnc-selinux",
+        ]
         if (
-            self.check_and_install_rpmfusion(
-                "/etc/yum.repos.d/rpmfusion-free-updates.repo", "rpmfusion-free-release"
+            all(
+                subprocess.run(["rpm", "-q", pkg], capture_output=True, text=True).returncode == 0
+                for pkg in tigervnc_installed
             )
-            == 1
-        ):
-            perform_refresh = 1
-        if (
-            self.check_and_install_rpmfusion(
-                "/etc/yum.repos.d/rpmfusion-nonfree.repo", "rpmfusion-nonfree-release"
+            and all(
+                subprocess.run(["rpm", "-q", pkg], capture_output=True, text=True).returncode != 0
+                for pkg in tigervnc_missing
             )
-            == 1
         ):
+            if self.remove_installed_packages(tigervnc_installed) == 1:
+                perform_refresh = 1
+            if self.ensure_package_installed(tigervnc_installed + tigervnc_missing) == 1:
+                perform_refresh = 1
+
+        # QUIRK: Make sure dnf-app-center is installed.
+        self.logger.info("QUIRK: Make sure dnf-app-center is installed.")
+        if self.ensure_package_installed("dnf-app-center") == 1:
             perform_refresh = 1
-        if (
-            self.check_and_install_rpmfusion(
-                "/etc/yum.repos.d/rpmfusion-nonfree-updates.repo",
-                "rpmfusion-nonfree-release",
+
+        # QUIRK: Replace SDDM with Plasma Login Manager when SDDM is installed.
+        self.logger.info("QUIRK: Replace SDDM with Plasma Login Manager when SDDM is installed.")
+        check_sddm = subprocess.run(
+            ["rpm", "-q", "sddm"], capture_output=True, text=True
+        )
+        if check_sddm.returncode == 0:
+            sddm_conf = Path("/etc/sddm.conf")
+            sddm_conf_d = Path("/etc/sddm.conf.d")
+            plasmalogin_conf = Path("/etc/plasmalogin.conf")
+            plasmalogin_conf_d = Path("/etc/plasmalogin.conf.d")
+
+            plasmalogin_conf_d.mkdir(parents=True, exist_ok=True)
+
+            if sddm_conf_d.exists() and sddm_conf_d.is_dir():
+                for conf_file in sddm_conf_d.iterdir():
+                    if conf_file.is_file():
+                        shutil.copy2(conf_file, plasmalogin_conf_d / conf_file.name)
+
+            if sddm_conf.exists() and sddm_conf.is_file():
+                shutil.copy2(sddm_conf, plasmalogin_conf)
+
+            subprocess.run(["dnf", "remove", "-y", "sddm", "--setopt=tsflags=noscripts"], capture_output=True, text=True)
+            self.ensure_package_installed("plasma-login-manager")
+
+            subprocess.run(
+                ["systemctl", "disable", "sddm.service"],
+                capture_output=True,
+                text=True,
+                check=False,
             )
-            == 1
-        ):
-            perform_refresh = 1
+            subprocess.run(
+                ["systemctl", "enable", "plasmalogin.service"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
 
         # QUIRK: Make sure to run both dracut and dkms if any kmods  or kernel packages were updated.
         self.logger.info("QUIRK: Make sure to run both dracut and dkms if any kmods  or kernel packages were updated.")
@@ -600,7 +655,7 @@ class QuirkFixup:
                 pass
 
         # Main script execution
-        if check_update:
+        if check_update():
             for home_dir in get_all_user_home_directories():
                 delete_qmlcache(home_dir)
 
@@ -1089,37 +1144,52 @@ class QuirkFixup:
         updater_thread.start()
         updater_thread.join()  # Wait for the updater thread to finish
 
-    def check_and_install_rpmfusion(self, filepath: str, packagename: str) -> int:
-        # Check if the specified file exists
-        if not Path(filepath).exists():
-            self.logger.info(
-                "%s not found. Checking for %s package...\n", filepath, packagename
-            )
+    def ensure_package_installed(self, package_name: str | list[str]) -> int:
+        package_names = [package_name] if isinstance(package_name, str) else package_name
+        missing_packages = []
 
-            # Check if the specified package is installed
+        for pkg in package_names:
+            result = subprocess.run(
+                ["rpm", "-q", pkg], capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                missing_packages.append(pkg)
+
+        if missing_packages:
+            self.logger.info(
+                "Installing required package%s: %s\n",
+                "" if len(missing_packages) == 1 else "s",
+                ", ".join(missing_packages),
+            )
+            updater_thread = threading.Thread(
+                target=self.run_package_updater, args=(missing_packages, "install")
+            )
+            updater_thread.start()
+            updater_thread.join()
+            return 1
+
+        return 0
+
+    def remove_installed_packages(self, package_names: list[str]) -> int:
+        installed_packages = []
+        for packagename in package_names:
             result = subprocess.run(
                 ["rpm", "-q", packagename], capture_output=True, text=True
             )
             if result.returncode == 0:
-                self.logger.info("%s is installed. Reinstalling...\n", packagename)
-                updater_thread = threading.Thread(
-                    target=self.run_package_updater, args=([packagename], "remove")
-                )
-                updater_thread.start()
-                updater_thread.join()
-                updater_thread = threading.Thread(
-                    target=self.run_package_updater, args=([packagename], "install")
-                )
-                updater_thread.start()
-                updater_thread.join()
-            else:
-                self.logger.info("%s is not installed. Installing...\n", packagename)
-                updater_thread = threading.Thread(
-                    target=self.run_package_updater, args=([packagename], "install")
-                )
-                updater_thread.start()
-                updater_thread.join()
+                installed_packages.append(packagename)
+
+        if installed_packages:
+            self.logger.info(
+                "Removing conflicting packages: %s\n", ", ".join(installed_packages)
+            )
+            updater_thread = threading.Thread(
+                target=self.run_package_updater, args=(installed_packages, "remove")
+            )
+            updater_thread.start()
+            updater_thread.join()
             return 1
+
         return 0
 
     def run_package_updater(self, package_names: list[str], action: str) -> None:

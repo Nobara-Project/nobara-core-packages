@@ -23,7 +23,6 @@ install:
 	mkdir -p $(DESKTOP_DIR)
 	install -m 644 data/nobara-updater.desktop $(DESKTOP_DIR)/nobara-updater.desktop
 	install -m 644 data/nobara-codec-wizard.desktop $(DESKTOP_DIR)/nobara-codec-wizard.desktop
-	install -m 644 data/nobara-rpm-installer.desktop $(DESKTOP_DIR)/nobara-rpm-installer.desktop
 
 	@echo "Installing codec wizard files to $(CODEC_WIZARD_DIR)"
 	mkdir -p $(CODEC_WIZARD_DIR)
@@ -43,10 +42,6 @@ install:
 	@echo "Main executable file to $(BIN_DIR)"
 	mkdir -p $(BIN_DIR)
 	install -m 755 src/nobara_sync.py $(BIN_DIR)/nobara-updater
-
-	@echo "RPM Installer $(BIN_DIR)"
-	mkdir -p $(BIN_DIR)
-	install -m 755 src/rpm_installer.py $(BIN_DIR)/nobara-rpm-installer
 
 symlinks:
 	@echo "Creating symlinks in $(BIN_DIR)"

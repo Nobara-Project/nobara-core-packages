@@ -195,6 +195,13 @@ VERSION_ID = get_os_release_version()
 BASEARCH = get_basearch()
 
 
+def is_dnf_app_center_installed() -> bool:
+    result = subprocess.run(
+        ["rpm", "-q", "dnf-app-center"], capture_output=True, text=True
+    )
+    return result.returncode == 0
+
+
 def normalize_url(url: str) -> str:
     # Remove any trailing slashes
     return url.rstrip("/")
@@ -1034,16 +1041,36 @@ def parse_args() -> argparse.Namespace:
         "install-codecs",
         help="Performs media codec installation.",
     )
-    cli_parser = subparsers.add_parser("cli", help="Run in CLI mode, defaults to --all")
+    cli_parser = subparsers.add_parser(
+        "cli",
+        help="Run in CLI mode. Installs system updates and fixups by default; use --all to also install Flatpak updates.",
+    )
     cli_parser.add_argument("username", help="Specify the username", nargs="?")
-    mode_group = cli_parser.add_mutually_exclusive_group()
-    mode_group.add_argument("--system", action="store_true", help="Install only system package updates")
-    mode_group.add_argument("--flatpak", action="store_true", help="Install only flatpak updates")
-    mode_group.add_argument("--all", action="store_true", help="Install both system and flatpak updates (default)")
+    cli_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Also install flatpak updates after the default CLI actions",
+    )
 
     subparsers.add_parser("check-repos", help="list enabled repo information")
 
-    return parser.parse_args()
+    argv = sys.argv[1:]
+    known_commands = {
+        "install-updates",
+        "check-updates",
+        "repair",
+        "install-fixups",
+        "install-codecs",
+        "cli",
+        "check-repos",
+    }
+
+    if argv and argv[0] not in known_commands and argv[0] not in {"-h", "--help"}:
+        argv = ["cli"] + argv
+    elif not argv and is_dnf_app_center_installed():
+        argv = ["cli"]
+
+    return parser.parse_args(argv)
 
 def check_root_privileges(args: Namespace) -> None:
     if args.command == "cli" and args.username:
@@ -1178,24 +1205,12 @@ def main() -> None:
             request_update_status()
             exit(0)
         if args.command == "cli":
-            # default to --all if none specified
-            if not (args.system or args.flatpak or args.all):
-                args.all = True
-
-            do_system = args.system or args.all
-            do_flatpak = args.flatpak or args.all
-
             check_repos()
             check_updates()
+            install_fixups()
+            install_system_updates_only()
 
-            # Only run fixups if we're doing system (fixups are system/RPM-oriented)
-            if do_system:
-                install_fixups()
-
-            if do_system:
-                install_system_updates_only()
-
-            if do_flatpak:
+            if args.all:
                 install_flatpak_updates_only()
 
             check_updates()
@@ -1234,7 +1249,7 @@ def main() -> None:
             update_window = UpdateWindow()
             update_window.connect("destroy", Gtk.main_quit)
             update_window.show_all()
-            update_window.present()  # Ensure the window is presented in a normal state
+            update_window.present()
             Gtk.main()
         except RuntimeError as e:
             logger.error(f"GTK initialization error: {e}")
