@@ -625,11 +625,15 @@ class QuirkFixup:
         def check_update():
             try:
                 # Run the dnf check-update command and filter for plasma-workspace
-                result = subprocess.run(['dnf', 'check-update'], capture_output=True, text=True, check=True)
+                result = subprocess.run(['dnf', 'check-update'], capture_output=True, text=True, check=False)
                 # Use Python's string filtering instead of piping in the shell
-                if 'plasma-workspace' in result.stdout:
-                    return True
+                if result.returncode in [0, 100]:
+                    if 'plasma-workspace' in result.stdout:
+                        return True
+                    return False
+                self.logger.error(f"DNF error (code {result.returncode}): {result.stderr}")
                 return False
+                
             except subprocess.CalledProcessError as e:
                 print(f"Failed to run dnf command: {e}")
                 return False
