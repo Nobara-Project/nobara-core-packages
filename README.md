@@ -1,3 +1,7 @@
-Contains sources ONLY FOR APPLICATIONS CREATED AND MAINTAINED BY NOBARA.
+THIS IS NOT THE PLACE FOR BUG REPORTS FOR ANYTHING EXCEPT THE APPLICATIONS LISTED IN THE FOLDERS.
 
-This is NOT the place for bug reports for ANYTHING else EXCEPT the applications listed above.
+IF YOU HAVE AN ISSUE ON NOBARA, EITHER JOIN THE DISCORD AND ASK FOR HELP:
+https://discord.gg/6y3BdzC
+
+OR OPEN A BUG REPORT HERE:
+https://github.com/Nobara-Project/rpm-sources
