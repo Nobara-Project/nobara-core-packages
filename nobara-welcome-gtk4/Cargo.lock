@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "nobara-welcome"
-version = "5.0.0"
+version = "5.0.2"
 dependencies = [
  "async-channel",
  "duct",
