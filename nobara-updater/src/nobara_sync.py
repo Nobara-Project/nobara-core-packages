@@ -1175,6 +1175,7 @@ def cleanup_xhost():
 def main() -> None:
 
     args = parse_args()
+    check_manual_sudo()
     check_root_privileges(args)
 
     if args.command and os.geteuid() == 0:
@@ -1708,6 +1709,29 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         GLib.idle_add(self.toggle_buttons_during_refresh) # enable buttons
         request_update_status()
         self.status_label_updates("Finished known problem checking and repair")
+
+def check_manual_sudo():
+    sudo_user = os.environ.get("SUDO_USER")
+
+    if sudo_user and not sudo_user.isdigit():
+        print("\n" + "!" * 60)
+        print("WARNING: Manual use of 'sudo' detected.")
+        print("nobara-sync is designed to elevate itself automatically.")
+        print("Running with manual 'sudo' can lead to log files being")
+        print("saved in the root home folder instead of your own,")
+        print("and can potentially mess with Flatpak permissions.")
+        print("!" * 60 + "\n")
+
+        if sys.stdin.isatty():
+            try:
+                response = input("Are you sure you want to continue? [y/N]: ").strip().lower()
+                if response != 'y':
+                    print("Exiting to prevent potential permission issues.")
+                    sys.exit(0)
+            except EOFError:
+                sys.exit(1)
+        else:
+            pass
 
 if __name__ == "__main__":
     try:
