@@ -35,7 +35,7 @@ class QuirkFixup:
         perform_kernel_actions = 0
         perform_reboot_request = 0
         perform_refresh = 0
-        current_release = 43
+        current_release = 44
         # START QUIRKS LIST
 
         # QUIRK: Make sure to refresh the repositories and gpg-keys before anything
@@ -52,7 +52,23 @@ class QuirkFixup:
             log_message = "Updates for repository packages detected: {}. Updating these first...\n".format(
                 ", ".join(critical_updates)
             )
-            subprocess.run("dnf update -y --refresh fedora-repos fedora-gpg-keys nobara-repos nobara-gpg-keys --nogpgcheck", shell=True, capture_output=True, text=True, check=True)
+            subprocess.run(
+                [
+                    "dnf",
+                    "update",
+                    "-y",
+                    "--refresh",
+                    "fedora-repos",
+                    "fedora-gpg-keys",
+                    "nobara-repos",
+                    "nobara-gpg-keys",
+                    "--nogpgcheck",
+                    f"--releasever={current_release}",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
             if "fedora-gpg-keys" in package_names:
                 package_names = [pkg for pkg in package_names if pkg != "fedora-gpg-keys"]
             if "nobara-repos" in package_names:
@@ -60,13 +76,13 @@ class QuirkFixup:
             if "nobara-gpg-keys" in package_names:
                 package_names = [pkg for pkg in package_names if pkg != "nobara-gpg-keys"]
             perform_refresh = 1
+            self.logger.info(log_message)
             return (
                 0,
                 0,
                 0,
                 perform_refresh,
             )
-            self.logger.info(log_message)
         # QUIRK: Make sure to update the updater itself and refresh before anything
         self.logger.info("QUIRK: Make sure to update the updater itself and refresh before anything.")
         # Update release packages on new release
@@ -577,7 +593,10 @@ class QuirkFixup:
             "qgnomeplatform-qt5",
             "okular5-libs",
             "fedora-workstation-repositories",
-            "deckyloader"
+            "deckyloader",
+            "obs-studio-libs.i686",
+            "obs-studio-plugin-vkcapture.i686",
+            "obs-studio-plugin-source-record.i686"
         ]
         problematic_names = []
         for package in problematic:
@@ -597,7 +616,12 @@ class QuirkFixup:
             "rubberband.i686",
             "python3-torch-rocm-gfx9",
             "python3-torchaudio-rocm-gfx9",
-            "tesseract.i686"
+            "tesseract.i686",
+            "kdelibs-webkit",
+            "kate4-part",
+            "kde-style-breeze",
+            "libpostproc-free.x86_64",
+            "libpostproc-free.i686"
         ]
         for package in problematic_2025:
             problematic_check_2025 = subprocess.run(

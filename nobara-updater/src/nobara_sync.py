@@ -30,6 +30,7 @@ from nobara_updater.dnf import (  # type: ignore[import]
     AttributeDict,
     PackageUpdater,
     repoindex,
+    run_system_upgrade_transaction,
     updatechecker,
 )
 
@@ -555,16 +556,19 @@ def get_orig_user_ids() -> tuple[int, int]:
     orig_user_gid = pw_record.pw_gid
     return orig_user_uid, orig_user_gid
 
-def install_system_updates_only() -> None:
+def install_system_updates_only() -> bool:
     global perform_kernel_actions
     global perform_reboot_request
 
     package_names = updatechecker()
+    success = True
 
     logger.info("Starting SYSTEM package updates, please do not turn off your computer...\n")
-    action = "upgrade"
     if package_names:
-        PackageUpdater(package_names, action, None, logger)
+        logger.info("Upgrading packages:\n%s", "\n".join(package_names))
+        success = run_system_upgrade_transaction(logger)
+        if not success:
+            logger.error("DNF System Updates failed!")
 
     # Perform dracut if kernel was updated.
     if perform_kernel_actions == 1:
@@ -611,6 +615,8 @@ def install_system_updates_only() -> None:
     if perform_reboot_request == 1:
         logger.info("Kernel, kernel module, or desktop compositor update performed. Reboot required.")
         prompt_reboot()
+
+    return success
 
 def install_flatpak_updates_only() -> None:
     logger.info("Starting FLATPAK updates, please do not turn off your computer...\n")
@@ -742,9 +748,10 @@ def install_fixups() -> None:
     )
 
 
-def install_updates() -> None:
-    install_system_updates_only()
+def install_updates() -> bool:
+    success = install_system_updates_only()
     install_flatpak_updates_only()
+    return success
 
 def attempt_distro_sync() -> None:
     # Run dnf distro-sync first
@@ -852,6 +859,8 @@ def media_fixup() -> None:
         "ffmpeg-libs.i686",
         "libavcodec-freeworld.x86_64",
         "libavcodec-freeworld.i686",
+        "libpostproc-free.x86_64",
+        "libpostproc-free.i686",
         "libavdevice.x86_64",
         "libavdevice.i686",
         "obs-studio-gstreamer-vaapi.x86_64",
@@ -942,8 +951,6 @@ def media_fixup() -> None:
         "libswresample-free.i686",
         "libavformat-free.x86_64",
         "libavformat-free.i686",
-        "libpostproc-free.x86_64",
-        "libpostproc-free.i686",
         "libswscale-free.x86_64",
         "libswscale-free.i686",
         "libavfilter-free.x86_64",
@@ -1201,22 +1208,22 @@ def main() -> None:
             check_repos()
             check_updates()
             install_fixups()
-            install_updates()  # all (system + flatpak)
+            success = install_updates()  # all (system + flatpak)
             check_updates()
             request_update_status()
-            exit(0)
+            exit(0 if success else 1)
         if args.command == "cli":
             check_repos()
             check_updates()
             install_fixups()
-            install_system_updates_only()
+            success = install_system_updates_only()
 
             if args.all:
                 install_flatpak_updates_only()
 
             check_updates()
             request_update_status()
-            exit(0)
+            exit(0 if success else 1)
         if args.command == "install-codecs":
             prompt_media_fixup()
             exit(0)
@@ -1473,9 +1480,12 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         GLib.idle_add(self.toggle_buttons_during_refresh)
         self.status_label_updates("Starting SYSTEM package updates, please do not turn off your computer...")
         self.textview_updates()
-        install_system_updates_only()
+        success = install_system_updates_only()
         self.textview_updates()
-        self.status_label_updates("System updates complete!")
+        if success:
+            self.status_label_updates("System updates complete!")
+        else:
+            self.status_label_updates("System updates failed!")
         toggle_refresh()
         GLib.idle_add(self.toggle_buttons_during_refresh)
         request_update_status()
@@ -1561,9 +1571,12 @@ class UpdateWindow(Gtk.Window):  # type: ignore[misc]
         GLib.idle_add(self.toggle_buttons_during_refresh)
         self.status_label_updates("Starting package updates, please do not turn off your computer...")
         self.textview_updates()
-        install_updates()
+        success = install_updates()
         self.textview_updates()
-        self.status_label_updates("All Updates complete!")
+        if success:
+            self.status_label_updates("All Updates complete!")
+        else:
+            self.status_label_updates("System updates failed!")
         toggle_refresh()
         GLib.idle_add(self.toggle_buttons_during_refresh)
         request_update_status()

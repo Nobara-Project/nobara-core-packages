@@ -115,6 +115,29 @@ def repoindex(retries: int = 3, delay: int = 5) -> list[AttributeDict]:
         finally:
             del base
 
+def _add_resolvable_installonly_upgrades(
+    base: dnf5_base.Base,
+    goal: dnf5_base.Goal,
+    install_only_names,
+) -> None:
+    settings = dnf5_base.GoalJobSettings()
+    try:
+        installed_query = dnf5_rpm.PackageQuery(base)
+        installed_query.filter_installed()
+        installed_set = {pkg.get_name() for pkg in installed_query}
+    except Exception:
+        installed_set = set()
+    for name in install_only_names:
+        if name not in installed_set:
+            continue
+        query = dnf5_rpm.PackageQuery(base)
+        try:
+            query.resolve_pkg_spec(name, settings, False)
+        except Exception:
+            continue
+        if any(True for _ in query):
+            goal.add_upgrade(name)
+
 def updatechecker(retries: int = 3, delay: int = 5) -> list[str]:
     attempt = 0
     while attempt < retries:
@@ -139,8 +162,7 @@ def updatechecker(retries: int = 3, delay: int = 5) -> list[str]:
             except AttributeError:
                 install_only_names = []
 
-            for name in install_only_names:
-                goal.add_upgrade(name)
+            _add_resolvable_installonly_upgrades(base, goal, install_only_names)
 
             transaction = goal.resolve()
             upgrades = []
@@ -231,6 +253,118 @@ class CustomTransactionDisplay(dnf.yum.rpmtrans.LoggingTransactionDisplay):
             dnf.transaction.TRANS_PREPARATION: 'Preparing:',
         }
         return action_map.get(action, action)
+
+def _log_transaction_resolve_problems(transaction, logger: logging.Logger) -> None:
+    for problem in transaction.get_resolve_logs_as_strings():
+        logger.warning(problem)
+
+    for package in transaction.get_conflicting_packages():
+        logger.error("Package skipped due to conflicts: %s", package.get_nevra())
+
+    for package in transaction.get_broken_dependency_packages():
+        logger.error(
+            "Package skipped due to broken dependencies: %s", package.get_nevra()
+        )
+
+
+def _transaction_has_errors(transaction, logger: logging.Logger) -> bool:
+    has_errors = False
+    for package in transaction.get_transaction_packages():
+        if package.get_state() == dnf5_trans.TransactionItemState_ERROR:
+            logger.error(
+                "The transaction contains package %s in error state.",
+                package.get_package().get_full_nevra(),
+            )
+            has_errors = True
+    return has_errors
+
+
+def _log_transaction_packages(transaction, logger: logging.Logger) -> None:
+    packages = transaction.get_transaction_packages()
+    total = transaction.get_transaction_packages_count()
+    logger.info("Transaction contains %s packages.", total)
+
+    for index, item in enumerate(packages, start=1):
+        package = item.get_package()
+        action = {
+            dnf5_trans.TransactionItemAction_INSTALL: "Installing",
+            dnf5_trans.TransactionItemAction_UPGRADE: "Upgrading",
+            dnf5_trans.TransactionItemAction_DOWNGRADE: "Downgrading",
+            dnf5_trans.TransactionItemAction_REINSTALL: "Reinstalling",
+            dnf5_trans.TransactionItemAction_REMOVE: "Removing",
+            dnf5_trans.TransactionItemAction_REPLACED: "Replacing",
+        }.get(item.get_action(), "Processing")
+
+        logger.info("    (%s/%s) %s %s", index, total, action, package.get_nevra())
+
+
+def run_system_upgrade_transaction(logger: logging.Logger | None = None) -> bool:
+    tx_logger = logger if logger is not None else logging.getLogger()
+    base = dnf5_base.Base()
+
+    try:
+        config = base.get_config()
+        config.get_metadata_expire_option().from_string("0")
+        config.get_obsoletes_option().from_string("true")
+
+        base.load_config()
+        base.setup()
+
+        sack = base.get_repo_sack()
+        sack.create_repos_from_system_configuration()
+        sack.load_repos()
+
+        goal = dnf5_base.Goal(base)
+        goal.add_upgrade("*")
+
+        try:
+            install_only_names = config.installonlypkgs
+        except AttributeError:
+            install_only_names = []
+
+        _add_resolvable_installonly_upgrades(base, goal, install_only_names)
+
+        transaction = goal.resolve()
+        _log_transaction_resolve_problems(transaction, tx_logger)
+
+        if transaction.get_conflicting_packages():
+            return False
+
+        if transaction.get_broken_dependency_packages():
+            return False
+
+        if transaction.empty():
+            tx_logger.info("Nothing to do.")
+            return True
+
+        _log_transaction_packages(transaction, tx_logger)
+
+        tx_logger.info("Downloading packages...")
+        transaction.download()
+
+        tx_logger.info("Running transaction...")
+        result = transaction.run()
+        if (
+            result != dnf5_base.Transaction.TransactionRunResult_SUCCESS
+            or _transaction_has_errors(transaction, tx_logger)
+        ):
+            tx_logger.error(
+                "DNF transaction failed: %s",
+                dnf5_base.Transaction.transaction_result_to_string(result),
+            )
+            for problem in transaction.get_transaction_problems():
+                tx_logger.error(problem)
+            return False
+
+        tx_logger.info("DNF System Updates complete!")
+        return True
+
+    except Exception as e:
+        tx_logger.error("DNF transaction failed: %s", e)
+        return False
+    finally:
+        del base
+
 
 class PackageUpdater:
     def __init__(
