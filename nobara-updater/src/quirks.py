@@ -96,18 +96,23 @@ class QuirkFixup:
             subprocess.run("dnf update -y --refresh nobara-release* --nogpgcheck", shell=True, capture_output=True, text=True, check=True)
 
         if "nobara-updater" in package_names:
-            log_message = "An update for the Update System app has been detected, updating self...\n"
-            subprocess.run("rpm -e --nodeps nobara-updater", shell=True, capture_output=True, text=True, check=True)
-            self.ensure_package_installed("nobara-updater")
-            perform_refresh = 1
-            self.logger.info(perform_refresh)
-            return (
-                0,
-                0,
-                0,
-                perform_refresh,
-            )
-            self.logger.info(log_message)
+            self.logger.info("An update for the Update System app has been detected, updating self...\n")
+            if self.run_package_updater(["nobara-updater"], "upgrade"):
+                if self._is_package_installed("nobara-updater"):
+                    perform_refresh = 1
+                    return (
+                        0,
+                        0,
+                        0,
+                        perform_refresh,
+                    )
+                self.logger.error(
+                    "nobara-updater update reported success, but the package is not installed. Not relaunching."
+                )
+            else:
+                self.logger.error(
+                    "Failed to update nobara-updater. Existing installation was left in place."
+                )
         # QUIRK: Cleanup outdated kernel modules
         self.logger.info("QUIRK: Cleanup outdated kernel modules.")
         try:
@@ -1160,17 +1165,38 @@ class QuirkFixup:
             perform_refresh,
         )
 
+    def _is_package_installed(self, package_name: str) -> bool:
+        result = subprocess.run(
+            ["rpm", "-q", package_name], capture_output=True, text=True
+        )
+        return result.returncode == 0
+
+    def _run_package_updater_threaded(
+        self, package_names: list[str], action: str
+    ) -> bool:
+        result = {"success": False}
+
+        def run() -> None:
+            try:
+                result["success"] = self.run_package_updater(package_names, action)
+            except Exception as e:
+                self.logger.error(
+                    "Package %s failed for %s: %s",
+                    action,
+                    ", ".join(package_names),
+                    e,
+                )
+
+        updater_thread = threading.Thread(target=run)
+        updater_thread.start()
+        updater_thread.join()
+        return result["success"]
+
     def update_core_packages(
         self, package_list: list[str], action: str, log_message: str
-    ) -> None:
+    ) -> bool:
         self.logger.info(log_message)
-
-        # Run the updater in a separate thread and wait for it to finish
-        updater_thread = threading.Thread(
-            target=self.run_package_updater, args=(package_list, action)
-        )
-        updater_thread.start()
-        updater_thread.join()  # Wait for the updater thread to finish
+        return self._run_package_updater_threaded(package_list, action)
 
     def ensure_package_installed(self, package_name: str | list[str]) -> int:
         package_names = [package_name] if isinstance(package_name, str) else package_name
@@ -1189,11 +1215,18 @@ class QuirkFixup:
                 "" if len(missing_packages) == 1 else "s",
                 ", ".join(missing_packages),
             )
-            updater_thread = threading.Thread(
-                target=self.run_package_updater, args=(missing_packages, "install")
-            )
-            updater_thread.start()
-            updater_thread.join()
+            if not self._run_package_updater_threaded(missing_packages, "install"):
+                return 0
+            still_missing = [
+                pkg for pkg in missing_packages if not self._is_package_installed(pkg)
+            ]
+            if still_missing:
+                self.logger.error(
+                    "Failed to install required package%s: %s",
+                    "" if len(still_missing) == 1 else "s",
+                    ", ".join(still_missing),
+                )
+                return 0
             return 1
 
         return 0
@@ -1201,25 +1234,30 @@ class QuirkFixup:
     def remove_installed_packages(self, package_names: list[str]) -> int:
         installed_packages = []
         for packagename in package_names:
-            result = subprocess.run(
-                ["rpm", "-q", packagename], capture_output=True, text=True
-            )
-            if result.returncode == 0:
+            if self._is_package_installed(packagename):
                 installed_packages.append(packagename)
 
         if installed_packages:
             self.logger.info(
                 "Removing conflicting packages: %s\n", ", ".join(installed_packages)
             )
-            updater_thread = threading.Thread(
-                target=self.run_package_updater, args=(installed_packages, "remove")
-            )
-            updater_thread.start()
-            updater_thread.join()
+            if not self._run_package_updater_threaded(installed_packages, "remove"):
+                return 0
+            still_installed = [
+                pkg for pkg in installed_packages if self._is_package_installed(pkg)
+            ]
+            if still_installed:
+                self.logger.error(
+                    "Failed to remove conflicting package%s: %s",
+                    "" if len(still_installed) == 1 else "s",
+                    ", ".join(still_installed),
+                )
+                return 0
             return 1
 
         return 0
 
-    def run_package_updater(self, package_names: list[str], action: str) -> None:
+    def run_package_updater(self, package_names: list[str], action: str) -> bool:
         # Initialize the PackageUpdater
-        PackageUpdater(package_names, action, None)
+        updater = PackageUpdater(package_names, action, None)
+        return updater.success

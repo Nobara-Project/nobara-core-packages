@@ -385,10 +385,10 @@ class PackageUpdater:
         # It also doesn't correctly log in the dnf history
         # Use DNF command for now
         #self.update_packages(action)
-        self.update_packages_dnf_command(action)
+        self.success = self.update_packages_dnf_command(action)
 
 
-    def update_packages_dnf_command(self, action: str, retries: int = 3, delay: int = 5) -> None:
+    def update_packages_dnf_command(self, action: str, retries: int = 3, delay: int = 5) -> bool:
         def _looks_like_dependency_conflict(lines: List[str]) -> bool:
             needles = (
                 "Problem ",
@@ -470,7 +470,7 @@ class PackageUpdater:
                     self.logger.error("ERROR: Please see ~/.local/share/nobara-updater/nobara-sync.log for more details")
                     self.logger.error("ERROR: You can press the 'Open Log File' button on the Update System app to view it.")
                     self.logger.error("==================================================")
-                    return  # <-- IMPORTANT: exit normally (0) so GUI can reset buttons
+                    return False  # Exit normally so GUI can reset buttons.
 
                 if rc != 0:
                     self.logger.error("==================================================")
@@ -478,15 +478,16 @@ class PackageUpdater:
                     self.logger.error("ERROR: Please see ~/.local/share/nobara-updater/nobara-sync.log for more details")
                     self.logger.error("ERROR: You can press the 'Open Log File' button on the Update System app to view it.")
                     self.logger.error("==================================================")
-                    return  # <-- exit normally
+                    return False
 
                 self.logger.info("DNF System Updates complete!")
-                return
+                return True
 
             except Exception as e:
                 self.logger.error("Attempt %d/%d failed: %s", attempt, retries, e)
                 if attempt < retries:
                     time.sleep(delay)
                 else:
+                    return False
 
-                    return  # <-- exit normally even on final failure
+        return False
