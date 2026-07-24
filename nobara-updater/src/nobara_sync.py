@@ -556,6 +556,33 @@ def get_orig_user_ids() -> tuple[int, int]:
     orig_user_gid = pw_record.pw_gid
     return orig_user_uid, orig_user_gid
 
+#return False if uki is detected based on bootctl. Return True in cases where calls fail or image_type is split.
+#primarily to avoid crash later
+def kernel_image_supported() -> bool:
+    try:
+        kernel_image = subprocess.run(
+            "bootctl --print-stub-path",
+            shell=True,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        image_type = subprocess.run(
+                f"bootctl kernel-identify {kernel_image.stdout.strip()}",
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=True
+        )
+        if image_type == "uki":
+            logger.info("Upgrade of unsupported kernel install detected. You are on your own.")
+            return False
+        else:
+            return True
+    except subprocess.CalledProcessError:
+        return True
+
+
 def install_system_updates_only() -> bool:
     global perform_kernel_actions
     global perform_reboot_request
@@ -572,33 +599,35 @@ def install_system_updates_only() -> bool:
 
     # Perform dracut if kernel was updated.
     if perform_kernel_actions == 1:
-        logger.info(
-            "Kernel or kernel module updates were performed. Running required 'dracut -f'...\n"
-        )
-        try:
-            result = subprocess.run(
-                "ls /boot/ | grep vmlinuz | grep -v rescue",
-                shell=True,
-                capture_output=True,
-                text=True,
-                check=True,
+        supported = kernel_image_supported()
+        if supported:
+            logger.info(
+                "Kernel or kernel module updates were performed. Running required 'dracut -f'...\n"
             )
-            lines = result.stdout.strip().split("\n")
-            versions = [line.replace("vmlinuz-", "") for line in lines if line.startswith("vmlinuz-")]
+            try:
+                result = subprocess.run(
+                    "ls /boot/ | grep vmlinuz | grep -v rescue",
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                lines = result.stdout.strip().split("\n")
+                versions = [line.replace("vmlinuz-", "") for line in lines if line.startswith("vmlinuz-")]
 
-            result = subprocess.run(["ls", "/lib/modules"], capture_output=True, text=True, check=True)
-            modules = result.stdout.strip().split()
+                result = subprocess.run(["ls", "/lib/modules"], capture_output=True, text=True, check=True)
+                modules = result.stdout.strip().split()
 
-            filtered_modules = [module for module in modules if module not in versions]
-            for directory in filtered_modules:
-                if directory:
-                    dir_path = os.path.join("/lib/modules", directory)
-                    if os.path.exists(dir_path):
-                        shutil.rmtree(dir_path)
-        except subprocess.CalledProcessError as e:
-            print(f"An error occurred: {e}")
+                filtered_modules = [module for module in modules if module not in versions]
+                for directory in filtered_modules:
+                    if directory:
+                        dir_path = os.path.join("/lib/modules", directory)
+                        if os.path.exists(dir_path):
+                            shutil.rmtree(dir_path)
+            except subprocess.CalledProcessError as e:
+                print(f"An error occurred: {e}")
 
-        subprocess.run(["dracut", "-f", "--regenerate-all"], check=True)
+            subprocess.run(["dracut", "-f", "--regenerate-all"], check=True)
         perform_reboot_request = 1
 
     # Send update refresh request to systray service
