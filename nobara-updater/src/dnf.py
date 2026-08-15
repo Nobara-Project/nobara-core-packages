@@ -298,6 +298,50 @@ def _log_transaction_packages(transaction, logger: logging.Logger) -> None:
         logger.info("    (%s/%s) %s %s", index, total, action, package.get_nevra())
 
 
+class _UpgradeTransactionCallbacks(dnf5_rpm.TransactionCallbacks):
+    """Heartbeat logging for transaction.run().
+
+    Without this, an rpm transaction reports nothing for its entire
+    duration -- no percentage, no package names, no heartbeat -- which on
+    a major-version upgrade can mean 20-40 minutes of total silence with
+    no way to tell a working transaction from a hung one. That silence is
+    exactly what has led users to kill an apparently-frozen upgrade
+    mid-transaction, which can leave the system with thousands of
+    duplicate/orphaned packages that a re-run cannot repair.
+    """
+
+    def __init__(self, logger: logging.Logger, total_packages: int) -> None:
+        super().__init__()
+        self.logger = logger
+        self.total_packages = total_packages
+
+    def transaction_start(self, total: int) -> None:
+        self.logger.info("Preparing transaction (%s items)...", total)
+
+    def elem_progress(self, item, amount: int, total: int) -> None:
+        action = {
+            dnf5_trans.TransactionItemAction_INSTALL: "Installing",
+            dnf5_trans.TransactionItemAction_UPGRADE: "Upgrading",
+            dnf5_trans.TransactionItemAction_DOWNGRADE: "Downgrading",
+            dnf5_trans.TransactionItemAction_REINSTALL: "Reinstalling",
+            dnf5_trans.TransactionItemAction_REMOVE: "Removing",
+            dnf5_trans.TransactionItemAction_REPLACED: "Replacing",
+        }.get(item.get_action(), "Processing")
+        self.logger.info(
+            "    (%s/%s) %s %s", amount + 1, total, action, item.get_package().get_nevra()
+        )
+
+    def script_start(self, item, nevra, type) -> None:
+        self.logger.info(
+            "    Running %s scriptlet for %s...", self.script_type_to_string(type), nevra
+        )
+
+    def script_error(self, item, nevra, type, return_code: int) -> None:
+        self.logger.warning(
+            "    Scriptlet for %s exited with code %s", nevra, return_code
+        )
+
+
 def run_system_upgrade_transaction(logger: logging.Logger | None = None) -> bool:
     tx_logger = logger if logger is not None else logging.getLogger()
     base = dnf5_base.Base()
@@ -343,6 +387,11 @@ def run_system_upgrade_transaction(logger: logging.Logger | None = None) -> bool
         transaction.download()
 
         tx_logger.info("Running transaction...")
+        transaction.set_callbacks(
+            dnf5_rpm.TransactionCallbacksUniquePtr(
+                _UpgradeTransactionCallbacks(tx_logger, transaction.get_transaction_packages_count())
+            )
+        )
         result = transaction.run()
         if (
             result != dnf5_base.Transaction.TransactionRunResult_SUCCESS
