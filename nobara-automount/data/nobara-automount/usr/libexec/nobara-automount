@@ -6,19 +6,35 @@ log() { echo "[nobara-automount] $*"; }
 # Resolve a user's XDG_DESKTOP_DIR from ~/.config/user-dirs.dirs, falling
 # back to "$home/Desktop" if unset/missing. Parsed as plain text (not
 # sourced) since this runs as root against a file the target user controls.
+#
+# The resolved path is used for root-privileged installs and deletes of
+# .desktop files, so a raw value from that file can't be trusted as-is:
+# it's canonicalized (resolving any "..") and required to already exist
+# and be owned by the target user before it's used, otherwise a value
+# like XDG_DESKTOP_DIR="/etc" or "$HOME/../../etc" could point the script
+# at an arbitrary root-owned/system directory. Anything that fails those
+# checks falls back to "$home/Desktop".
 resolve_desktop_dir() {
-  local home="$1"
+  local home="$1" owner="$2"
   local conf="${home}/.config/user-dirs.dirs"
-  local raw="" dir=""
+  local raw="" candidate="" dir=""
   if [[ -f "$conf" ]]; then
     raw="$(grep -m1 '^XDG_DESKTOP_DIR=' "$conf" 2>/dev/null | cut -d= -f2-)"
     raw="${raw%\"}"
     raw="${raw#\"}"
     case "$raw" in
-      \$HOME/*) dir="${home}/${raw#\$HOME/}" ;;
-      \$HOME) dir="${home}" ;;
-      /*) dir="$raw" ;;
+      \$HOME/*) candidate="${home}/${raw#\$HOME/}" ;;
+      \$HOME) candidate="${home}" ;;
+      /*) candidate="$raw" ;;
     esac
+    if [[ -n "$candidate" ]]; then
+      local real real_owner
+      real="$(realpath -m -- "$candidate" 2>/dev/null)" || real=""
+      if [[ -n "$real" && -d "$real" ]]; then
+        real_owner="$(stat -c '%U' -- "$real" 2>/dev/null)" || real_owner=""
+        [[ "$real_owner" == "$owner" ]] && dir="$real"
+      fi
+    fi
   fi
   [[ -z "$dir" ]] && dir="${home}/Desktop"
   printf '%s\n' "$dir"
@@ -82,7 +98,7 @@ if [[ ${USER:-} != "liveuser" ]]; then
       if ! grep -Fq "$UUID_FILTER" /etc/nobara/automount/desktop_shortcuts.conf; then
         log "Skipping desktop shortcut creation for $mp not in desktop_shortcuts.conf"
         [[ -z "$UUID_FILTER" ]] && exit 0
-        desktop_dir="$(resolve_desktop_dir "$(getent passwd "$rwuser" | cut -d: -f6)")"
+        desktop_dir="$(resolve_desktop_dir "$(getent passwd "$rwuser" | cut -d: -f6)" "$rwuser")"
 
         # loop over all .desktop files and check contents for UUID_FILTER
         for f in "$desktop_dir"/*.desktop; do
@@ -95,7 +111,7 @@ if [[ ${USER:-} != "liveuser" ]]; then
     else
       log "desktop_shortcut.conf not found; skipping desktop shortcut creation for $mp"
       [[ -z "$UUID_FILTER" ]] && exit 0
-      desktop_dir="$(resolve_desktop_dir "$(getent passwd "$rwuser" | cut -d: -f6)")"
+      desktop_dir="$(resolve_desktop_dir "$(getent passwd "$rwuser" | cut -d: -f6)" "$rwuser")"
 
       # loop over all .desktop files and check contents for UUID_FILTER
       for f in "$desktop_dir"/*.desktop; do
@@ -214,7 +230,7 @@ if [[ ${USER:-} != "liveuser" ]]; then
         [[ -n "$label" ]] && pretty="$label"
 
         user_home="$(getent passwd "$rwuser" | cut -d: -f6)"
-        desktop_dir="$(resolve_desktop_dir "$user_home")"
+        desktop_dir="$(resolve_desktop_dir "$user_home" "$rwuser")"
         mp="/run/media/${rwuser}/${uuid}"
         url="file://${mp}"
         icon_path="${desktop_dir}/${pretty}.desktop"
