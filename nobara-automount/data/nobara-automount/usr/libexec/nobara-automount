@@ -3,6 +3,27 @@ set -euo pipefail
 
 log() { echo "[nobara-automount] $*"; }
 
+# Resolve a user's XDG_DESKTOP_DIR from ~/.config/user-dirs.dirs, falling
+# back to "$home/Desktop" if unset/missing. Parsed as plain text (not
+# sourced) since this runs as root against a file the target user controls.
+resolve_desktop_dir() {
+  local home="$1"
+  local conf="${home}/.config/user-dirs.dirs"
+  local raw="" dir=""
+  if [[ -f "$conf" ]]; then
+    raw="$(grep -m1 '^XDG_DESKTOP_DIR=' "$conf" 2>/dev/null | cut -d= -f2-)"
+    raw="${raw%\"}"
+    raw="${raw#\"}"
+    case "$raw" in
+      \$HOME/*) dir="${home}/${raw#\$HOME/}" ;;
+      \$HOME) dir="${home}" ;;
+      /*) dir="$raw" ;;
+    esac
+  fi
+  [[ -z "$dir" ]] && dir="${home}/Desktop"
+  printf '%s\n' "$dir"
+}
+
 if [[ ${USER:-} != "liveuser" ]]; then
   if [[ $EUID -ne 0 ]]; then
     if ! id -nG "${USER}" | grep -qw wheel; then
@@ -61,7 +82,7 @@ if [[ ${USER:-} != "liveuser" ]]; then
       if ! grep -Fq "$UUID_FILTER" /etc/nobara/automount/desktop_shortcuts.conf; then
         log "Skipping desktop shortcut creation for $mp not in desktop_shortcuts.conf"
         [[ -z "$UUID_FILTER" ]] && exit 0
-        desktop_dir="$(getent passwd "$rwuser" | cut -d: -f6)/Desktop"
+        desktop_dir="$(resolve_desktop_dir "$(getent passwd "$rwuser" | cut -d: -f6)")"
 
         # loop over all .desktop files and check contents for UUID_FILTER
         for f in "$desktop_dir"/*.desktop; do
@@ -74,7 +95,7 @@ if [[ ${USER:-} != "liveuser" ]]; then
     else
       log "desktop_shortcut.conf not found; skipping desktop shortcut creation for $mp"
       [[ -z "$UUID_FILTER" ]] && exit 0
-      desktop_dir="$(getent passwd "$rwuser" | cut -d: -f6)/Desktop"
+      desktop_dir="$(resolve_desktop_dir "$(getent passwd "$rwuser" | cut -d: -f6)")"
 
       # loop over all .desktop files and check contents for UUID_FILTER
       for f in "$desktop_dir"/*.desktop; do
@@ -193,7 +214,7 @@ if [[ ${USER:-} != "liveuser" ]]; then
         [[ -n "$label" ]] && pretty="$label"
 
         user_home="$(getent passwd "$rwuser" | cut -d: -f6)"
-        desktop_dir="${user_home}/Desktop"
+        desktop_dir="$(resolve_desktop_dir "$user_home")"
         mp="/run/media/${rwuser}/${uuid}"
         url="file://${mp}"
         icon_path="${desktop_dir}/${pretty}.desktop"
