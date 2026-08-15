@@ -770,6 +770,13 @@ def attempt_distro_sync() -> None:
         if result.stdout:
             logger.info("dnf distro-sync output:\n" + result.stdout)
 
+        # If distro-sync had nothing to do, the system is already in sync:
+        # skip module cleanup/dracut/relaunch so `repair` can't loop forever
+        # re-executing itself with the same "repair" argv on every pass.
+        if "Nothing to do" in result.stdout:
+            logger.info("distro-sync made no changes; repair complete.")
+            return
+
     except subprocess.CalledProcessError as e:
         logger.error(f"dnf distro-sync failed: {e}")
         return
@@ -818,7 +825,6 @@ def attempt_distro_sync() -> None:
 
     except subprocess.CalledProcessError as e:
         logger.error(f"An error occurred: {e}")
-        self.status_label_updates(f"Error during distro-sync: {str(e)}")
         return
 
     # Run the commands
