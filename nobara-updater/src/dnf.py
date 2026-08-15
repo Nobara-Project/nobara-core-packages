@@ -298,6 +298,22 @@ def _log_transaction_packages(transaction, logger: logging.Logger) -> None:
         logger.info("    (%s/%s) %s %s", index, total, action, package.get_nevra())
 
 
+def _format_nevra(nevra) -> str:
+    """libdnf5.rpm.Nevra has no useful __str__/to_string(): printing it
+    directly (e.g. via %s) yields a SWIG proxy repr like
+    "<libdnf5.rpm.Nevra; proxy of ...>" instead of the package name, which
+    makes scriptlet log lines impossible to attribute to a package. Build
+    the NEVRA string from its getters instead."""
+    epoch = nevra.get_epoch()
+    name = nevra.get_name()
+    version = nevra.get_version()
+    release = nevra.get_release()
+    arch = nevra.get_arch()
+    if epoch and epoch != "0":
+        return f"{name}-{epoch}:{version}-{release}.{arch}"
+    return f"{name}-{version}-{release}.{arch}"
+
+
 class _UpgradeTransactionCallbacks(dnf5_rpm.TransactionCallbacks):
     """Heartbeat logging for transaction.run().
 
@@ -333,12 +349,14 @@ class _UpgradeTransactionCallbacks(dnf5_rpm.TransactionCallbacks):
 
     def script_start(self, item, nevra, type) -> None:
         self.logger.info(
-            "    Running %s scriptlet for %s...", self.script_type_to_string(type), nevra
+            "    Running %s scriptlet for %s...",
+            self.script_type_to_string(type),
+            _format_nevra(nevra),
         )
 
     def script_error(self, item, nevra, type, return_code: int) -> None:
         self.logger.warning(
-            "    Scriptlet for %s exited with code %s", nevra, return_code
+            "    Scriptlet for %s exited with code %s", _format_nevra(nevra), return_code
         )
 
 
