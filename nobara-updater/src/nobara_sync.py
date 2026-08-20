@@ -758,17 +758,32 @@ def attempt_distro_sync() -> None:
     try:
         logger.info("Running dnf distro-sync --refresh...")
 
-        # Run dnf distro-sync with output capture
+        # Run dnf distro-sync with output capture. Force an English locale
+        # for this specific call regardless of the ambient environment: the
+        # os.environ.setdefault(...) calls above only take effect when
+        # LC_ALL/LANG aren't already set, so a non-English LC_ALL exported
+        # by the caller's shell would otherwise reach dnf here untouched
+        # and localize "Nothing to do." (e.g. "Nada que hacer." under
+        # es_ES), silently breaking the loop-prevention check below.
+        distro_sync_env = {**os.environ, "LC_ALL": "C", "LANG": "C"}
         result = subprocess.run(
             ["dnf", "distro-sync", "--refresh", "-y"],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
+            env=distro_sync_env,
         )
 
         # Display the output in the status window
         if result.stdout:
             logger.info("dnf distro-sync output:\n" + result.stdout)
+
+        # If distro-sync had nothing to do, the system is already in sync:
+        # skip module cleanup/dracut/relaunch so `repair` can't loop forever
+        # re-executing itself with the same "repair" argv on every pass.
+        if "Nothing to do" in result.stdout:
+            logger.info("distro-sync made no changes; repair complete.")
+            return
 
     except subprocess.CalledProcessError as e:
         logger.error(f"dnf distro-sync failed: {e}")
@@ -818,7 +833,6 @@ def attempt_distro_sync() -> None:
 
     except subprocess.CalledProcessError as e:
         logger.error(f"An error occurred: {e}")
-        self.status_label_updates(f"Error during distro-sync: {str(e)}")
         return
 
     # Run the commands
