@@ -56,7 +56,7 @@
     "obs-title": "Встановити OBS Studio",
     "obs-subtitle": "Open Broadcaster Software — це безплатний застосунок з відкритим кодом для запису відео та прямих трансляцій. ",
     "gpu-screen-recorder-title": "Встановити GPU Screen Recorder ",
-    "gpu-screen-recorder-subtitle": "Запис екрана для Linux, аналог NVIDIA ShadowPlay. ",
+    "gpu-screen-recorder-subtitle": "Запис екрана для Linux, аналог NVIDIA ShadowPlay.",
     "discord-title": "Встановити Discord™",
     "discord-subtitle": "Discord — це соціальна платформа для VoIP та обміну миттєвими повідомленнями. Спілкуйтесь за допомогою голосових і відеодзвінків, текстових повідомлень, обміну файлами у приватних повідомленнях або в спільнотах, які називаються серверами.",
     "open-nobara-issues-title": "Сторінка питань та їх вирішення",
@@ -72,7 +72,7 @@
     "contribute-patreon-subtitle": "Якщо вам подобається Nobara, Proton-GE або інші пов’язані проєкти, будь ласка, розгляньте можливість підтримати нас пожертвою. Дякуємо!",
     "contribute-kofi-title": "Підтримати через Ko-Fi",
     "contribute-kofi-subtitle": "Пропонується як альтернатива Patreon.",
-    "open-nobara-resolve-wizard-title": "Встановлення або оновлення DaVinci Resolve.",
+    "open-nobara-resolve-wizard-title": "Встановлення або оновлення DaVinci Resolve",
     "open-nobara-resolve-wizard-subtitle": "Встановлення або оновлення DaVinci Resolve та виправлення для його коректної роботи.",
     "open-protonplus-title": "Встановити Proton-GE",
     "open-protonplus-subtitle": "Інструмент сумісності для Steam Play на базі Wine та додаткових компонентів від GloriousEggroll \nщо дозволяє запускати віндовз-ігри в Linux."
