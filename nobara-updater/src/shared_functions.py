@@ -11,6 +11,22 @@ from typing import Any
 
 from gi.repository import Flatpak  # type: ignore[import]
 
+DNF_APP_CENTER_BUS_NAME = "org.dnf.AppCenter.UpdateService"
+DNF_APP_CENTER_OBJECT_PATH = "/org/dnf/AppCenter/UpdateService"
+DNF_APP_CENTER_INTERFACE = "org.dnf.AppCenter.UpdateService"
+
+
+def _run_text(command: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
 def fp_get_user_updates(
     uid: int, gid: int, log_queue: Any, update_queue: Any, option: str = "",
 ) -> list[str]:
@@ -63,12 +79,7 @@ def fp_get_user_updates(
 
 def is_service_enabled(service_name):
     try:
-        result = subprocess.run(
-            ["systemctl", "--user", "is-enabled", service_name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+        result = _run_text(["systemctl", "--user", "is-enabled", service_name])
         return result.stdout.strip() == "enabled"
     except Exception as e:
         print(f"An error occurred while checking if the service is enabled: {e}")
@@ -76,16 +87,49 @@ def is_service_enabled(service_name):
 
 def is_service_active(service_name):
     try:
-        result = subprocess.run(
-            ["systemctl", "--user", "is-active", service_name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+        result = _run_text(["systemctl", "--user", "is-active", service_name])
         return result.stdout.strip() == "active"
     except Exception as e:
         print(f"An error occurred while checking if the service is active: {e}")
         return False
+
+def refresh_dnf_app_center_updates(log_queue: Any) -> bool:
+    try:
+        import dbus  # type: ignore[import]
+
+        bus = dbus.SessionBus()
+        obj = bus.get_object(DNF_APP_CENTER_BUS_NAME, DNF_APP_CENTER_OBJECT_PATH)
+        iface = dbus.Interface(obj, dbus_interface=DNF_APP_CENTER_INTERFACE)
+        iface.RefreshUpdates(True)
+        log_queue.put("Requested DNF App Center tray update refresh.")
+        return True
+    except Exception as e:
+        log_queue.put(f"Could not refresh DNF App Center tray over DBus: {e}")
+
+    try:
+        dbus_send = _run_text(
+            [
+                "dbus-send",
+                "--session",
+                "--dest=" + DNF_APP_CENTER_BUS_NAME,
+                DNF_APP_CENTER_OBJECT_PATH,
+                DNF_APP_CENTER_INTERFACE + ".RefreshUpdates",
+                "boolean:true",
+            ]
+        )
+    except Exception as e:
+        log_queue.put(f"Could not run dbus-send for DNF App Center tray refresh: {e}")
+        return False
+    if dbus_send.returncode == 0:
+        log_queue.put("Requested DNF App Center tray update refresh.")
+        return True
+
+    if dbus_send.stderr.strip():
+        log_queue.put(
+            "Could not refresh DNF App Center tray with dbus-send: "
+            + dbus_send.stderr.strip()
+        )
+    return False
 
 def yumex_sync_updates(
     uid: int, gid: int, log_queue: Any, update_queue: Any, option: str = "",
@@ -103,6 +147,7 @@ def yumex_sync_updates(
     os.environ["XDG_CONFIG_HOME"] = str(user_home / ".config")
     os.environ["XDG_DATA_HOME"] = str(user_home / ".local" / "share")
     os.environ["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+    os.environ["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
 
     # Add Flatpak export directory to XDG_DATA_DIRS
     flatpak_export_dir = (
@@ -118,6 +163,9 @@ def yumex_sync_updates(
         runtime_dir.mkdir(parents=True)
         os.chown(runtime_dir, uid, gid)
 
+    if refresh_dnf_app_center_updates(log_queue):
+        return
+
     service_name = "yumex-updater-systray.service"
     if is_service_enabled(service_name) and is_service_active(service_name):
         subprocess.Popen(
@@ -125,6 +173,7 @@ def yumex_sync_updates(
             stdout=subprocess.DEVNULL,  # Suppress standard output
             stderr=subprocess.DEVNULL   # Suppress standard error
         )
+        log_queue.put("Restarted legacy yumex updater systray service.")
 
 
 def install_user_flatpak_updates(
@@ -260,4 +309,3 @@ def on_button_popen_async(
         subprocess.Popen(runproc)
     else:
         subprocess.Popen(["xdg-open", str(openpath)])
-
