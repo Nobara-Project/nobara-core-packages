@@ -41,7 +41,13 @@ def run_as_user(
         *args,
     ]
 
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     # Enable these for debugging run_as_user_target.py
     if result.returncode == 0 and result.stdout is not None:
         try:
@@ -61,4 +67,3 @@ def run_as_user(
             return None
     else:
         return None
-

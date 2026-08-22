@@ -29,6 +29,22 @@ class QuirkFixup:
     def __init__(self, logger=None):
         self.logger = logger if logger else logging.getLogger("nobara-updater.quirks")
 
+    def _installed_nevras(self, package_names: list[str]) -> dict[str, str | None]:
+        installed = {}
+        for package_name in package_names:
+            result = subprocess.run(
+                ["rpm", "-q", package_name],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            installed[package_name] = (
+                result.stdout.strip() if result.returncode == 0 else None
+            )
+        return installed
+
     def system_quirk_fixup(self):
         package_names = updatechecker()
         action = "upgrade"
@@ -52,48 +68,75 @@ class QuirkFixup:
             log_message = "Updates for repository packages detected: {}. Updating these first...\n".format(
                 ", ".join(critical_updates)
             )
-            subprocess.run(
+            critical_update_targets = [
+                "fedora-repos",
+                "fedora-gpg-keys",
+                "nobara-repos",
+                "nobara-gpg-keys",
+            ]
+            before_nevras = self._installed_nevras(critical_update_targets)
+            result = subprocess.run(
                 [
                     "dnf",
                     "update",
                     "-y",
                     "--refresh",
-                    "fedora-repos",
-                    "fedora-gpg-keys",
-                    "nobara-repos",
-                    "nobara-gpg-keys",
+                    *critical_update_targets,
                     "--nogpgcheck",
+                    "--best",
                     f"--releasever={current_release}",
                 ],
                 capture_output=True,
                 text=True,
-                check=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
             )
+            if result.stdout:
+                self.logger.info(result.stdout)
+            if result.stderr:
+                self.logger.error(result.stderr)
+            if result.returncode != 0:
+                self.logger.error(
+                    "Critical repository package update failed with return code %s. Continuing without relaunch.",
+                    result.returncode,
+                )
+                package_names = [
+                    pkg for pkg in package_names if pkg not in critical_packages
+                ]
+            elif before_nevras == self._installed_nevras(critical_update_targets):
+                self.logger.error(
+                    "Critical repository package update did not change any installed packages. Continuing without relaunch to avoid a loop."
+                )
+                package_names = [
+                    pkg for pkg in package_names if pkg not in critical_packages
+                ]
+            else:
+                perform_refresh = 1
+                self.logger.info(log_message)
+                return (
+                    0,
+                    0,
+                    0,
+                    perform_refresh,
+                )
             if "fedora-gpg-keys" in package_names:
                 package_names = [pkg for pkg in package_names if pkg != "fedora-gpg-keys"]
             if "nobara-repos" in package_names:
                 package_names = [pkg for pkg in package_names if pkg != "nobara-repos"]
             if "nobara-gpg-keys" in package_names:
                 package_names = [pkg for pkg in package_names if pkg != "nobara-gpg-keys"]
-            perform_refresh = 1
-            self.logger.info(log_message)
-            return (
-                0,
-                0,
-                0,
-                perform_refresh,
-            )
         # QUIRK: Make sure to update the updater itself and refresh before anything
         self.logger.info("QUIRK: Make sure to update the updater itself and refresh before anything.")
         # Update release packages on new release
 
-        result = subprocess.run("cat /etc/os-release | grep VERSION_ID", shell=True, capture_output=True, text=True, check=True)
+        result = subprocess.run("cat /etc/os-release | grep VERSION_ID", shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
 
         # Split the output into lines
         release = result.stdout.strip().split('\n')
 
         if current_release not in release:
-            subprocess.run("dnf update -y --refresh nobara-release* --nogpgcheck", shell=True, capture_output=True, text=True, check=True)
+            subprocess.run("dnf update -y --refresh nobara-release* --nogpgcheck", shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
 
         if "nobara-updater" in package_names:
             self.logger.info("An update for the Update System app has been detected, updating self...\n")
@@ -117,7 +160,7 @@ class QuirkFixup:
         self.logger.info("QUIRK: Cleanup outdated kernel modules.")
         try:
             # Run the command and capture the output
-            result = subprocess.run("ls /boot/ | grep vmlinuz | grep -v rescue", shell=True, capture_output=True, text=True, check=True)
+            result = subprocess.run("ls /boot/ | grep vmlinuz | grep -v rescue", shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
 
             # Split the output into lines
             lines = result.stdout.strip().split('\n')
@@ -126,7 +169,7 @@ class QuirkFixup:
             versions = [line.replace('vmlinuz-', '') for line in lines if line.startswith('vmlinuz-')]
 
             # Run the ls command and capture the output
-            result = subprocess.run(['ls', '/lib/modules'], capture_output=True, text=True, check=True)
+            result = subprocess.run(['ls', '/lib/modules'], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
 
             # Split the output into entries
             modules = result.stdout.strip().split()
@@ -175,11 +218,11 @@ class QuirkFixup:
         ]
         if (
             all(
-                subprocess.run(["rpm", "-q", pkg], capture_output=True, text=True).returncode == 0
+                subprocess.run(["rpm", "-q", pkg], capture_output=True, text=True, encoding="utf-8", errors="replace").returncode == 0
                 for pkg in tigervnc_installed
             )
             and all(
-                subprocess.run(["rpm", "-q", pkg], capture_output=True, text=True).returncode != 0
+                subprocess.run(["rpm", "-q", pkg], capture_output=True, text=True, encoding="utf-8", errors="replace").returncode != 0
                 for pkg in tigervnc_missing
             )
         ):
@@ -196,7 +239,7 @@ class QuirkFixup:
         # QUIRK: Replace SDDM with Plasma Login Manager when SDDM is installed.
         self.logger.info("QUIRK: Replace SDDM with Plasma Login Manager when SDDM is installed.")
         check_sddm = subprocess.run(
-            ["rpm", "-q", "sddm"], capture_output=True, text=True
+            ["rpm", "-q", "sddm"], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         if check_sddm.returncode == 0:
             sddm_conf = Path("/etc/sddm.conf")
@@ -214,19 +257,19 @@ class QuirkFixup:
             if sddm_conf.exists() and sddm_conf.is_file():
                 shutil.copy2(sddm_conf, plasmalogin_conf)
 
-            subprocess.run(["dnf", "remove", "-y", "sddm", "--setopt=tsflags=noscripts"], capture_output=True, text=True)
+            subprocess.run(["dnf", "remove", "-y", "sddm", "--setopt=tsflags=noscripts"], capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.ensure_package_installed("plasma-login-manager")
 
             subprocess.run(
                 ["systemctl", "disable", "sddm.service"],
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 check=False,
             )
             subprocess.run(
                 ["systemctl", "enable", "plasmalogin.service"],
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 check=False,
             )
 
@@ -256,14 +299,14 @@ class QuirkFixup:
 
         # Install InputPlumber
         check_ip = subprocess.run(
-            ["rpm", "-q", "inputplumber"], capture_output=True, text=True
+            ["rpm", "-q", "inputplumber"], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         if check_ip.returncode != 0:
             updatelist.append("inputplumber")
 
         # Install ROG Ally/X firmware if needed
         check_ally = subprocess.run(
-            "dmesg | grep 'ROG Ally'", capture_output=True, text=True, shell=True
+            "dmesg | grep 'ROG Ally'", capture_output=True, text=True, encoding="utf-8", errors="replace", shell=True
         )
         ally_detected = check_ally.returncode == 0
         if ally_detected:
@@ -273,7 +316,7 @@ class QuirkFixup:
 
             rogfw_name = "rogally-firmware"
             check_rogfw = subprocess.run(
-                ["rpm", "-q", rogfw_name], capture_output=True, text=True
+                ["rpm", "-q", rogfw_name], capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             rogfw_installed = check_rogfw.returncode == 0
             # Remove it, it's upstreamed now'
@@ -281,7 +324,7 @@ class QuirkFixup:
                 PackageUpdater([rogfw_name], "remove", None)
 
         check_falcond = subprocess.run(
-            ["rpm", "-q", "falcond"], capture_output=True, text=True
+            ["rpm", "-q", "falcond"], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         falcond_installed = check_falcond.returncode == 0
         if not falcond_installed:
@@ -289,17 +332,17 @@ class QuirkFixup:
             subprocess.run(
                 ["systemctl", "enable", "--now", "falcond"],
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
             )
 
 
         check_gamescope_htpc = subprocess.run(
-            ["rpm", "-q", "gamescope-htpc-common"], capture_output=True, text=True
+            ["rpm", "-q", "gamescope-htpc-common"], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         gamescope_htpc_installed = check_gamescope_htpc.returncode == 0
 
         check_gamescope_session_common = subprocess.run(
-            ["rpm", "-q", "gamescope-session-common"], capture_output=True, text=True
+            ["rpm", "-q", "gamescope-session-common"], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         gamescope_session_common_installed = check_gamescope_session_common.returncode == 0
         if gamescope_htpc_installed:
@@ -307,7 +350,7 @@ class QuirkFixup:
                 # Return to normal grub + plymouth first.
                 plymouth_scripts_name = "plymouth-plugin-script"
                 check_plymouth_scripts = subprocess.run(
-                    ["rpm", "-q", plymouth_scripts_name], capture_output=True, text=True
+                    ["rpm", "-q", plymouth_scripts_name], capture_output=True, text=True, encoding="utf-8", errors="replace"
                 )
                 plymouth_scripts_notinstalled = check_plymouth_scripts.returncode != 0
                 if plymouth_scripts_notinstalled:
@@ -317,14 +360,14 @@ class QuirkFixup:
                 check_theme = subprocess.run(
                     ["plymouth-set-default-theme"],
                     capture_output=True,
-                    text=True
+                    text=True, encoding="utf-8", errors="replace"
                 )
                 if 'steamos' in check_theme.stdout:
                     # Fixup grub so it's more steamos-like
                     subprocess.run(
                         ["plymouth-set-default-theme", "bgrt"],
                         capture_output=True,
-                        text=True,
+                        text=True, encoding="utf-8", errors="replace",
                     )
 
                     subprocess.run(["dracut", "-f", "--regenerate-all"], check=True)
@@ -335,7 +378,7 @@ class QuirkFixup:
                     # Function to calculate SHA256 checksum
                     def calculate_sha256(file_path):
                         result = subprocess.run(
-                            ["sha256sum", file_path], capture_output=True, text=True
+                            ["sha256sum", file_path], capture_output=True, text=True, encoding="utf-8", errors="replace"
                         )
                         return result.stdout.split()[0]  # Extract the checksum from the output
 
@@ -346,7 +389,7 @@ class QuirkFixup:
                     subprocess.run(
                         ["sed", "-i", "s/GRUB_TIMEOUT='0'/GRUB_TIMEOUT='5'/g", "/etc/default/grub"],
                         capture_output=True,
-                        text=True,
+                        text=True, encoding="utf-8", errors="replace",
                     )
 
                     # Lines to remove from the file
@@ -377,13 +420,13 @@ class QuirkFixup:
                         subprocess.run(
                             ["/usr/sbin/grub2-mkconfig", "-o", "/boot/grub2/grub.cfg"],
                             capture_output=True,
-                            text=True,
+                            text=True, encoding="utf-8", errors="replace",
                         )
             else:
                 # Fixup plymouth so it's more steamos-like
                 plymouth_scripts_name = "plymouth-plugin-script"
                 check_plymouth_scripts = subprocess.run(
-                    ["rpm", "-q", plymouth_scripts_name], capture_output=True, text=True
+                    ["rpm", "-q", plymouth_scripts_name], capture_output=True, text=True, encoding="utf-8", errors="replace"
                 )
                 plymouth_scripts_notinstalled = check_plymouth_scripts.returncode != 0
                 if plymouth_scripts_notinstalled:
@@ -393,14 +436,14 @@ class QuirkFixup:
                 check_theme = subprocess.run(
                     ["plymouth-set-default-theme"],
                     capture_output=True,
-                    text=True
+                    text=True, encoding="utf-8", errors="replace"
                 )
                 if not 'steamos' in check_theme.stdout:
                     # Fixup grub so it's more steamos-like
                     subprocess.run(
                         ["plymouth-set-default-theme", "steamos"],
                         capture_output=True,
-                        text=True,
+                        text=True, encoding="utf-8", errors="replace",
                     )
 
                     subprocess.run(["dracut", "-f", "--regenerate-all"], check=True)
@@ -411,7 +454,7 @@ class QuirkFixup:
                     # Function to calculate SHA256 checksum
                     def calculate_sha256(file_path):
                         result = subprocess.run(
-                            ["sha256sum", file_path], capture_output=True, text=True
+                            ["sha256sum", file_path], capture_output=True, text=True, encoding="utf-8", errors="replace"
                         )
                         return result.stdout.split()[0]  # Extract the checksum from the output
 
@@ -422,7 +465,7 @@ class QuirkFixup:
                     subprocess.run(
                         ["sed", "-i", "s/GRUB_TIMEOUT='5'/GRUB_TIMEOUT='0'/g", "/etc/default/grub"],
                         capture_output=True,
-                        text=True,
+                        text=True, encoding="utf-8", errors="replace",
                     )
 
                     # Lines to add to the file
@@ -454,14 +497,14 @@ class QuirkFixup:
                         subprocess.run(
                             ["/usr/sbin/grub2-mkconfig", "-o", "/boot/grub2/grub.cfg"],
                             capture_output=True,
-                            text=True,
+                            text=True, encoding="utf-8", errors="replace",
                         )
         if gamescope_session_common_installed:
             if not gamescope_htpc_installed:
                 # Return to normal grub + plymouth first.
                 plymouth_scripts_name = "plymouth-plugin-script"
                 check_plymouth_scripts = subprocess.run(
-                    ["rpm", "-q", plymouth_scripts_name], capture_output=True, text=True
+                    ["rpm", "-q", plymouth_scripts_name], capture_output=True, text=True, encoding="utf-8", errors="replace"
                 )
                 plymouth_scripts_notinstalled = check_plymouth_scripts.returncode != 0
                 if plymouth_scripts_notinstalled:
@@ -471,14 +514,14 @@ class QuirkFixup:
                 check_theme = subprocess.run(
                     ["plymouth-set-default-theme"],
                     capture_output=True,
-                    text=True
+                    text=True, encoding="utf-8", errors="replace"
                 )
                 if 'steamos' in check_theme.stdout:
                     # Fixup grub so it's more steamos-like
                     subprocess.run(
                         ["plymouth-set-default-theme", "bgrt"],
                         capture_output=True,
-                        text=True,
+                        text=True, encoding="utf-8", errors="replace",
                     )
 
                     subprocess.run(["dracut", "-f", "--regenerate-all"], check=True)
@@ -489,7 +532,7 @@ class QuirkFixup:
                     # Function to calculate SHA256 checksum
                     def calculate_sha256(file_path):
                         result = subprocess.run(
-                            ["sha256sum", file_path], capture_output=True, text=True
+                            ["sha256sum", file_path], capture_output=True, text=True, encoding="utf-8", errors="replace"
                         )
                         return result.stdout.split()[0]  # Extract the checksum from the output
 
@@ -500,7 +543,7 @@ class QuirkFixup:
                     subprocess.run(
                         ["sed", "-i", "s/GRUB_TIMEOUT='0'/GRUB_TIMEOUT='5'/g", "/etc/default/grub"],
                         capture_output=True,
-                        text=True,
+                        text=True, encoding="utf-8", errors="replace",
                     )
 
                     # Lines to remove from the file
@@ -531,7 +574,7 @@ class QuirkFixup:
                         subprocess.run(
                             ["/usr/sbin/grub2-mkconfig", "-o", "/boot/grub2/grub.cfg"],
                             capture_output=True,
-                            text=True,
+                            text=True, encoding="utf-8", errors="replace",
                         )
 
         if len(remove_names) > 0:
@@ -542,12 +585,12 @@ class QuirkFixup:
 
         # Also check if device is steamdeck, if so install jupiter packages
         check_galileo = subprocess.run(
-            "dmesg | grep 'Galileo'", capture_output=True, text=True, shell=True
+            "dmesg | grep 'Galileo'", capture_output=True, text=True, encoding="utf-8", errors="replace", shell=True
         )
         galileo_detected = check_galileo.returncode == 0
 
         check_jupiter = subprocess.run(
-            "dmesg | grep 'Jupiter'", capture_output=True, text=True, shell=True
+            "dmesg | grep 'Jupiter'", capture_output=True, text=True, encoding="utf-8", errors="replace", shell=True
         )
         jupiter_detected = check_jupiter.returncode == 0
 
@@ -556,7 +599,7 @@ class QuirkFixup:
 
             jupiter_hw = "jupiter-hw-support"
             check_jupiter_hw = subprocess.run(
-                ["rpm", "-q", jupiter_hw], capture_output=True, text=True
+                ["rpm", "-q", jupiter_hw], capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             jupiter_hw_installed = check_jupiter_hw.returncode != 0
             if jupiter_hw_installed:
@@ -564,7 +607,7 @@ class QuirkFixup:
 
             jupiter_fan = "jupiter-fan-control"
             check_jupiter_fan = subprocess.run(
-                ["rpm", "-q", jupiter_fan], capture_output=True, text=True
+                ["rpm", "-q", jupiter_fan], capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             jupiter_fan_installed = check_jupiter_fan.returncode != 0
             if jupiter_fan_installed:
@@ -572,7 +615,7 @@ class QuirkFixup:
 
             steamdeck_dsp = "steamdeck-dsp"
             check_steamdeck_dsp = subprocess.run(
-                ["rpm", "-q", steamdeck_dsp], capture_output=True, text=True
+                ["rpm", "-q", steamdeck_dsp], capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             steamdeck_dsp_installed = check_steamdeck_dsp.returncode != 0
             if steamdeck_dsp_installed:
@@ -580,7 +623,7 @@ class QuirkFixup:
 
             steamdeck_firmware = "steamdeck-firmware"
             check_steamdeck_firmware = subprocess.run(
-                ["rpm", "-q", steamdeck_firmware], capture_output=True, text=True
+                ["rpm", "-q", steamdeck_firmware], capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             steamdeck_firmware_installed = check_steamdeck_firmware.returncode != 0
             if steamdeck_firmware_installed:
@@ -606,7 +649,7 @@ class QuirkFixup:
         problematic_names = []
         for package in problematic:
             problematic_check = subprocess.run(
-                ["rpm", "-q", package], capture_output=True, text=True
+                ["rpm", "-q", package], capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             if problematic_check.returncode == 0:
                 problematic_names.append(package)
@@ -630,23 +673,23 @@ class QuirkFixup:
         ]
         for package in problematic_2025:
             problematic_check_2025 = subprocess.run(
-                ["rpm", "-q", package], capture_output=True, text=True
+                ["rpm", "-q", package], capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             if problematic_check_2025.returncode == 0:
                 if "rubberband" in package:
-                    libs32_check = subprocess.run(["rpm", "-q", package], capture_output=True, text=True)
+                    libs32_check = subprocess.run(["rpm", "-q", package], capture_output=True, text=True, encoding="utf-8", errors="replace")
                     if libs32_check.returncode == 0:
-                        subprocess.run(["rpm", "-e", "--nodeps", package], capture_output=True, text=True)
-                        subprocess.run(["dnf", "install", "-y", "rubberband-libs.x86_64", "--refresh"], capture_output=True, text=True)
-                        subprocess.run(["dnf", "install", "-y", "rubberband-libs.i686", "--refresh"], capture_output=True, text=True)
+                        subprocess.run(["rpm", "-e", "--nodeps", package], capture_output=True, text=True, encoding="utf-8", errors="replace")
+                        subprocess.run(["dnf", "install", "-y", "rubberband-libs.x86_64", "--refresh"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+                        subprocess.run(["dnf", "install", "-y", "rubberband-libs.i686", "--refresh"], capture_output=True, text=True, encoding="utf-8", errors="replace")
                 elif "tesseract" in package:
-                    libs32_check = subprocess.run(["rpm", "-q", package], capture_output=True, text=True)
+                    libs32_check = subprocess.run(["rpm", "-q", package], capture_output=True, text=True, encoding="utf-8", errors="replace")
                     if libs32_check.returncode == 0:
-                        subprocess.run(["rpm", "-e", "--nodeps", package], capture_output=True, text=True)
-                        subprocess.run(["dnf", "install", "-y", "tesseract-libs.x86_64", "--refresh"], capture_output=True, text=True)
-                        subprocess.run(["dnf", "install", "-y", "tesseract-libs.i686", "--refresh"], capture_output=True, text=True)
+                        subprocess.run(["rpm", "-e", "--nodeps", package], capture_output=True, text=True, encoding="utf-8", errors="replace")
+                        subprocess.run(["dnf", "install", "-y", "tesseract-libs.x86_64", "--refresh"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+                        subprocess.run(["dnf", "install", "-y", "tesseract-libs.i686", "--refresh"], capture_output=True, text=True, encoding="utf-8", errors="replace")
                 else:
-                    subprocess.run(["rpm", "-e", "--nodeps", package], capture_output=True, text=True)
+                    subprocess.run(["rpm", "-e", "--nodeps", package], capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         # QUIRK: Clear plasmashell cache if a plasma-workspace update is available
         self.logger.info("QUIRK: Clear plasmashell cache if a plasma-workspace update is available.")
@@ -654,7 +697,7 @@ class QuirkFixup:
         def check_update():
             try:
                 # Run the dnf check-update command and filter for plasma-workspace
-                result = subprocess.run(['dnf', 'check-update'], capture_output=True, text=True, check=False)
+                result = subprocess.run(['dnf', 'check-update'], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
                 # Use Python's string filtering instead of piping in the shell
                 if result.returncode in [0, 100]:
                     if 'plasma-workspace' in result.stdout:
@@ -698,7 +741,7 @@ class QuirkFixup:
 
         # Run the dnf list installed command and capture the output
         check_nvidia_wrong_epoch = subprocess.run(
-            ["dnf", "list", "--installed"], capture_output=True, text=True
+            ["dnf", "list", "--installed"], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
 
         # Check if the command was successful
@@ -724,7 +767,7 @@ class QuirkFixup:
                     prior_variant = "unknown"
 
                 # Remove old
-                remove_proc = subprocess.run(["dnf", "remove", "-y", "*nvidia*"], capture_output=True, text=True)
+                remove_proc = subprocess.run(["dnf", "remove", "-y", "*nvidia*"], capture_output=True, text=True, encoding="utf-8", errors="replace")
                 if remove_proc.returncode != 0:
                     self.logger.warning("dnf remove *nvidia* failed: %s", remove_proc.stderr.strip())
 
@@ -775,7 +818,7 @@ class QuirkFixup:
                         subprocess.run(["dkms", "autoinstall"], check=False)
 
                     subprocess.run(["tee", "/etc/modprobe.d/nvidia-modeset.conf"],
-                                input=conf, text=True, check=False)
+                                input=conf, text=True, encoding="utf-8", errors="replace", check=False)
 
                     subprocess.run(["chmod", "644", "/etc/modprobe.d/nvidia-modeset.conf"], check=False)
 
@@ -789,7 +832,7 @@ class QuirkFixup:
 
         # Run the first command and capture the output
         cmd = "dnf list --installed | grep mesa | grep fc41 | cut -d ' ' -f 1"
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         # Split output into a list of package names
         packages = result.stdout.strip().split("\n")
@@ -835,7 +878,7 @@ class QuirkFixup:
                 "dnf list --installed | grep @nobara-rocm-official",
                 shell=True,
                 capture_output=True,
-                text=True
+                text=True, encoding="utf-8", errors="replace"
             )
 
             # Check if there is any output
@@ -877,14 +920,14 @@ class QuirkFixup:
                 "rpm -qa | grep mesa-vulkan-drivers",
                 shell=True,
                 capture_output=True,
-                text=True
+                text=True, encoding="utf-8", errors="replace"
             )
 
             # Check if there is any output
             if result.returncode !=0:
                 self.logger.info("mesa-vulkan-drivers fixup.")
                 subprocess.run(
-                    ["dnf", "install", "-y", "mesa-vulkan-drivers.x86_64", "mesa-vulkan-drivers.i686"], capture_output=True, text=True
+                    ["dnf", "install", "-y", "mesa-vulkan-drivers.x86_64", "mesa-vulkan-drivers.i686"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                 )
         except Exception as e:
             print(f"An error occurred: {e}")
@@ -892,17 +935,17 @@ class QuirkFixup:
         # QUIRK: vaapi fixup
         self.logger.info("QUIRK: vaapi fixup.")
         mesa_fixup_check = subprocess.run(
-            ["rpm", "-q", "mesa-libgallium-freeworld.x86_64"], capture_output=True, text=True
+            ["rpm", "-q", "mesa-libgallium-freeworld.x86_64"], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         mesa_fixup_check1 = subprocess.run(
-            ["rpm", "-q", "mesa-libgallium-freeworld.i686"], capture_output=True, text=True
+            ["rpm", "-q", "mesa-libgallium-freeworld.i686"], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
 
         mesa_fixup_check2 = subprocess.run(
-            ["rpm", "-q", "mesa-libgallium.x86_64"], capture_output=True, text=True
+            ["rpm", "-q", "mesa-libgallium.x86_64"], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         mesa_fixup_check3 = subprocess.run(
-            ["rpm", "-q", "mesa-libgallium.i686"], capture_output=True, text=True
+            ["rpm", "-q", "mesa-libgallium.i686"], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         # they should all either end in -freeworld or not, no mixing.
         if not (
@@ -924,84 +967,84 @@ class QuirkFixup:
                     or mesa_fixup_check3.returncode == 0
                 ):
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-libgallium.x86_64"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium.x86_64"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-libgallium.i686"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium.i686"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-libgallium-freeworld.x86_64"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium-freeworld.x86_64"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-libgallium-freeworld.i686"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium-freeworld.i686"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-va-drivers.x86_64"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers.x86_64"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-va-drivers.i686"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers.i686"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.x86_64"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.x86_64"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
                         ["dnf", "install", "-y", "mesa-libgallium-freeworld.x86_64", "mesa-libgallium-freeworld.i686", "--refresh"],
-                        capture_output=True, text=True
+                        capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                 # Otherwise correct to original
                 else:
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-libgallium.x86_64"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium.x86_64"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-libgallium.i686"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium.i686"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-libgallium-freeworld.x86_64"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium-freeworld.x86_64"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-libgallium-freeworld.i686"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-libgallium-freeworld.i686"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-va-drivers.x86_64"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers.x86_64"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-va-drivers.i686"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers.i686"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.x86_64"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.x86_64"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
-                        ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True
+                        ["rpm", "-e", "--nodeps", "mesa-va-drivers-freeworld.i686"], capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
                     subprocess.run(
                         ["dnf", "install", "-y", "mesa-libgallium.x86_64", "mesa-libgallium.i686", "--refresh"],
-                        capture_output=True, text=True
+                        capture_output=True, text=True, encoding="utf-8", errors="replace"
                     )
 
         # QUIRK: Kernel 6.12.9 fixup
         self.logger.info("QUIRK: Kernel fsync->nobara conversion update.")
         try:
             # Get the full kernel version
-            full_version = subprocess.run(['uname', '-r'], capture_output=True, text=True, check=True)
+            full_version = subprocess.run(['uname', '-r'], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
 
             # Access the captured output
             version_output = full_version.stdout.strip()
 
             if "fsync" in version_output:
-                subprocess.run(['dnf', 'remove', 'kernel-uki-virt*', '-y'], capture_output=True, text=True, check=True)
-                subprocess.run(['dnf', 'update', 'kernel', '-y'], capture_output=True, text=True, check=True)
-                subprocess.run(['dnf', 'update', 'kernel-devel', '-y'], capture_output=True, text=True, check=True)
+                subprocess.run(['dnf', 'remove', 'kernel-uki-virt*', '-y'], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
+                subprocess.run(['dnf', 'update', 'kernel', '-y'], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
+                subprocess.run(['dnf', 'update', 'kernel-devel', '-y'], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
                 perform_kernel_actions = 1
                 perform_reboot_request = 1
 
             target_version = "6.12.11-204.nobara.fc41.x86_64"
             if "nobara" in version_output:
                 if version_output < target_version:
-                    checkpending = subprocess.run(['rpm', '-q', f'kernel-{target_version}'], capture_output=True, text=True, check=True)
+                    checkpending = subprocess.run(['rpm', '-q', f'kernel-{target_version}'], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
                     checkpending_output = checkpending.stdout.strip()
                     if "not installed" in checkpending_output:
                         try:
@@ -1024,7 +1067,7 @@ class QuirkFixup:
                 dnfoverride = subprocess.run(
                     ["dnf", "-q", "repolist", "--enabled"],
                     capture_output=True,
-                    text=True,
+                    text=True, encoding="utf-8", errors="replace",
                     check=True
                 )
 
@@ -1044,7 +1087,7 @@ class QuirkFixup:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     capture_output=True,
-                    text=True,
+                    text=True, encoding="utf-8", errors="replace",
                     check=True
                 )
                 if repo_enabled() and 'enabled=1' not in dnffile.stdout:
@@ -1060,7 +1103,7 @@ class QuirkFixup:
                         ["rpm", "-qa"],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
-                        text=True,
+                        text=True, encoding="utf-8", errors="replace",
                         check=True
                     )
                     # Look for "freeworld" in the output
@@ -1167,7 +1210,7 @@ class QuirkFixup:
 
     def _is_package_installed(self, package_name: str) -> bool:
         result = subprocess.run(
-            ["rpm", "-q", package_name], capture_output=True, text=True
+            ["rpm", "-q", package_name], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         return result.returncode == 0
 
@@ -1204,7 +1247,7 @@ class QuirkFixup:
 
         for pkg in package_names:
             result = subprocess.run(
-                ["rpm", "-q", pkg], capture_output=True, text=True
+                ["rpm", "-q", pkg], capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             if result.returncode != 0:
                 missing_packages.append(pkg)

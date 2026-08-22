@@ -198,7 +198,7 @@ BASEARCH = get_basearch()
 
 def is_dnf_app_center_installed() -> bool:
     result = subprocess.run(
-        ["rpm", "-q", "dnf-app-center"], capture_output=True, text=True
+        ["rpm", "-q", "dnf-app-center"], capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
     return result.returncode == 0
 
@@ -564,14 +564,14 @@ def kernel_image_supported() -> bool:
             "bootctl --print-stub-path",
             shell=True,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=True
         )
         image_type = subprocess.run(
                 f"bootctl kernel-identify {kernel_image.stdout.strip()}",
                 shell=True,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 check=True
         )
         if image_type == "uki":
@@ -609,13 +609,13 @@ def install_system_updates_only() -> bool:
                     "ls /boot/ | grep vmlinuz | grep -v rescue",
                     shell=True,
                     capture_output=True,
-                    text=True,
+                    text=True, encoding="utf-8", errors="replace",
                     check=True,
                 )
                 lines = result.stdout.strip().split("\n")
                 versions = [line.replace("vmlinuz-", "") for line in lines if line.startswith("vmlinuz-")]
 
-                result = subprocess.run(["ls", "/lib/modules"], capture_output=True, text=True, check=True)
+                result = subprocess.run(["ls", "/lib/modules"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
                 modules = result.stdout.strip().split()
 
                 filtered_modules = [module for module in modules if module not in versions]
@@ -798,7 +798,7 @@ def attempt_distro_sync() -> None:
         result = subprocess.run(
             ["dnf", "distro-sync", "--refresh", "-y"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=True,
             env=distro_sync_env,
         )
@@ -824,7 +824,7 @@ def attempt_distro_sync() -> None:
             "ls /boot/ | grep vmlinuz | grep -v rescue",
             shell=True,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=True
         )
         logger.info("Found kernel versions:\n" + result.stdout)
@@ -840,7 +840,7 @@ def attempt_distro_sync() -> None:
         result = subprocess.run(
             ['ls', '/lib/modules'],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=True
         )
         logger.info("Found module directories:\n" + result.stdout)
@@ -869,7 +869,7 @@ def attempt_distro_sync() -> None:
         result = subprocess.run(
             ["dracut", "-f","--regenerate-all"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=True
         )
         logger.info("dracut output:\n" + result.stdout)
@@ -947,13 +947,13 @@ def media_fixup() -> None:
     logger.info("%s\n\n%s\n", action_log_string, chr(10).join(indented_combined_removal))
     for package in hard_removal:
         subprocess.run(
-            ["rpm", "-e", "--nodeps", package], capture_output=True, text=True
+            ["rpm", "-e", "--nodeps", package], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
 
     soft_removal_list = []
     for package in soft_removal:
         removal_check = subprocess.run(
-            ["rpm", "-q", package], capture_output=True, text=True
+            ["rpm", "-q", package], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         if removal_check.returncode == 0:
             soft_removal_list.append(package)
@@ -964,21 +964,21 @@ def media_fixup() -> None:
     vulkan_git_installed = 0
     for package in vulkan_standard:
         removal_check_vulkan = subprocess.run(
-            ["rpm", "-q", package], capture_output=True, text=True
+            ["rpm", "-q", package], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         if removal_check_vulkan.returncode == 0:
             subprocess.run(
-                ["rpm", "-e", "--nodeps", package], capture_output=True, text=True
+                ["rpm", "-e", "--nodeps", package], capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             vulkan_standard_installed = 1
 
     for package in vulkan_git:
         removal_check_vulkan_git = subprocess.run(
-            ["rpm", "-q", package], capture_output=True, text=True
+            ["rpm", "-q", package], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         if removal_check_vulkan_git.returncode == 0:
             subprocess.run(
-                ["rpm", "-e", "--nodeps", package], capture_output=True, text=True
+                ["rpm", "-e", "--nodeps", package], capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             vulkan_git_installed = 1
 
@@ -1018,13 +1018,13 @@ def media_fixup() -> None:
 
     # enable the nobara-pikaos-additional repo first
     subprocess.run(
-            ["dnf", "config-manager", "setopt", "nobara-pikaos-additional.enabled=1"], capture_output=True, text=True
+            ["dnf", "config-manager", "setopt", "nobara-pikaos-additional.enabled=1"], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
 
     subprocess.run(
         ["sed", "-i", "s/enabled=0/enabled=1/g", "/etc/yum.repos.d/nobara-pikaos-additional.repo"],
         capture_output=True,
-        text=True
+        text=True, encoding="utf-8", errors="replace"
     )
 
     action_log_string = "Performing clean media package installation..."
@@ -1033,7 +1033,7 @@ def media_fixup() -> None:
     install_list = []
     for package in install:
         install_check = subprocess.run(
-            ["rpm", "-q", package], capture_output=True, text=True
+            ["rpm", "-q", package], capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         if install_check.returncode != 0:
             install_list.append(package)
@@ -1056,10 +1056,10 @@ def media_fixup() -> None:
         PackageUpdater(vulkan_git_freeworld, "install", None)
 
     vulkan_install_check_standard_freeworld = subprocess.run(
-        ["rpm", "-q", "mesa-vulkan-drivers-freeworld"], capture_output=True, text=True
+        ["rpm", "-q", "mesa-vulkan-drivers-freeworld"], capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
     vulkan_install_check_git_freeworld = subprocess.run(
-        ["rpm", "-q", "mesa-vulkan-drivers-git-freeworld"], capture_output=True, text=True
+        ["rpm", "-q", "mesa-vulkan-drivers-git-freeworld"], capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
     if vulkan_standard_installed == 0 and vulkan_git_installed == 0 and vulkan_install_check_standard_freeworld.returncode != 0 and vulkan_install_check_git_freeworld.returncode != 0:
         vulkan_standard_freeworld = [

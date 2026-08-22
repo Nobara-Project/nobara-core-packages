@@ -405,11 +405,15 @@ def run_system_upgrade_transaction(logger: logging.Logger | None = None) -> bool
         transaction.download()
 
         tx_logger.info("Running transaction...")
-        transaction.set_callbacks(
-            dnf5_rpm.TransactionCallbacksUniquePtr(
-                _UpgradeTransactionCallbacks(tx_logger, transaction.get_transaction_packages_count())
-            )
+        # Keep the Python SWIG director alive until transaction.run() returns.
+        # Passing it to TransactionCallbacksUniquePtr inline leaves only the
+        # C++ object alive, so the first callback dispatch aborts with a
+        # Swig::DirectorMethodException.
+        callbacks = _UpgradeTransactionCallbacks(
+            tx_logger, transaction.get_transaction_packages_count()
         )
+        callbacks_ptr = dnf5_rpm.TransactionCallbacksUniquePtr(callbacks)
+        transaction.set_callbacks(callbacks_ptr)
         result = transaction.run()
         if (
             result != dnf5_base.Transaction.TransactionRunResult_SUCCESS
