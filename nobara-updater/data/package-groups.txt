@@ -26,6 +26,7 @@ Rules:
 # 2 entries
 kernel
 kernel-modules
+kernel-devel
 
 [graphic stack]
 # 24 entries
@@ -452,7 +453,6 @@ json-c.x86_64
 jupiter-fan-control
 jupiter-hw-support
 kdenlive
-kernel-devel
 kexec-tools
 lact
 libaom.i686
