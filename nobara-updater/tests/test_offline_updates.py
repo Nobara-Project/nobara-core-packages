@@ -29,6 +29,11 @@ def package(name, arch="x86_64", **fields):
 
 
 class MigrationTests(unittest.TestCase):
+    def test_rpmfusion_repo_packages_do_not_trigger_fixups(self):
+        installed = [package(f"rpmfusion-{family}-release{suffix}", "noarch")
+                     for family in ("free", "nonfree") for suffix in ("", "-tainted", "-rawhide")]
+        self.assertEqual(plan_migrations(installed).as_dict(), plan_migrations([]).as_dict())
+
     def test_login_replacement_is_one_plan_with_deferred_config(self):
         result = plan_migrations([package("sddm"), package("sddm-wayland-plasma")])
         self.assertTrue({"sddm", "sddm-wayland-plasma"} <= result.remove)

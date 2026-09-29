@@ -61,7 +61,9 @@ error. Rebooting alone does not repair or retry the failed installation.
   installations and packages with no recorded repository origin. Installing
   a repository package with `dnf install package-name` does not exempt it
   from updates. These preservation rules apply to Nobara's updater, not
-  standalone DNF commands.
+  standalone DNF commands. RPM Fusion's free/nonfree repository release
+  packages (including tainted and rawhide variants) are exempt from this
+  protection; the updater no longer schedules fixups for them.
 - **Third-party repository packages remain eligible for replacement.**
   Repository priorities and dependencies determine whether a Nobara build
   replaces them. A newer version alone does not override repository

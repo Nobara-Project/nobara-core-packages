@@ -464,6 +464,22 @@ echo {version} > %{{buildroot}}{payload}
         self.local_desktop_fixture(available_version="4")
         self.assertFalse(any(p["name"] == "labwc" for p in self.prepare()["packages"]))
 
+    def test_rpmfusion_repo_rpms_can_update_while_local_desktop_stays_protected(self):
+        self.local_desktop_fixture()
+        names = ("rpmfusion-free-release", "rpmfusion-nonfree-release")
+        for name, origin in zip(names, ("@commandline", "<unknown>")):
+            installed = self.build_rpm(name, "43")
+            subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts",
+                            "--noplugins", "--ignoresize", "-i", str(installed)], check=True, capture_output=True)
+            self.set_origin(name, origin)
+            shutil.copy2(self.build_rpm(name, "44"), self.repo)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+        result = self.prepare()
+        upgraded = {p["name"] for p in result["packages"] if p["action"] == "Upgrade"}
+        self.assertTrue(set(names) <= upgraded)
+        self.assertFalse(any(p["name"] == "labwc" for p in result["packages"]))
+        self.assertFalse(any(p["name"] in names for p in result["package_origins"]))
+
     def test_unknown_origin_direct_rpm_install_is_also_preserved(self):
         self.local_desktop_fixture(origin="<unknown>")
         result = self.prepare()

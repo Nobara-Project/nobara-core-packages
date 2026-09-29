@@ -30,6 +30,10 @@ These preservation rules apply to Nobara's updater, not standalone DNF
 commands. Source installations outside the RPM database cannot be protected
 by this mechanism.
 
+RPM Fusion's free/nonfree repository release packages (including tainted and
+rawhide variants) are exempt from local RPM protection and no longer have
+updater fixups.
+
 Third-party repository packages remain eligible for replacement by a Nobara
 build. Repository priorities and dependencies still apply; a newer version
 alone does not override repository priority. Conflicts can occur regardless

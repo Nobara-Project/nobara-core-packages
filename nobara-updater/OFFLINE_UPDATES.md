@@ -72,6 +72,11 @@ To resume repository updates, explicitly install/reinstall the chosen repository
 build using DNF. Source installs outside the RPM database cannot be identified
 or protected by this policy; neither can unrecorded edits to packaged files.
 
+RPM Fusion's free/nonfree repository release packages, including their tainted
+and rawhide variants, are exempt from local RPM protection. Nobara no longer
+ships these packages, and the updater does not schedule their removal or other
+fixups. Any available updates follow normal DNF resolution.
+
 The Nobara repository IDs are `nobara`, `nobara-updates`,
 `nobara-kernel-mainline`, `nobara-kernel-lts`, `nobara-pikaos-additional`,
 `nobara-nvidia-production`, and `nobara-nvidia-new-feature`. Packages installed

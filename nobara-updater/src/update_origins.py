@@ -13,6 +13,13 @@ NOBARA_REPOS = frozenset({
 })
 LOCAL_REPOS = {"@commandline", "commandline"}
 UNKNOWN_REPOS = {"", "<unknown>", "@System"}
+# These legacy repository configuration RPMs are no longer shipped by Nobara
+# and must not be held as local builds, even when installed from an RPM URL.
+LOCAL_PROTECTION_EXEMPTIONS = frozenset({
+    "rpmfusion-free-release", "rpmfusion-nonfree-release",
+    "rpmfusion-free-release-tainted", "rpmfusion-nonfree-release-tainted",
+    "rpmfusion-free-release-rawhide", "rpmfusion-nonfree-release-rawhide",
+})
 
 
 class PackageOriginError(UpdateError):
@@ -78,6 +85,8 @@ def protect_local_packages(base):
     origins = []
     excludes = rpm.PackageSet(base)
     for package in installed:
+        if package.get_name() in LOCAL_PROTECTION_EXEMPTIONS:
+            continue
         repo = package.get_from_repo_id()
         kind = origin_kind(repo)
         if kind == "nobara":

@@ -20,8 +20,6 @@ class MigrationPlan:
 
 
 RETIRED = {
-    "rpmfusion-free-release", "rpmfusion-nonfree-release", "rpmfusion-free-release-tainted",
-    "rpmfusion-nonfree-release-tainted", "rpmfusion-free-release-rawhide", "rpmfusion-nonfree-release-rawhide",
     "qt5-qtwebengine-freeworld", "qt6-qtwebengine-freeworld", "qgnomeplatform-qt6", "qgnomeplatform-qt5",
     "okular5-libs", "fedora-workstation-repositories", "deckyloader", "obs-studio-libs.i686",
     "obs-studio-plugin-vkcapture.i686", "obs-studio-plugin-source-record.i686",
