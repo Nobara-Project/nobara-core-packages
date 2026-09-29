@@ -126,6 +126,11 @@ def normalize_package_name(package_spec: str) -> str:
     return package_name
 
 
+def is_kernel_package(name: str) -> bool:
+    name = normalize_package_name(name)
+    return name == "kernel" or name.startswith("kernel-")
+
+
 def parse_package_groups(lines: Iterable[str]) -> dict[str, frozenset[str]]:
     sections: dict[str, set[str]] = {}
     current_section: str | None = None
@@ -199,7 +204,15 @@ def partition_pending_updates(
     result: list[PackageGroup] = []
 
     for key in GROUP_ORDER[:-1]:
-        configured_names = package_groups[key]
+        configured_names = set(package_groups[key])
+        if key == "kernel":
+            configured_names.update(name for name in pending_by_name if is_kernel_package(name))
+        if key == "system core packages":
+            configured_names.update(
+                name for name in pending_by_name
+                if name in {"glibc", "rpm", "dnf5", "libdnf5", "dracut", "systemd", "python3"}
+                or name.startswith(("glibc-", "rpm-", "dnf5-", "libdnf5-", "dracut-", "systemd-"))
+            )
         names = tuple(
             sorted(
                 original
@@ -253,7 +266,8 @@ def module_package_kinds(package_names: Iterable[str]) -> frozenset[str]:
 
 
 def requires_module_validation(package_names: Iterable[str]) -> bool:
-    return bool(module_package_kinds(package_names))
+    names = tuple(package_names)
+    return any(is_kernel_package(name) for name in names) or bool(module_package_kinds(names))
 
 
 def _log_command_output(
@@ -482,6 +496,8 @@ def run_grouped_updates(
             halt_reason = f"the {group.label} rollback did not complete"
         elif post_rollback_validation_success is False:
             halt_reason = f"the restored state after {group.label} did not validate"
+        elif group.key != "non-essential packages":
+            halt_reason = f"the {group.label} operation failed"
 
         result = GroupUpdateResult(
             key=group.key,

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Nobara Update Recovery Notice
+Exec=/usr/libexec/nobara-update-notice --notify
+Icon=dialog-warning
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=System Update Recovery
+Comment=View update failures and save or share recovery logs
+Exec=/usr/libexec/nobara-update-notice
+Icon=dialog-warning
+Terminal=false
+Categories=System;

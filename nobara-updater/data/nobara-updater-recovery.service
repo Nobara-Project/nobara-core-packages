@@ -1,0 +1,18 @@
+[Unit]
+Description=Recover from an unsuccessful Nobara offline update
+DefaultDependencies=no
+After=sysinit.target
+RequiresMountsFor=/boot
+Before=shutdown.target
+# Reboot only after recovery has finished writing GRUB and diagnostics.
+# If Python cannot run, the separate failure handler uses the armed fallback.
+OnFailure=emergency.target nobara-updater-fallback-reboot.service
+OnFailureJobMode=replace
+SuccessAction=reboot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/nobara-update-worker recover
+TimeoutStartSec=infinity
+StandardOutput=journal+console
+StandardError=journal+console

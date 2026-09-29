@@ -1,0 +1,12 @@
+[Unit]
+Description=Restart into an armed Nobara recovery system
+DefaultDependencies=no
+ConditionPathExists=/boot/nobara-updater/recovery-armed
+# PID 1 can request the restart even if an updated Python/libc cannot run.
+SuccessAction=reboot
+FailureAction=reboot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/true
+TimeoutStartSec=5s

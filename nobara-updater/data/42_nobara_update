@@ -1,0 +1,13 @@
+#!/bin/sh
+cat <<'GRUB'
+# Nobara update fallback v1
+if [ -n "${nobara_fallback}" ]; then
+    set default="${nobara_fallback}"
+    if [ -n "${nobara_trial}" ]; then
+        set default="${nobara_trial}"
+        set nobara_trial=
+        save_env nobara_trial
+    fi
+    set timeout=5
+fi
+GRUB

@@ -1,0 +1,23 @@
+[Unit]
+Description=Install the prepared Nobara system update
+DefaultDependencies=no
+Requires=sysinit.target
+After=sysinit.target systemd-journald.socket system-update-pre.target
+Before=system-update.target shutdown.target
+OnFailure=nobara-updater-recovery.service
+RefuseManualStop=yes
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/libexec/nobara-update-worker own-trigger
+ExecStart=/usr/libexec/nobara-update-worker execute
+ExecStartPost=/usr/bin/systemctl --no-block reboot
+TimeoutStartSec=infinity
+TimeoutStopSec=infinity
+UMask=0077
+IPAddressDeny=any
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=system-update.target

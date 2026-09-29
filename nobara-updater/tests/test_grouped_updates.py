@@ -148,7 +148,7 @@ class GroupedUpdateRunnerTests(unittest.TestCase):
         self.assertNotIn("mesa-dri-drivers", str(transaction_calls))
         self.assertEqual(stream.getvalue().count(SUCCESS_MARKER), 5)
 
-    def test_validation_failure_reverts_exact_transaction_and_continues(self) -> None:
+    def test_validation_failure_reverts_exact_transaction_and_stops(self) -> None:
         logger, stream = test_logger()
         transaction_calls: list[str] = []
         rollback_calls: list[tuple[int, str]] = []
@@ -189,7 +189,7 @@ class GroupedUpdateRunnerTests(unittest.TestCase):
             validation_calls,
             [("kernel", False), ("kernel", True)],
         )
-        self.assertIn("desktop environment", transaction_calls)
+        self.assertNotIn("desktop environment", transaction_calls)
         self.assertTrue(summary.results[0].rollback_success)
         self.assertTrue(summary.results[0].post_rollback_validation_success)
         self.assertIn("dkms failed", stream.getvalue())
@@ -220,7 +220,7 @@ class GroupedUpdateRunnerTests(unittest.TestCase):
         self.assertFalse(core_result.success)
         self.assertFalse(core_result.rollback_attempted)
         self.assertEqual(rollback_calls, [])
-        self.assertIn("desktop environment", transaction_calls)
+        self.assertNotIn("desktop environment", transaction_calls)
 
     def test_rollback_failure_stops_later_groups(self) -> None:
         logger, _ = test_logger()

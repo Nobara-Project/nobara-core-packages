@@ -1,90 +1,83 @@
-#! /usr/bin/python3
-import gi
-gi.require_version("Gtk", "3.0")
-gi.require_version("Vte", "2.91")
-from gi.repository import Gtk, GObject, Vte, GLib
-import os, subprocess, time, threading, sys
+#!/usr/bin/python3
+"""Codec wizard progress UI; package work belongs to nobara-sync."""
+import json
+import os
 from pathlib import Path
+import subprocess
 
-script_path = Path(__file__).resolve()
-column_names = False
-drop_nan = False
-df = None
-application_id="nobara.multimedia"
-        
-builder = Gtk.Builder()
-builder.add_from_file(str(script_path.parent) + "/process.ui")
-#builder.connect_signals()
-        
-window = builder.get_object("main_window")
-window.show()
-        
-main_box = builder.get_object("main_box")
-top_box = builder.get_object("top_box")
-buttom_box = builder.get_object("buttom_box")
-action_text = builder.get_object("action_text")
-progress_bar = builder.get_object("progess_bar")
-media_logo = builder.get_object("media_logo")
-topbar_text = builder.get_object("topbar_text")
-        
-terminal=Vte.Terminal()
-terminal.set_input_enabled(False)
-main_box.pack_start(terminal, True, True, 10)
-        
-win = builder.get_object("main_window")
-win.connect("destroy", Gtk.main_quit)
-win.show_all()
 
-def on_child_exited(term, status, progress_bar, action_text):
+def completion_result(wait_status, state):
+    if not os.WIFEXITED(wait_status) or os.WEXITSTATUS(wait_status) != 0:
+        return False, "Preparation failed", "Media codec preparation failed. See the terminal output for details."
+    status = state.get("status")
+    if status in {"ready", "scheduled", "awaiting-boot"}:
+        return True, "Restart required", "Media codecs and system updates are prepared. Save your work and restart to finish installation."
+    if status in {"unchanged", "complete", "live-complete", "installer-complete"}:
+        return True, "Complete", "Media codecs are installed and up to date."
+    return False, "Status unavailable", "Could not confirm the codec update state. Run nobara-sync update-status for details."
 
-	# status is the child's exit status (like waitpid)
-	# Show success/failure as you prefer:
-	if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
-		progress_bar.set_fraction(1.0)
-		action_text.set_label("Complete!")
-		# Flush GTK so changes are visible *before* zenity pops up
-		while Gtk.events_pending():
-			Gtk.main_iteration()
-		subprocess.run([
-			"zenity", "--info",
-			"--title=Video Playback and Encoding enablement",
-			"--width=600",
-			"--text=Media codecs package installation complete!"
-		])
-	else:
-		progress_bar.set_fraction(1.0)
-		action_text.set_label("Error.")
-		# Flush GTK so changes are visible *before* zenity pops up
-		while Gtk.events_pending():
-			Gtk.main_iteration()
-		subprocess.run([
-			"zenity", "--error",
-			"--title=Video Playback and Encoding enablement",
-			"--width=600",
-			"--text=Media codecs package installation failed."
-		])
-	Gtk.main_quit()
 
-def install():
-	progress_bar.pulse()
-	progress_bar.set_pulse_step(100.0)
-	action_text.set_label("Installing...")
+def main():
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Vte", "2.91")
+    from gi.repository import Gtk, Vte, GLib
 
-	terminal.connect(
-		"child-exited",
-		lambda term, status: on_child_exited(term, status, progress_bar, action_text)
-	)
+    builder = Gtk.Builder()
+    builder.add_from_file(str(Path(__file__).with_name("process.ui")))
+    window = builder.get_object("main_window")
+    action_text = builder.get_object("action_text")
+    progress = builder.get_object("progess_bar")
+    builder.get_object("topbar_text").set_label("Preparing video playback and encoding packages")
+    terminal = Vte.Terminal()
+    terminal.set_input_enabled(False)
+    builder.get_object("main_box").pack_start(terminal, True, True, 10)
+    window.connect("destroy", Gtk.main_quit)
 
-	# Start the process in the terminal (async, non-blocking)
-	terminal.spawn_async(
-		Vte.PtyFlags.DEFAULT,
-		os.environ["HOME"],
-		["/usr/bin/nobara-sync", "install-codecs"],
-		[],
-		GLib.SpawnFlags.DO_NOT_REAP_CHILD,
-		None, None,
-		-1, None, None, None
-	)
+    def finished(term, wait_status):
+        state = {}
+        if os.WIFEXITED(wait_status) and os.WEXITSTATUS(wait_status) == 0:
+            try:
+                result = subprocess.run(["/usr/bin/nobara-sync", "update-status", "--json"],
+                                        check=True, capture_output=True, text=True, timeout=15)
+                state = json.loads(result.stdout)
+                if not isinstance(state, dict):
+                    state = {}
+            except (OSError, subprocess.SubprocessError, ValueError):
+                pass
+        success, heading, message = completion_result(wait_status, state)
+        GLib.source_remove(pulse_id)
+        progress.set_fraction(1.0 if success else 0.0)
+        action_text.set_label(heading)
+        dialog = Gtk.MessageDialog(transient_for=window, modal=True,
+                                   message_type=Gtk.MessageType.INFO if success else Gtk.MessageType.ERROR,
+                                   buttons=Gtk.ButtonsType.OK, text=heading)
+        dialog.format_secondary_text(message)
+        dialog.run()
+        dialog.destroy()
+        # Leave failures and their terminal output visible until the user
+        # closes the window, rather than immediately hiding the diagnostics.
+        if success:
+            Gtk.main_quit()
 
-install()
-Gtk.main()
+    def pulsing():
+        progress.pulse()
+        return True
+
+    def spawned(term, pid, error, *unused):
+        if error:
+            finished(term, 1 << 8)
+
+    action_text.set_label("Preparing codecs and system updates…")
+    progress.set_pulse_step(0.05)
+    pulse_id = GLib.timeout_add(150, pulsing)
+    terminal.connect("child-exited", finished)
+    window.show_all()
+    terminal.spawn_async(Vte.PtyFlags.DEFAULT, os.environ.get("HOME", "/"),
+                         ["/usr/bin/nobara-sync", "install-codecs"], [],
+                         GLib.SpawnFlags.DEFAULT, None, None, -1, None, spawned, None)
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,15 @@
+[Unit]
+Description=Record the restored Nobara root before starting the system
+DefaultDependencies=no
+Requires=nobara-lvm-rollback.service sysroot.mount
+After=nobara-lvm-rollback.service sysroot.mount
+Before=initrd-switch-root.target initrd-switch-root.service
+ConditionKernelCommandLine=nobara.rollback
+OnFailure=emergency.target
+OnFailureJobMode=isolate
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /sbin/nobara-mark-restored
+TimeoutStartSec=infinity
+RemainAfterExit=yes

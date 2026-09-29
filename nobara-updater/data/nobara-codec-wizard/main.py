@@ -3,24 +3,14 @@ import gi
 import sys
 from pathlib import Path
 gi.require_version("Gtk", "3.0")
-gi.require_version("Vte", "2.91")
-from gi.repository import Gtk, GObject, Vte, GLib
-import os, subprocess, time, threading
-
-def is_running_with_sudo_or_pkexec() -> int:
-    # Check environment variables first
-    if "SUDO_USER" in os.environ:
-        return 1
-    if "PKEXEC_UID" in os.environ:
-        return 2
-
-    return 0
+from gi.repository import Gtk
+import os
 
 class Application(Gtk.ApplicationWindow):
 	### MAIN WINDOW ###
 	def __init__(self):
 		script_path = Path(__file__).resolve()
-		if is_running_with_sudo_or_pkexec() == 0:
+		if os.geteuid() != 0:
 			os.execvp(
 				"pkexec",
 				[
@@ -68,6 +58,7 @@ class Application(Gtk.ApplicationWindow):
 		self.window.show()
 		
 		self.center_text.set_label("Due to U.S. patent laws we are not able to include some important video playback and encoding\n packages on the Nobara installation media, -HOWEVER- these are freely\navailable to download and install with your consent, which we are asking for now! \n\nPlease note that without these packages installed, video playback in some games, browsers,\nand media players will not work correctly.\n\n Additionally, without these packages you will\nbe unable to use video encoding in OBS studio and Blender.\n\n\nWould you like to install the required video playback and encoding packages now to resolve\nthe issue? (strongly recommended)")
+		self.center_text.set_label(self.center_text.get_label() + "\n\nThe codecs and required system updates will be prepared together and installed on your next restart.")
 		self.status_logo.set_from_icon_name("media-tape", 64)
 		self.btn_decline.set_sensitive(True)
 		self.btn_accept.set_sensitive(True)
@@ -77,13 +68,8 @@ class Application(Gtk.ApplicationWindow):
 		self.builder.get_object("main_window").set_visible(False)
 		Gtk.main_quit()
 	def on_btn_accept_pressed(self, widget):
-		self.builder.get_object("main_window").set_visible(False)
-		def install():
-			script_path = Path(__file__).resolve()
-			os.system("python3 " + str(script_path.parent) + "/process.py install")
-		t1 = threading.Thread(target=install)
-		t1.start()
-		Gtk.main_quit()
+		script_path = Path(__file__).resolve()
+		os.execv(sys.executable, [sys.executable, str(script_path.parent / "process.py"), "install"])
 
 Application()
 Gtk.main()

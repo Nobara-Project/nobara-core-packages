@@ -1,32 +1,21 @@
-Requires: python
 Requires: python3
 Requires: python3-gobject
-Requires: python3-psutil
-Requires: python3-requests
-Requires: python3-dnf
-Requires: python3-libdnf5
-Requires: python3-packaging
-Requires: python3-tkinter
-Requires: python3-dasbus
-Requires: python3-cairo
-Requires: python3-pillow
-Requires: python3-pillow-tk
-Requires: python3-evdev
-Requires: python3-vdf
-
+Requires: gtk3
+Requires: vte291
+Requires: polkit
+Requires: python3-libdnf5 >= 5.4.3
+Requires: dnf5 >= 5.4.3
+Requires: dnf5-plugins
 Requires: akmods
 Requires: dracut
 Requires: flatpak
-Requires: glib2
-Requires: gtk3
-Requires: gtk4
-Requires: libadwaita
-Requires: adw-gtk3-theme
 Requires: rpm
 Requires: systemd
 Requires: util-linux
-Requires: xdg-utils
-Requires: xprop
-Requires:	nobara-welcome > 5.0.1
-Requires:	nobara-driver-manager > 1.0
-Requires:	yumex > 5.0.2
+Requires: tar
+Requires: lvm2
+Requires: grub2-tools
+Requires: btrfs-progs
+Requires: gtk4
+Requires: libnotify
+Requires: pbcli

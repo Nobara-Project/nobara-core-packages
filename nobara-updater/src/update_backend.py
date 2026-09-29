@@ -1,0 +1,657 @@
+"""System-service orchestration for prepared Nobara updates."""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import uuid
+from collections import deque
+from pathlib import Path
+
+from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root
+from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment
+from .update_report import arm_report, publish_recovery, publish_failure, resolve_notice
+from .update_origins import annotate_failure
+from .update_state import (ACTIVE, STATE_DIR, TRIGGER, UpdateError, atomic_json, file_digest,
+                           in_installer_root, os_release, read_state, rpm_fingerprint, status_message, update_lock,
+                           verify_files, write_state)
+
+LOG = logging.getLogger(__name__)
+ENGINE_FILES = ("update_state.py", "update_migrations.py", "update_plan.py", "update_policy.py", "update_boot.py", "update_recovery.py", "update_lvm.py", "update_backend.py", "update_report.py", "update_origins.py")
+
+
+def announce(message: str) -> None:
+    LOG.info("%s", message)
+    if shutil.which("plymouth"):
+        try:
+            subprocess.run(["plymouth", "display-message", "--text=" + message],
+                           timeout=2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
+def run(command: list[str]) -> None:
+    LOG.info("Running: %s", " ".join(command))
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, encoding="utf-8", errors="replace", bufsize=1,
+                               # Our job state is private (umask 077), but DNF
+                               # writes public system-state TOMLs and runs RPM
+                               # scriptlets. Use normal package-manager modes.
+                               umask=0o022 if Path(command[0]).name == "dnf5" else -1,
+                               env=dict(os.environ, LC_ALL="C.UTF-8"))
+    assert process.stdout is not None
+    rpm_errors = []
+    last_lines = deque(maxlen=5)
+    for line in process.stdout:
+        LOG.info("%s", line.rstrip())
+        if line.strip():
+            last_lines.append(line.strip()[-1000:])
+        # Native DNF5 can exit 0 after nonfatal RPM scriptlet failures. Its
+        # C-locale callback diagnostics must also be treated as a failure.
+        if "replay" in command and re.search(r"(?:[Ee]rror in .* scriptlet:|[Uu]npack error:|[Cc]pio error:|scriptlet failed, exit status)", line):
+            rpm_errors.append(line.strip())
+    process.stdout.close()
+    if process.wait() != 0:
+        raise UpdateError(f"{command[0]} failed with exit code {process.returncode}:\n" + "\n".join(last_lines))
+    if rpm_errors:
+        raise UpdateError("RPM reported installation errors: " + "; ".join(rpm_errors))
+
+
+def job_directory(state: dict, root: Path = STATE_DIR) -> Path:
+    identifier = state.get("job", "")
+    if not re.fullmatch("[a-f0-9]{32}", identifier):
+        raise UpdateError("Invalid saved update identifier.")
+    return root / "jobs" / identifier
+
+
+def policy() -> dict:
+    path = Path("/etc/nobara-updater/offline.json")
+    settings = {"require_recovery": False, "require_offline_recovery": False, "prepare_attempts": 3, "live_updates": True}
+    if path.exists():
+        settings.update(json.loads(path.read_text()))
+    if not isinstance(settings["require_recovery"], bool):
+        raise UpdateError("require_recovery must be true or false.")
+    if not isinstance(settings["require_offline_recovery"], bool):
+        raise UpdateError("require_offline_recovery must be true or false.")
+    if not isinstance(settings["live_updates"], bool):
+        raise UpdateError("live_updates must be true or false.")
+    attempts = settings["prepare_attempts"]
+    if not isinstance(attempts, int) or not 1 <= attempts <= 5:
+        raise UpdateError("prepare_attempts must be between 1 and 5.")
+    return settings
+
+
+def prune_payloads(root: Path, keep_job: str = "") -> None:
+    """Discard obsolete download data; never remove recovery boot archives."""
+    for job in (root / "jobs").glob("*"):
+        if job.name == keep_job or not re.fullmatch(r"[a-f0-9]{32}", job.name) or job.is_symlink():
+            continue
+        for name in ("cache", "packages", "comps", "engine"):
+            path = job / name
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+
+
+def reconcile_pending(root: Path, state: dict) -> None:
+    """Reconcile an unstarted plan under update_lock; never retry RPM writes."""
+    if state.get("status") not in {"ready", "scheduled"} or state.get("started"):
+        return
+    owned_trigger = TRIGGER.is_symlink() and TRIGGER.resolve() == root.resolve()
+    if state.get("fingerprint") != rpm_fingerprint():
+        if owned_trigger:
+            TRIGGER.unlink()
+        message = "Installed packages changed since preparation. Preparing a fresh update is required."
+        write_state(root, state, "failed", error=message)
+        LOG.warning("%s", message)
+    elif state["status"] == "scheduled" and not owned_trigger:
+        write_state(root, state, "ready")
+        LOG.warning("The prepared update was not installed: its boot trigger is missing or belongs to another updater. Run the updater again to schedule it.")
+
+
+def refresh_pending(root: Path = STATE_DIR) -> None:
+    with update_lock(root):
+        reconcile_pending(root, read_state(root))
+
+
+def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = False) -> None:
+    from .update_plan import prepare_transaction
+    if installer and not in_installer_root():
+        raise UpdateError("Installer updates require an actual chroot target.")
+    with update_lock(root):
+        previous = read_state(root)
+        if previous.get("status") in ACTIVE - {"preparing"}:
+            raise UpdateError(status_message(previous))
+        completed = {"complete", "live-complete", "recovered"} | ({"installer-complete"} if installer else set())
+        if previous.get("started") and previous.get("status") not in completed:
+            if not previous.get("recovery", {}).get("created"):
+                raise UpdateError("The previous installation did not complete and no automatic rollback is available. Open System Update Recovery or run nobara-sync recovery-report to review the error and get repair guidance before retrying.")
+            raise UpdateError("The previous installation did not complete. Recover it before preparing another update.")
+        if TRIGGER.is_symlink() or TRIGGER.exists():
+            raise UpdateError("Another offline update is scheduled. Finish or cancel it first.")
+        settings = policy()
+        prune_payloads(root)
+        for attempt in range(1, settings["prepare_attempts"] + 1):
+            state = {"job": uuid.uuid4().hex, "started": False, "attempt": attempt, "installer": installer}
+            if installer and previous.get("status") == "installer-complete" and previous.get("boot_selection"):
+                # Calamares may run updates followed by a separate codec job.
+                # Preserve the first job's kernel expectation across both.
+                state["boot_selection"] = previous["boot_selection"]
+            job = job_directory(state, root)
+            job.mkdir(parents=True, mode=0o700)
+            write_state(root, state, "preparing")
+            try:
+                result = prepare_transaction(job, codecs=codecs,
+                                             allow_live=settings["live_updates"] and not settings["require_recovery"])
+                state["package_origins"] = result.get("package_origins", [])
+                shutil.rmtree(job / "cache", ignore_errors=True)
+                if result["empty"]:
+                    if installer and previous.get("status") == "installer-complete":
+                        # Calamares can call cli then install-codecs. A no-op
+                        # second command must retain first-boot confirmation
+                        # of the transaction that actually changed the target.
+                        write_state(root, previous, "installer-complete", codecs=result.get("codecs", False))
+                    else:
+                        write_state(root, state, "unchanged", **result)
+                    return
+                # Exercise the saved transaction with the exact native replay
+                # path before promising installation on restart. RPM's test
+                # flag checks it without running scriptlets or installing RPMs.
+                replay(job, test=True)
+                if result["fingerprint"] != rpm_fingerprint():
+                    raise UpdateError("Installed packages changed during validation. Prepare the update again.")
+                live = result.get("execution", {}).get("mode") == "live"
+                if installer or live:
+                    recovery = {"available": False, "reason": "Installer-owned target root." if installer else "Application update installed during this session."}
+                else:
+                    recovery = probe_recovery()
+                if not installer and (settings["require_recovery"] or (not live and settings["require_offline_recovery"])) and not recovery["available"]:
+                    raise UpdateError(recovery["reason"])
+                if not installer and not live and not recovery["available"]:
+                    LOG.warning("Automatic rollback is unavailable: %s", recovery["reason"])
+                elif not installer and not live:
+                    LOG.info("Automatic rollback is available for this system layout.")
+                    if recovery.get("shared_mounts"):
+                        LOG.info("Recovery will preserve current container data at: %s",
+                                 ", ".join(mount["target"] for mount in recovery["shared_mounts"]))
+                engine = job / "engine" / "nobara_updater"
+                engine.mkdir(parents=True)
+                for filename in ENGINE_FILES:
+                    shutil.copy2(Path(__file__).with_name(filename), engine / filename)
+                (engine / "__init__.py").touch()
+                shutil.copy2(Path("/usr/libexec/nobara-update-worker"), job / "engine" / "worker.py")
+                for path in (job / "engine").rglob("*"):
+                    if path.is_file():
+                        result["files"][str(path.relative_to(job))] = file_digest(path)
+                # Payload and metadata must survive power loss before READY.
+                for relative in result["files"]:
+                    with (job / relative).open("rb") as stream:
+                        os.fsync(stream.fileno())
+                atomic_json(job / "plan.json", dict(result, recovery=recovery))
+                result["files"]["plan.json"] = file_digest(job / "plan.json")
+                os.sync()
+                write_state(root, state, "ready", recovery=recovery, **result)
+                LOG.info("%s", status_message(state))
+                return
+            except Exception as error:
+                error = annotate_failure(error, state.get("package_origins", []))
+                write_state(root, state, "failed", error=str(error),
+                            package_conflicts=getattr(error, "package_conflicts", []))
+                # Retry only preparation. Never rerun an RPM transaction on an
+                # exception. Each retry gets fresh metadata and a separate job.
+                if isinstance(error, UpdateError):
+                    LOG.error("Preparation attempt %s failed: %s", attempt, error)
+                else:
+                    LOG.exception("Preparation attempt %s failed", attempt)
+                if isinstance(error, UpdateError) or attempt == settings["prepare_attempts"]:
+                    raise error
+                # No package installation has occurred. Discard this incomplete
+                # download so retries cannot exhaust disk with duplicate RPMs.
+                shutil.rmtree(job)
+                time.sleep(2)
+
+
+def schedule(root: Path = STATE_DIR, *, reboot: bool = False) -> None:
+    with update_lock(root):
+        state = read_state(root)
+        if state.get("installer"):
+            raise UpdateError("An installer transaction cannot be scheduled as a desktop offline update.")
+        if state.get("started") or state.get("status") not in {"ready", "scheduled"}:
+            raise UpdateError("There is no prepared update ready to install.")
+        reconcile_pending(root, state)
+        if state["status"] == "failed":
+            raise UpdateError(state["error"])
+        job = job_directory(state, root)
+        try:
+            verify_files(job, state["files"])
+        except UpdateError as error:
+            if TRIGGER.is_symlink() and TRIGGER.resolve() == root.resolve():
+                TRIGGER.unlink()
+            write_state(root, state, "failed", error=str(error))
+            raise
+        alternate = Path("/etc/system-update")
+        if alternate.exists() or alternate.is_symlink():
+            raise UpdateError("Another offline updater has an /etc/system-update trigger. Finish or cancel that update first.")
+        check_offline_service()
+        if TRIGGER.is_symlink():
+            if TRIGGER.resolve() != root.resolve():
+                raise UpdateError("Another offline updater has already scheduled a transaction.")
+        elif TRIGGER.exists():
+            raise UpdateError("The system-update trigger is already in use.")
+        else:
+            TRIGGER.symlink_to(root)
+        # If power is lost between symlink creation and this write, execute
+        # also accepts READY, but only when our exact trigger is present.
+        write_state(root, state, "scheduled")
+        os.sync()
+    if reboot:
+        run(["systemctl", "reboot"])
+
+
+def check_offline_service() -> None:
+    """Refuse a restart promise if the boot target cannot run our service."""
+    for unit, property_name, expected in (
+        ("nobara-updater-offline.service", "LoadState", "loaded"),
+        ("system-update.target", "Wants", "nobara-updater-offline.service"),
+    ):
+        result = subprocess.run(["systemctl", "show", "--value", "--property=" + property_name, unit],
+                                capture_output=True, text=True, check=True, timeout=30)
+        if expected not in result.stdout.split():
+            raise UpdateError("The Nobara offline update service is missing, masked, or not connected to system-update.target. Reinstall nobara-updater before scheduling an update.")
+
+
+def cancel(root: Path = STATE_DIR) -> None:
+    with update_lock(root):
+        state = read_state(root)
+        if state.get("started") or state.get("status") not in {"ready", "scheduled", "failed", "unchanged"}:
+            raise UpdateError("Only an update that has not started installing can be cancelled.")
+        if TRIGGER.is_symlink() and TRIGGER.resolve() == root.resolve():
+            TRIGGER.unlink()
+        write_state(root, state, "idle")
+        prune_payloads(root)
+
+
+def replay(job: Path, *, test: bool = False) -> None:
+    # Every payload is local. Keep native DNF5 in its own process so a Python
+    # or libdnf5 upgrade cannot replace modules used by an in-flight binding.
+    # Disabling a configured repo leaves its object in DNF's sack. In 5.4.3
+    # replay reuses it by repo_id, so bundled RPMs are treated as remote and
+    # cacheonly fails. Load no repo definitions or plugins: replay then creates
+    # COMMANDLINE repos for the saved IDs and reads the saved RPM paths.
+    run(["dnf5", "--config=/dev/null", "--setopt=reposdir=", "--no-plugins",
+         "--cacheonly", "--setopt=localpkg_gpgcheck=1",
+         "--setopt=installonly_limit=0", "--setopt=clean_requirements_on_remove=0",
+         "--setopt=tsflags=" + ("test" if test else ""),
+         "-y", "replay", str(job)])
+
+
+def install_in_target(root: Path = STATE_DIR, *, codecs: bool = False) -> None:
+    if not in_installer_root():
+        raise UpdateError("Installer updates require an actual chroot target.")
+    prepare(root, codecs=codecs, installer=True)
+    with update_lock(root):
+        state = read_state(root)
+        if state.get("status") in {"unchanged", "installer-complete"}:
+            return
+        if state.get("status") != "ready" or not state.get("installer"):
+            raise UpdateError("The installer transaction is not ready.")
+        if TRIGGER.exists() or TRIGGER.is_symlink():
+            raise UpdateError("An offline update is already scheduled in this target.")
+        job = job_directory(state, root)
+        verify_files(job, state["files"])
+        if state["fingerprint"] != rpm_fingerprint():
+            raise UpdateError("Installed target packages changed during preparation. Prepare the update again.")
+        write_state(root, state, "installing", started=True)
+        replay(job)
+        write_state(root, state, "validating")
+    # No systemd service, snapshot of the live media, /system-update trigger,
+    # or reboot. Calamares waits for this fresh interpreter to finish.
+    os.execv("/usr/bin/python3", ["/usr/bin/python3", "-I", str(job / "engine/worker.py"), "installer-finalize"])
+
+
+def execute(root: Path = STATE_DIR) -> None:
+    with update_lock(root):
+        if not TRIGGER.is_symlink() or TRIGGER.resolve() != root.resolve():
+            return
+        state = read_state(root)
+        if state.get("installer"):
+            raise UpdateError("An installer transaction cannot be replayed by the boot service.")
+        if state.get("status") not in {"ready", "scheduled"}:
+            raise UpdateError("Unexpected offline update state; refusing to replay an interrupted installation.")
+        job = job_directory(state, root)
+        verify_files(job, state["files"])
+        if state["fingerprint"] != rpm_fingerprint():
+            TRIGGER.unlink()
+            write_state(root, state, "failed", error="Installed packages changed after preparation. Prepare the update again.")
+            raise UpdateError(state["error"])
+        Path("/run/nobara-updater-offline").touch(mode=0o600)
+        TRIGGER.unlink()
+        announce("Preparing recovery files. Keep the computer powered on.")
+        recovery = create_recovery(job, state["recovery"])
+        write_state(root, state, "installing", started=True, recovery=recovery)
+        arm_report(state)
+        trial_boot(recovery)
+        announce("Installing the Nobara system update. Keep the computer powered on; this can take several minutes.")
+        # All RPMs are local, signatures remain required, and replay checks the
+        # exact saved operations. No --ignore-installed/--skip-broken escape.
+        replay(job)
+        write_state(root, state, "validating")
+    # A major update can replace Python and its libraries. Start the new
+    # interpreter, using the frozen job engine, for all post-install work.
+    os.execv("/usr/bin/python3", ["/usr/bin/python3", "-I", str(job / "engine/worker.py"), "finalize"])
+
+
+def execute_live(root: Path = STATE_DIR) -> None:
+    """Apply a prepared application-only transaction under service ownership."""
+    if in_installer_root():
+        raise UpdateError("Use the installer update path inside a target root.")
+    with update_lock(root):
+        state = read_state(root)
+        if (state.get("status") != "ready" or state.get("started") or state.get("installer")
+                or state.get("execution", {}).get("mode") != "live"
+                or state.get("source_release") != state.get("target_release")
+                or state.get("migrations", {}).get("hooks")):
+            raise UpdateError("This prepared transaction requires offline installation.")
+        if TRIGGER.exists() or TRIGGER.is_symlink():
+            raise UpdateError("An offline update is already scheduled. Finish or cancel it first.")
+        try:
+            job = job_directory(state, root)
+            verify_files(job, state["files"])
+            if state["fingerprint"] != rpm_fingerprint():
+                raise UpdateError("Installed packages changed after preparation. Prepare the update again.")
+            write_state(root, state, "installing-live", started=True)
+            LOG.info("Installing the verified application updates now.")
+            replay(job)
+            write_state(root, state, "validating-live")
+        except Exception as error:
+            write_state(root, state, "failed", error=str(error))
+            raise
+    try:
+        os.execv("/usr/bin/python3", ["/usr/bin/python3", "-I", str(job / "engine/worker.py"), "live-finalize"])
+    except Exception as error:
+        with update_lock(root):
+            write_state(root, state, "failed", error=str(error))
+        raise
+
+
+def apply_hooks(hooks: list[str]) -> None:
+    for hook in hooks:
+        if hook == "plasma-login":
+            for source, target in ((Path("/etc/sddm.conf"), Path("/etc/plasmalogin.conf")),
+                                   (Path("/etc/sddm.conf.d"), Path("/etc/plasmalogin.conf.d"))):
+                if source.is_dir():
+                    target.mkdir(exist_ok=True)
+                    for file in source.iterdir():
+                        if file.is_file() and not (target / file.name).exists():
+                            shutil.copy2(file, target / file.name)
+                elif source.is_file() and not target.exists():
+                    shutil.copy2(source, target)
+            run(["systemctl", "--root=/", "enable", "--force", "plasmalogin.service"])
+        elif hook == "enable-falcond":
+            run(["systemctl", "--root=/", "enable", "falcond.service"])
+        elif hook == "enable-codecs":
+            run(["dnf5", "config-manager", "setopt", "nobara-pikaos-additional.enabled=1"])
+        elif hook in {"nvidia", "nvidia-closed"}:
+            text = "options nvidia-drm modeset=1 fbdev=1\n"
+            if hook == "nvidia-closed":
+                config = Path("/etc/nvidia/kernel.conf")
+                if not config.is_file():
+                    raise UpdateError("The NVIDIA module configuration is missing.")
+                config.write_text(config.read_text().replace("MODULE_VARIANT=kernel-open", "MODULE_VARIANT=kernel"))
+                text += "options nvidia NVreg_EnableGpuFirmware=0\n"
+            Path("/etc/modprobe.d/nvidia-modeset.conf").write_text(text)
+        elif hook in {"plymouth-steamos", "plymouth-bgrt"}:
+            run(["plymouth-set-default-theme", hook.removeprefix("plymouth-")])
+            # Preserve the administrator's GRUB menu policy. Hiding recovery
+            # entries automatically would undermine the recovery mechanism.
+        elif hook != "rocm-transition":
+            raise UpdateError(f"Unknown migration hook: {hook}")
+
+
+def validate_boot(packages: list[dict], *, rebuild_all: bool = False) -> None:
+    kernels = set()
+    for item in packages:
+        if item["action"] in {"Install", "Upgrade", "Reinstall", "Downgrade"} and item["name"] in {"kernel", "kernel-core", "kernel-modules", "kernel-modules-core"}:
+            # Ask RPM for the installed package version rather than parsing a
+            # possibly epoch-qualified NEVRA with ambiguous hyphens.
+            query = subprocess.run(["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}.%{ARCH}\n", item["nevra"]],
+                                   capture_output=True, text=True, check=True)
+            kernels.update(query.stdout.splitlines())
+    modules_changed = any(any(part in item["name"] for part in ("dkms", "akmod", "kmod", "dracut")) for item in packages)
+    if modules_changed or rebuild_all:
+        # A running kernel can differ from the selected/default kernel.
+        # Rebuild every installed bootable kernel after a driver change.
+        kernels.update(p.name for p in Path("/usr/lib/modules").iterdir()
+                       if p.is_dir() and ((p / "vmlinuz").is_file() or (Path("/boot") / ("vmlinuz-" + p.name)).is_file()))
+    for kernel in sorted(kernels):
+        if not re.fullmatch(r"[A-Za-z0-9_.+~-]+", kernel):
+            raise UpdateError("Invalid target kernel version.")
+        if shutil.which("dkms"):
+            before = subprocess.run(["dkms", "status"], capture_output=True, text=True, check=True).stdout
+            expected = {line.split("/", 1)[0] for line in before.splitlines() if "/" in line}
+            if expected and not (Path("/usr/lib/modules") / kernel / "build/Makefile").is_file():
+                raise UpdateError(f"Kernel development files are missing for {kernel}.")
+            run(["dkms", "autoinstall", "-k", kernel])
+            after = subprocess.run(["dkms", "status", "-k", kernel], capture_output=True, text=True, check=True).stdout
+            installed = {line.split("/", 1)[0] for line in after.splitlines() if "/" in line and line.rstrip().endswith(": installed")}
+            if expected - installed:
+                raise UpdateError(f"Modules missing for kernel {kernel}: {', '.join(sorted(expected - installed))}")
+        if shutil.which("akmods"):
+            run(["akmods", "--force", "--kernels", kernel])
+        if subprocess.run(["rpm", "-q", "dkms-nvidia"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+            run(["modinfo", "-k", kernel, "nvidia"])
+        image = Path("/boot") / ("vmlinuz-" + kernel)
+        if image.is_file():
+            temporary = Path("/boot") / (".nobara-initramfs-" + kernel + ".img")
+            run(["dracut", "--force", "--kver", kernel, str(temporary)])
+            run(["lsinitrd", str(temporary)])
+            os.replace(temporary, Path("/boot") / ("initramfs-" + kernel + ".img"))
+            entries = list(Path("/boot/loader/entries").glob("*.conf"))
+            if not any(re.search(r"(?m)^version\s+" + re.escape(kernel) + r"\s*$", p.read_text()) for p in entries):
+                raise UpdateError(f"No BLS boot entry exists for kernel {kernel}.")
+        else:
+            image = Path("/usr/lib/modules") / kernel / "vmlinuz"
+            if not image.is_file():
+                raise UpdateError(f"The boot image for kernel {kernel} is missing.")
+            run(["kernel-install", "add", kernel, str(image)])
+            ukis = [p for directory in (Path("/boot/EFI/Linux"), Path("/boot/efi/EFI/Linux")) for p in directory.glob(f"*{kernel}*.efi")]
+            if not ukis:
+                raise UpdateError(f"No unified kernel image was generated for {kernel}.")
+            for uki in ukis:
+                result = subprocess.run(["bootctl", "kernel-identify", str(uki)], check=True, capture_output=True, text=True)
+                if result.stdout.strip() != "uki":
+                    raise UpdateError(f"Invalid unified kernel image: {uki}")
+    os.sync()
+
+
+def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = False) -> None:
+    if installer and not in_installer_root():
+        raise UpdateError("Installer validation requires an actual chroot target.")
+    with update_lock(root):
+        state = read_state(root)
+        if state.get("status") != ("validating-live" if live else "validating"):
+            raise UpdateError("The update is not ready for post-install validation.")
+        if bool(state.get("installer")) != installer:
+            raise UpdateError("The saved transaction belongs to a different update mode.")
+        if live and (installer or state.get("execution", {}).get("mode") != "live"
+                     or state["source_release"] != state["target_release"] or state["migrations"]["hooks"]):
+            raise UpdateError("The saved transaction is not eligible for live installation.")
+        try:
+            job = job_directory(state, root)
+            verify_files(job, state["files"])
+            if live:
+                LOG.info("Checking the installed application updates.")
+            else:
+                (LOG.info if installer else announce)("Checking the updated system and building boot files. Keep the computer powered on.")
+            apply_hooks(state["migrations"]["hooks"])
+            normal_entry = None
+            if not live:
+                if not installer:
+                    # Feed the active root to dracut/kernel-install, including
+                    # when this transaction runs from a prior recovery clone.
+                    normal_entry = synchronize_boot_root()
+                validate_boot(state["packages"], rebuild_all=any(hook.startswith("plymouth-") for hook in state["migrations"]["hooks"]))
+            # A successful DNF exit must actually have installed every planned
+            # inbound RPM (including ordinary updates within the same release).
+            for item in state["packages"]:
+                if item["action"] in {"Install", "Upgrade", "Downgrade", "Reinstall"}:
+                    run(["rpm", "-q", item["nevra"]])
+            run(["dnf5", "--disable-repo=*", "check"])
+            if os_release() != state["target_release"]:
+                raise UpdateError("Installed release does not match the prepared release.")
+            if not live:
+                kernel = newest_updated_kernel(state["packages"])
+                if kernel or normal_entry:
+                    kernel = kernel or os.uname().release
+                    # Pin only after all installation/driver/boot checks pass.
+                    # Save the exact expectation for confirmation next boot.
+                    # Keep recovery armed throughout validation. Package hooks
+                    # may alter saved_entry, but our independent GRUB fallback
+                    # remains active until the updated boot is confirmed.
+                    selection = ({"kernel": kernel, "entry": kernel_entry(kernel), "loader": "grub"}
+                                 if state.get("recovery", {}).get("created") else pin_kernel(kernel))
+                    write_state(root, state, "validating", boot_selection=selection)
+                    if normal_entry:
+                        state["normal_boot_entry"] = selection["entry"]
+            status = "live-complete" if live else ("installer-complete" if installer else "awaiting-boot")
+            write_state(root, state, status, installed_fingerprint=rpm_fingerprint())
+            if not live and not installer and state.get("recovery", {}).get("created"):
+                entry = state.get("boot_selection", {}).get("entry") or Path(state["recovery"]["entry"]).stem
+                write_state(root, state, status, trial_entry=entry)
+                trial_boot(state["recovery"], entry)
+            if live:
+                LOG.info("Application installation and validation finished.")
+            else:
+                LOG.info("Target installation validated. Returning to the installer." if installer else "Installation and boot-file validation finished. Restarting…")
+        except Exception as error:
+            if live:
+                write_state(root, state, "failed", error=str(error))
+            raise
+
+
+def recover(root: Path = STATE_DIR) -> None:
+    with update_lock(root):
+        state = read_state(root)
+        if not state.get("started"):
+            if TRIGGER.is_symlink() and TRIGGER.resolve() == root.resolve():
+                TRIGGER.unlink()
+            # A preparation/check failure leaves the original system usable.
+            return
+        recovery = state.get("recovery", {})
+        if recovery.get("created"):
+            announce("The update failed. Restarting into the previous system.")
+            write_state(root, state, "recovering")
+            select_recovery(recovery)
+        else:
+            write_state(root, state, "interrupted", error=state.get("error", "Offline installation failed."))
+            raise UpdateError("Automatic rollback is unavailable. Boot recovery media and inspect /var/lib/nobara-updater/state.json.")
+
+
+def cleanup_confirmed_update(root: Path, state: dict) -> None:
+    """Cleanup failures never undo confirmation; retry them on a later boot."""
+    if state.get("recovery_cleanup_complete"):
+        return
+    try:
+        if state["status"] == "recovered":
+            if not state.get("recovery_report"):
+                # Do not discard the only failed-boot diagnostics if importing
+                # them into the recovered root previously failed.
+                report = publish_recovery(state["job"])
+                write_state(root, state, "recovered", recovery_report=state["job"], failure_detail=report["error"])
+        else:
+            resolve_notice()
+        prune_recovery(state.get("recovery", {}), state["job"], state_root=root)
+        prune_payloads(root)
+        write_state(root, state, state["status"], recovery_cleanup_complete=True)
+    except Exception:
+        LOG.exception("System boot confirmed, but recovery cleanup could not finish; it will retry on the next boot.")
+
+
+def confirm_boot(root: Path = STATE_DIR) -> None:
+    with update_lock(root):
+        state = read_state(root)
+        marker = Path("/etc/nobara-updater-recovery.json")
+        if marker.exists():
+            recovery = json.loads(marker.read_text())
+            # Only mark the snapshot's original job as recovered. Subsequent
+            # updates from the recovered root have their own independent jobs.
+            if state.get("job") == recovery["job"]:
+                entry = (recovery["restored_entry"] if recovery.get("backend") == "lvm"
+                         else "nobara-recovery-" + recovery["job"])
+                if recovery.get("backend") != "lvm":
+                    entry = synchronize_boot_root(recovery_entry=entry) or entry
+                confirm_trial(entry)
+                try:
+                    report = publish_recovery(recovery["job"])
+                    state["failure_detail"] = report["error"]
+                    state["recovery_report"] = recovery["job"]
+                except Exception:
+                    # Lack of report storage must not undo a successful recovery.
+                    LOG.exception("System restored, but the recovery report could not be published.")
+                write_state(root, state, "recovered", started=False,
+                            recovery_boot=recovery, normal_boot_entry=entry, error="The previous system was restored.",
+                            # The snapshot captured state before create_recovery
+                            # returned and recorded created=True in the origin.
+                            recovery=dict(state.get("recovery", {}), created=True,
+                                          entry_id="nobara-recovery-" + recovery["job"]))
+                marker.unlink()
+                cleanup_confirmed_update(root, state)
+                return
+        if state.get("status") in {"complete", "recovered"}:
+            # Upgrade the older behavior which left a confirmed Btrfs root
+            # behind a "previous system" entry. Never override another job's
+            # armed rollback/trial while repairing an already completed job.
+            if not grub_environment().get("nobara_fallback"):
+                if not state.get("normal_boot_entry"):
+                    entry = synchronize_boot_root()
+                    if entry:
+                        confirm_trial(entry)
+                        write_state(root, state, state["status"], normal_boot_entry=entry, trial_entry=entry)
+                cleanup_confirmed_update(root, state)
+            return
+        if state.get("status") in {"ready", "scheduled"} and not state.get("started"):
+            reconcile_pending(root, state)
+            return
+        if state.get("status") in {"installing-live", "validating-live"}:
+            write_state(root, state, "interrupted", error="Application installation was interrupted. Inspect the update log before retrying.")
+            # Application-only failure must not start the boot-recovery
+            # service or force the otherwise usable desktop into emergency.
+            LOG.error("%s", state["error"])
+            publish_failure(state)
+            return
+        if state.get("status") in {"installing", "validating", "recovering"}:
+            write_state(root, state, "interrupted", error="The previous update did not finish.")
+            if state.get("recovery", {}).get("created"):
+                raise UpdateError(state["error"])
+        if state.get("status") in {"failed", "interrupted"} and not state.get("recovery", {}).get("created"):
+            # With no rollback target, allow normal startup to continue and
+            # surface the failure at the desktop. Keep started=True so a
+            # partial transaction is not silently retried or called complete.
+            publish_failure(state)
+            LOG.error("%s", state.get("error", "The update did not complete."))
+            return
+        if state.get("status") not in {"awaiting-boot", "installer-complete"}:
+            return
+        if os_release() != state["target_release"]:
+            raise UpdateError("The system booted into a different release than expected.")
+        expected_kernel = state.get("boot_selection", {}).get("kernel")
+        if expected_kernel and os.uname().release != expected_kernel:
+            raise UpdateError(f"The system booted kernel {os.uname().release}, but this update selected {expected_kernel}.")
+        run(["dnf5", "--disable-repo=*", "check"])
+        if not (Path("/usr/lib/modules") / os.uname().release).is_dir():
+            raise UpdateError("Modules for the running kernel are missing.")
+        # A desktop install must at least reach its login manager before its
+        # recovery protection is retired. This does not certify every GPU or
+        # application workload; those still need normal release testing.
+        if Path("/etc/systemd/system/display-manager.service").exists():
+            run(["systemctl", "is-active", "--quiet", "display-manager.service"])
+        if state.get("trial_entry"):
+            confirm_trial(state["trial_entry"])
+        write_state(root, state, "complete")
+        Path("/etc/nobara/newinstall").unlink(missing_ok=True)
+        LOG.info("%s", status_message(state))
+        cleanup_confirmed_update(root, state)

@@ -1,0 +1,13 @@
+[Unit]
+Description=Verify startup after a Nobara system update
+After=local-fs.target display-manager.service
+OnFailure=nobara-updater-recovery.service
+ConditionPathExists=/var/lib/nobara-updater/state.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/nobara-update-worker confirm
+TimeoutStartSec=180s
+
+[Install]
+WantedBy=multi-user.target

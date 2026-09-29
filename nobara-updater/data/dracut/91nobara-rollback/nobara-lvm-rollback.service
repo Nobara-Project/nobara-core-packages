@@ -1,0 +1,16 @@
+[Unit]
+Description=Restore the Nobara system snapshot before mounting root
+DefaultDependencies=no
+After=dracut-initqueue.service cryptsetup.target
+Before=sysroot.mount systemd-fsck-root.service initrd-root-fs.target
+ConditionKernelCommandLine=nobara.rollback
+OnFailure=emergency.target
+OnFailureJobMode=isolate
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /sbin/nobara-lvm-rollback
+TimeoutStartSec=infinity
+StandardOutput=journal+console
+StandardError=journal+console
+RemainAfterExit=yes

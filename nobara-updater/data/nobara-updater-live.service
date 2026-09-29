@@ -1,0 +1,12 @@
+[Unit]
+Description=Install prepared Nobara application updates
+RefuseManualStop=yes
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemd-inhibit --what=sleep:shutdown --mode=block --who=Nobara\x20Updater --why=Installing\x20application\x20updates /usr/libexec/nobara-update-worker execute-live
+TimeoutStartSec=infinity
+TimeoutStopSec=infinity
+UMask=0077
+StandardOutput=journal
+StandardError=journal

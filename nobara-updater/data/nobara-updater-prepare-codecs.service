@@ -1,0 +1,13 @@
+[Unit]
+Description=Prepare a Nobara system and codec update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block --who=Nobara\x20Updater --why=Preparing\x20system\x20update /usr/libexec/nobara-update-worker prepare-codecs
+TimeoutStartSec=infinity
+UMask=0077
+Nice=10
+StandardOutput=journal
+StandardError=journal
