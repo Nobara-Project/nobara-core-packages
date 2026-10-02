@@ -18,7 +18,7 @@ from nobara_updater.update_report import attach_log, record_failure
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["prepare", "prepare-codecs", "refresh-pending", "schedule", "reboot", "cancel", "execute", "finalize", "execute-live", "live-finalize", "recover", "confirm", "status", "foreign-trigger", "own-trigger", "installer-update", "installer-codecs", "installer-finalize"])
+    parser.add_argument("action", choices=["prepare", "prepare-codecs", "refresh-pending", "schedule", "reboot", "cancel", "retry", "execute", "finalize", "execute-live", "live-finalize", "recover", "confirm", "status", "foreign-trigger", "own-trigger", "installer-update", "installer-codecs", "installer-finalize"])
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error("This worker must run as root.")
@@ -61,7 +61,7 @@ def main():
         elif args.action in {"schedule", "reboot"}:
             backend.schedule(reboot=args.action == "reboot")
         else:
-            {"prepare": backend.prepare, "cancel": backend.cancel, "execute": backend.execute,
+            {"prepare": backend.prepare, "cancel": backend.cancel, "retry": backend.retry_failed, "execute": backend.execute,
              "finalize": backend.finalize, "recover": backend.recover, "confirm": backend.confirm_boot}[args.action]()
         return 0
     except Exception as error:

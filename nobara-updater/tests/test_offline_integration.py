@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -30,7 +31,8 @@ import libdnf5.comps as comps
 import libdnf5.repo as r
 from nobara_updater import update_plan as planner
 from nobara_updater import update_backend as backend
-from nobara_updater.update_migrations import MigrationPlan
+from nobara_updater import update_origins as origins
+from nobara_updater.update_migrations import MigrationPlan, plan_migrations
 from nobara_updater.update_plan import configure_base
 from nobara_updater.update_state import UpdateError, verify_files
 
@@ -126,38 +128,52 @@ class OfflineIntegrationTests(unittest.TestCase):
         cls.temp.cleanup()
 
     @classmethod
-    def build_rpm(cls, name, version, script="", *, headers="", payload=None):
+    def build_rpm(cls, name, version, script="", *, headers="", payload=None, arch="noarch", content=None):
         payload = payload or f"/usr/share/{name}/version"
+        source = cls.directory / f"{name}-{version}-{arch}.payload"
+        source.write_text(content if content is not None else version + "\n")
         spec = cls.directory / f"{name}-{version}.spec"
         spec.write_text(f'''Name: {name}
 Version: {version}
 Release: 1
 Summary: Disposable offline updater test
 License: MIT
-BuildArch: noarch
+{"BuildArch: noarch" if arch == "noarch" else ""}
 {headers}
 %description
 Disposable offline updater test.
 %install
 mkdir -p %{{buildroot}}{Path(payload).parent}
-echo {version} > %{{buildroot}}{payload}
+cp {shlex.quote(str(source))} %{{buildroot}}{payload}
 %files
 {payload}
 {script}
 ''')
-        result = subprocess.run(["rpmbuild", "--define", f"_topdir {cls.top}", "--define", f"_tmppath {cls.directory}", "-bb", str(spec)], capture_output=True, text=True)
+        result = subprocess.run(["rpmbuild", *(["--target", arch] if arch != "noarch" else []),
+                                 "--define", f"_topdir {cls.top}", "--define", f"_tmppath {cls.directory}",
+                                 # Identical fixtures must have identical headers. A later
+                                 # build timestamp otherwise makes distro-sync reinstall
+                                 # the same NEVRA and hides the already-installed case.
+                                 "--define", "use_source_date_epoch_as_buildtime 1",
+                                 "--define", "clamp_mtime_to_source_date_epoch 1",
+                                 "-bb", str(spec)], capture_output=True, text=True,
+                                env=dict(os.environ, SOURCE_DATE_EPOCH="1700000000"))
         if result.returncode:
             raise RuntimeError(result.stdout + result.stderr)
-        return cls.top / "RPMS/noarch" / f"{name}-{version}-1.noarch.rpm"
+        return cls.top / "RPMS" / arch / f"{name}-{version}-1.{arch}.rpm"
 
     def set_origin(self, name, repo):
         # Model a genuine recorded repository install, instead of conflating
         # the fixture's rpm --justdb setup with a manual user installation.
-        nevra = subprocess.run(["rpm", "--root", str(self.root), "-q", name, "--qf", "%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}"],
-                               check=True, capture_output=True, text=True).stdout
+        inventory = subprocess.run(["rpm", "--root", str(self.root), "-q", name, "--qf",
+                                    "%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n"],
+                                   check=True, capture_output=True, text=True).stdout
         path = self.root / "usr/lib/sysimage/libdnf5/nevras.toml"
         values = tomllib.loads(path.read_text()).get("nevras", {}) if path.exists() else {}
-        values[nevra] = {"from_repo": repo}
+        for line in inventory.splitlines():
+            pkgname, epoch, version, release, arch = line.split("|")
+            evr = (epoch + ":" if epoch != "0" else "") + version + "-" + release
+            values[f"{pkgname}-{evr}.{arch}"] = {"from_repo": repo}
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('version = "1.0"\n[nevras]\n' + '\n'.join(json.dumps(k) + ' = {from_repo = ' + json.dumps(v["from_repo"]) + '}' for k, v in values.items()) + '\n')
 
@@ -206,6 +222,510 @@ echo {version} > %{{buildroot}}{payload}
         verify_files(self.job, result["files"])
         installed = subprocess.run(["rpm", "--root", str(self.root), "-q", "nobara-offline-fixture", "--qf", "%{VERSION}"], check=True, capture_output=True, text=True)
         self.assertEqual(installed.stdout, "1")
+
+    def test_repository_endpoint_migration_is_saved_for_offline_finalization(self):
+        fixture_base = self.base
+
+        def migrate(job, release=None, **kwargs):
+            base = fixture_base(job, release, **kwargs)
+            base.nobara_migrate_media = True
+            return base
+
+        with patch.object(self, "base", side_effect=migrate):
+            result = self.prepare()
+        self.assertIn("migrate-media-repository", result["migrations"]["hooks"])
+        self.assertEqual(result["execution"]["mode"], "offline")
+
+    def install_health_fixture(self, name, version="1", *, headers="", origin="nobara-updates", arch="noarch", payload=None, content=None):
+        package = self.build_rpm(name, version, headers=headers, arch=arch, payload=payload, content=content)
+        subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts", "--noplugins",
+                        "--ignoresize", "-i", str(package)], check=True, capture_output=True)
+        self.set_origin(name + "." + arch, origin)
+
+    def health_check_command(self, *options):
+        return ["dnf5", "--installroot=" + str(self.root), "--releasever=44", "--config=/dev/null",
+                "--setopt=reposdir=", "--no-plugins", "check", *options]
+
+    def check_fixture_health(self):
+        native_run = backend.run
+
+        def target_run(command, **kwargs):
+            if command[0] == "rpm":
+                command = ["rpm", "--root", str(self.root), *command[1:]]
+            elif command[0] == "dnf5":
+                # This root has no repo definitions at all. DNF rejects a
+                # --disable-repo glob that matches none; reposdir= already
+                # provides the same installed-only check in the fixture.
+                command = [*self.health_check_command()[:-1],
+                           *(arg for arg in command[1:] if arg != "--disable-repo=*")]
+            else:
+                raise AssertionError(command)
+            return native_run(command, **kwargs)
+
+        with patch.object(backend, "run", side_effect=target_run):
+            backend.check_installed_system()
+
+    def packagekit_leftover_fixture(self, *, obsoletes=True, origin="nobara-updates"):
+        self.install_health_fixture("PackageKit", "1.3.6", headers=(
+            "Obsoletes: dnf4-plugin-notify-PackageKit < 1.3.6-1" if obsoletes else ""))
+        self.install_health_fixture("dnf4-plugin-notify-PackageKit", "1.3.4", origin=origin)
+
+    def plymouth_fixture(self, *, installed=True, repository_version="1", healthy=False, valid_payload=True):
+        self.install_health_fixture("plymouth")
+        private = Path(self.case.name) / "plymouth-repo"
+        shutil.copytree(self.repo, private)
+        self.repo = private
+        for name, filename in planner.BGRT_FILES.items():
+            content = "[Plymouth Theme]\nName=BGRT\nModuleName=two-step\n" if name == "plymouth-theme-spinner" else "fixture plugin\n"
+            headers = "Requires: plymouth-plugin-two-step = {}-1" if name == "plymouth-theme-spinner" else ""
+            if installed:
+                self.install_health_fixture(name, payload=filename, content=content, headers=headers.format("1"))
+            payload = filename if valid_payload else filename + ".wrong"
+            shutil.copy2(self.build_rpm(name, repository_version, headers=headers.format(repository_version),
+                                        payload=payload, content=content), self.repo)
+            if healthy:
+                path = self.root / filename.lstrip("/")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+
+    def test_missing_bgrt_packages_are_included_in_prepared_transaction(self):
+        self.plymouth_fixture(installed=False)
+        result = self.prepare()
+        changed = {(p["name"], p["action"]) for p in result["packages"] if p["name"] in planner.BGRT_FILES}
+        self.assertEqual(changed, {(name, "Install") for name in planner.BGRT_FILES})
+        self.assertEqual(result["execution"]["mode"], "offline")
+        self.assertIn("plymouth-rebuild", result["migrations"]["hooks"])
+
+    @unittest.skipUnless(shutil.which("plymouth-set-default-theme"), "Plymouth theme selector unavailable")
+    def test_deleted_bgrt_payload_is_reinstalled_and_real_theme_selection_succeeds(self):
+        self.plymouth_fixture()
+        environment = dict(os.environ, PLYMOUTH_DATADIR=str(self.root / "usr/share"),
+                           PLYMOUTH_CONFDIR=str(self.root / "etc/plymouth"),
+                           PLYMOUTH_POLICYDIR=str(self.root / "usr/share/plymouth"),
+                           PLYMOUTH_PLUGIN_PATH=str(self.root / "usr/lib64/plymouth") + "/")
+        before = subprocess.run(["plymouth-set-default-theme", "bgrt"], env=environment, capture_output=True, text=True)
+        self.assertNotEqual(before.returncode, 0)
+        self.assertIn("bgrt.plymouth does not exist", before.stderr)
+        result = self.prepare()
+        changed = {(p["name"], p["action"]) for p in result["packages"] if p["name"] in planner.BGRT_FILES}
+        self.assertTrue({(name, "Reinstall") for name in planner.BGRT_FILES} <= changed)
+        self.assertFalse((self.root / "usr/share/plymouth/themes/bgrt/bgrt.plymouth").exists())
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        after = subprocess.run(["plymouth-set-default-theme", "bgrt"], env=environment, capture_output=True, text=True)
+        self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+
+    def test_missing_bgrt_payload_uses_upgrade_when_old_rpm_is_no_longer_available(self):
+        self.plymouth_fixture(repository_version="2")
+        result = self.prepare()
+        actions = {p["action"] for p in result["packages"] if p["name"] in planner.BGRT_FILES}
+        self.assertEqual(actions - {"Reason Change"}, {"Upgrade", "Replaced"})
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        for filename in planner.BGRT_FILES.values():
+            self.assertTrue((self.root / filename.lstrip("/")).is_file())
+
+    def test_healthy_bgrt_does_not_force_reinstall_or_boot_rebuild(self):
+        self.plymouth_fixture(healthy=True)
+        result = self.prepare()
+        self.assertFalse(any(p["name"] in planner.BGRT_FILES and p["action"] != "Reason Change"
+                             for p in result["packages"]), result["packages"])
+        self.assertFalse(any(hook.startswith("plymouth-") for hook in result["migrations"]["hooks"]))
+
+    def test_invalid_bgrt_repository_payload_stops_preparation(self):
+        self.plymouth_fixture(installed=False, valid_payload=False)
+        with self.assertRaisesRegex(UpdateError, "missing required Plymouth file"):
+            self.prepare()
+
+    def test_bgrt_repair_does_not_overwrite_a_protected_local_theme_package(self):
+        self.plymouth_fixture()
+        self.set_origin("plymouth-theme-spinner", "@commandline")
+        with self.assertRaisesRegex(UpdateError, "plymouth-theme-spinner"):
+            self.prepare()
+
+    def test_obsoleted_packagekit_plugin_passes_preflight_and_is_removed_in_saved_transaction(self):
+        self.packagekit_leftover_fixture()
+        original = subprocess.run(self.health_check_command(), capture_output=True, text=True)
+        self.assertNotEqual(original.returncode, 0)
+        self.assertIn("obsoleted", original.stdout + original.stderr)
+        self.check_fixture_health()
+        result = self.prepare()
+        self.assertTrue(any(p["name"] == "dnf4-plugin-notify-PackageKit" and p["action"] == "Remove"
+                            for p in result["packages"]))
+        self.assertFalse(any(p["name"] == "PackageKit" for p in result["packages"]))
+        # Preparation itself must not remove anything from the installed root.
+        subprocess.run(["rpm", "--root", str(self.root), "-q", "dnf4-plugin-notify-PackageKit"],
+                       check=True, capture_output=True)
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        checked = subprocess.run(self.health_check_command(), capture_output=True, text=True)
+        self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+        self.check_fixture_health()
+
+    def test_packagekit_plugin_is_preserved_without_installed_obsoletes(self):
+        self.packagekit_leftover_fixture(obsoletes=False)
+        result = self.prepare()
+        self.assertFalse(any(p["name"] == "dnf4-plugin-notify-PackageKit" for p in result["packages"]))
+
+    def test_packagekit_cleanup_does_not_bypass_local_package_protection(self):
+        self.packagekit_leftover_fixture(origin="@commandline")
+        with self.assertLogs(planner.LOG, level="WARNING") as messages:
+            result = self.prepare()
+        self.assertFalse(any(p["name"] == "dnf4-plugin-notify-PackageKit" for p in result["packages"]))
+        self.assertIn("Keeping protected obsolete package", "\n".join(messages.output))
+
+    def add_obsolete_repo_package(self, name, version, *, headers="", arch="noarch", payload=None):
+        if not getattr(self, "_obsolete_repo", False):
+            private = Path(self.case.name) / "obsoletes-repo"
+            shutil.copytree(self.repo, private)
+            self.repo = private
+            self._obsolete_repo = True
+        shutil.copy2(self.build_rpm(name, version, headers=headers, arch=arch, payload=payload), self.repo)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+
+    def dnf_plugin_fixture(self, *, plugin="libdnf5-plugin-systemd-inhibit", compatible=False):
+        # The newer Fedora build split out an optional, exact-version plugin
+        # which is absent from the older DNF build in the rolling mirror.
+        family = ("libdnf5", "libdnf5-cli", "dnf5", "python3-libdnf5", "libdnf5-plugin-actions")
+        for name in family:
+            requirement = "Requires: libdnf5(x86-64) = {}-1" if name != "libdnf5" else ""
+            self.install_health_fixture(name, "5.4.5.0", arch="x86_64", headers=requirement.format("5.4.5.0"))
+            self.add_obsolete_repo_package(name, "5.4.3.0", arch="x86_64", headers=requirement.format("5.4.3.0"))
+        self.install_health_fixture(plugin, "5.4.5.0", arch="x86_64",
+                                    headers="Requires: libdnf5(x86-64) = 5.4.5.0-1")
+        if compatible:
+            self.add_obsolete_repo_package(plugin, "5.4.3.0", arch="x86_64",
+                                           headers="Requires: libdnf5(x86-64) = 5.4.3.0-1")
+        return family
+
+    def test_unavailable_optional_dnf_inhibitor_does_not_block_family_sync(self):
+        family = self.dnf_plugin_fixture()
+        result = self.prepare()
+        self.assertEqual({(p["name"], p["action"]) for p in result["packages"] if p["name"] in family},
+                         {(name, action) for name in family for action in ("Downgrade", "Replaced")})
+        self.assertEqual([p["name"] for p in result["packages"] if p["action"] == "Remove"],
+                         ["libdnf5-plugin-systemd-inhibit"])
+        self.assertEqual(result["execution"]["mode"], "offline")
+        # Preparation is read-only; removal is saved alongside the matching
+        # DNF family and only takes effect when that transaction is replayed.
+        subprocess.run(["rpm", "--root", str(self.root), "-q", "libdnf5-plugin-systemd-inhibit"],
+                       check=True, capture_output=True)
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        self.check_fixture_health()
+
+    def test_compatible_dnf_inhibitor_build_is_synchronized_instead_of_removed(self):
+        self.dnf_plugin_fixture(compatible=True)
+        result = self.prepare()
+        self.assertEqual({p["action"] for p in result["packages"] if p["name"] == "libdnf5-plugin-systemd-inhibit"},
+                         {"Downgrade", "Replaced"})
+
+    def test_dnf_inhibitor_cleanup_preserves_locally_installed_plugin(self):
+        self.dnf_plugin_fixture()
+        self.set_origin("libdnf5-plugin-systemd-inhibit", "@commandline")
+        with self.assertRaisesRegex(origins.PackageOriginError, "libdnf5-plugin-systemd-inhibit"):
+            self.prepare()
+        self.assertFalse((self.job / "transaction.json").exists())
+
+    def test_dnf_inhibitor_cleanup_cannot_remove_dependent_application(self):
+        self.dnf_plugin_fixture()
+        self.install_health_fixture("user-application", headers="Requires: libdnf5-plugin-systemd-inhibit")
+        with self.assertRaisesRegex(UpdateError, "user-application"):
+            self.prepare()
+        self.assertFalse((self.job / "transaction.json").exists())
+
+    def test_dnf_fixup_does_not_remove_other_unavailable_plugins(self):
+        self.dnf_plugin_fixture(plugin="custom-dnf-plugin")
+        with self.assertRaisesRegex(UpdateError, "custom-dnf-plugin"):
+            self.prepare()
+        self.assertFalse((self.job / "transaction.json").exists())
+
+    def test_unavailable_dnf_inhibitor_is_kept_when_matching_library_is_available(self):
+        self.install_health_fixture("libdnf5", arch="x86_64")
+        self.install_health_fixture("libdnf5-plugin-systemd-inhibit", arch="x86_64",
+                                    headers="Requires: libdnf5(x86-64) = 1-1")
+        self.add_obsolete_repo_package("libdnf5", "1", arch="x86_64")
+        result = self.prepare()
+        self.assertFalse(any(p["name"].startswith("libdnf5") for p in result["packages"]))
+
+    def test_unavailable_dnf_inhibitor_is_kept_without_repository_library(self):
+        self.install_health_fixture("libdnf5", arch="x86_64")
+        self.install_health_fixture("libdnf5-plugin-systemd-inhibit", arch="x86_64",
+                                    headers="Requires: libdnf5(x86-64) = 1-1")
+        result = self.prepare()
+        self.assertFalse(any(p["name"].startswith("libdnf5") for p in result["packages"]))
+
+    def test_incompatible_available_dnf_inhibitor_build_is_reported_not_erased(self):
+        self.dnf_plugin_fixture()
+        self.add_obsolete_repo_package("libdnf5-plugin-systemd-inhibit", "5.4.5.0", arch="x86_64",
+                                       headers="Requires: libdnf5(x86-64) = 5.4.5.0-1")
+        with self.assertRaisesRegex(UpdateError, "libdnf5-plugin-systemd-inhibit"):
+            self.prepare()
+        self.assertFalse((self.job / "transaction.json").exists())
+
+    def test_sddm_settings_retire_with_display_manager_in_one_transaction(self):
+        names = ["sddm", "sddm-wayland-plasma", "kde-settings-sddm", "dnf-app-center",
+                 "inputplumber", "falcond", "mesa-vulkan-drivers"]
+        for name in names:
+            self.install_health_fixture(name, headers="Requires: sddm" if name in {
+                "sddm-wayland-plasma", "kde-settings-sddm"} else "")
+        self.add_obsolete_repo_package("kde-settings-sddm", "2", headers="Requires: sddm")
+        self.add_obsolete_repo_package("plasma-login-manager", "1", headers="Conflicts: sddm")
+        self.migrations = plan_migrations([dict(name=name, arch="noarch") for name in names])
+        result = self.prepare()
+        self.assertEqual({p["name"] for p in result["packages"] if p["action"] == "Remove"},
+                         {"sddm", "sddm-wayland-plasma", "kde-settings-sddm"})
+        self.assertIn("plasma-login", result["migrations"]["hooks"])
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        self.check_fixture_health()
+
+    def test_redundant_noarch_copy_is_removed_when_native_package_remains(self):
+        for arch in ("noarch", "x86_64"):
+            self.install_health_fixture("emacs-filesystem", arch=arch)
+        self.add_obsolete_repo_package("emacs-filesystem", "1", arch="x86_64")
+        result = self.prepare()
+        self.assertEqual([(p["arch"], p["action"]) for p in result["packages"] if p["name"] == "emacs-filesystem"],
+                         [("noarch", "Remove")])
+        self.assertIn("emacs-filesystem-0:1-1.noarch", result["migrations"]["remove"])
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        remaining = subprocess.check_output(["rpm", "--root", str(self.root), "-q", "emacs-filesystem", "--qf", "%{ARCH}"], text=True)
+        self.assertEqual(remaining, "x86_64")
+        self.check_fixture_health()
+
+    def test_architecture_cleanup_does_not_authorize_removing_32_bit_library(self):
+        for arch, path in (("i686", "/usr/lib/library"), ("x86_64", "/usr/lib64/library")):
+            self.install_health_fixture("multilib", arch=arch, payload=path)
+        base = self.base(self.job)
+        goal = b.Goal(base)
+        goal.add_remove("multilib.i686")
+        transaction = goal.resolve()
+        planner.check_resolution(transaction)
+        migrations = MigrationPlan()
+        planner.allow_architecture_cleanup(base, transaction, migrations)
+        self.assertEqual(migrations.remove, set())
+
+    def test_redundant_local_noarch_copy_stays_protected(self):
+        self.install_health_fixture("emacs-filesystem", arch="noarch", origin="@commandline")
+        self.install_health_fixture("emacs-filesystem", arch="x86_64")
+        self.add_obsolete_repo_package("emacs-filesystem", "1", arch="x86_64")
+        result = self.prepare()
+        self.assertFalse(any(p["name"] == "emacs-filesystem" for p in result["packages"]))
+
+    def test_missing_multilib_dependency_is_restored_in_offline_plan_and_replay(self):
+        self.install_health_fixture("libchromaprint", arch="i686",
+                                    headers="Requires: libavutil.so.60\nRequires: libavutil.so.60(LIBAVUTIL_60)")
+        for arch, suffix, libdir in (("i686", "", "lib"), ("x86_64", "(64bit)", "lib64")):
+            self.add_obsolete_repo_package("libavutil-free", "1", arch=arch, payload=f"/usr/{libdir}/libavutil.so.60",
+                headers=f"Provides: libavutil.so.60{suffix}\nProvides: libavutil.so.60(LIBAVUTIL_60){suffix}")
+        result = self.prepare()
+        self.assertEqual([(p["arch"], p["action"]) for p in result["packages"] if p["name"] == "libavutil-free"],
+                         [("i686", "Install")])
+        self.assertFalse(any(p["name"] == "libchromaprint" for p in result["packages"]))
+        self.assertEqual(result["execution"]["mode"], "offline")
+        with self.assertRaises(UpdateError):
+            self.check_fixture_health()  # Preparation has not changed the system.
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        self.check_fixture_health()
+
+    def test_unavailable_missing_dependency_reports_consumer_before_download(self):
+        self.install_health_fixture("libchromaprint", headers="Requires: missing-libavutil", origin="@commandline")
+        with self.assertRaises(UpdateError) as caught, patch.object(b.Transaction, "download") as download:
+            self.prepare()
+        self.assertIn("missing-libavutil", str(caught.exception))
+        self.assertIn("libchromaprint", str(caught.exception))
+        self.assertEqual(caught.exception.package_conflicts[0]["name"], "libchromaprint")
+        download.assert_not_called()
+
+    def test_dependency_repair_preserves_locally_installed_consumer(self):
+        self.install_health_fixture("labwc", headers="Requires: custom-runtime", origin="@commandline")
+        self.add_obsolete_repo_package("custom-runtime", "1")
+        self.add_obsolete_repo_package("labwc", "2")
+        result = self.prepare()
+        self.assertFalse(any(p["name"] == "labwc" for p in result["packages"]))
+        self.assertTrue(any(p["name"] == "custom-runtime" and p["action"] == "Install" for p in result["packages"]))
+
+    def test_rich_dependencies_are_repaired_by_native_solver(self):
+        self.install_health_fixture("client", headers="Requires: (addon-a or addon-b)")
+        self.add_obsolete_repo_package("addon-b", "1")
+        result = self.prepare()
+        self.assertTrue(any(p["name"] == "addon-b" and p["action"] == "Install" for p in result["packages"]))
+
+    def test_replacing_broken_consumer_does_not_pull_obsolete_abi(self):
+        self.install_health_fixture("kpipewire", "1", headers="Requires: ffmpeg7-abi")
+        self.add_obsolete_repo_package("kpipewire", "2", headers="Requires: ffmpeg8-abi")
+        self.add_obsolete_repo_package("ffmpeg8", "1", headers="Provides: ffmpeg8-abi")
+        result = self.prepare()
+        self.assertTrue(any(p["name"] == "kpipewire" and p["action"] == "Upgrade" for p in result["packages"]))
+        self.assertTrue(any(p["name"] == "ffmpeg8" and p["action"] == "Install" for p in result["packages"]))
+
+    def test_older_desktop_can_retain_abi_using_available_compatibility_provider(self):
+        self.install_health_fixture("kpipewire", headers="Requires: ffmpeg7-abi")
+        self.install_health_fixture("plasma-desktop", headers="Requires: kpipewire")
+        self.add_obsolete_repo_package("compat-ffmpeg7", "1", headers="Provides: ffmpeg7-abi")
+        result = self.prepare()
+        self.assertFalse(any(p["name"] in {"kpipewire", "plasma-desktop"} for p in result["packages"]))
+        self.assertTrue(any(p["name"] == "compat-ffmpeg7" and p["action"] == "Install" for p in result["packages"]))
+
+    def test_final_check_rejects_unresolved_installed_conflict(self):
+        self.install_health_fixture("conflicting-fixture", headers="Conflicts: nobara-offline-fixture")
+        with self.assertRaisesRegex(UpdateError, "conflicting-fixture"):
+            self.prepare()
+        self.assertFalse((self.job / "transaction.json").exists())
+
+    def test_final_check_rejects_unresolved_duplicate_versions(self):
+        self.install_health_fixture("orphan", "1", payload="/usr/share/orphan/1")
+        self.install_health_fixture("orphan", "2", payload="/usr/share/orphan/2")
+        with self.assertRaisesRegex(UpdateError, "Duplicate installed versions.*orphan"):
+            self.prepare()
+        self.assertFalse((self.job / "transaction.json").exists())
+
+    def test_final_check_allows_multiple_installonly_kernel_versions(self):
+        for version in ("1", "2"):
+            self.install_health_fixture("retained-image", version, headers="Provides: installonlypkg(kernel)",
+                                        payload=f"/boot/retained-{version}")
+        result = self.prepare()
+        self.assertFalse(any(p["name"] == "retained-image" for p in result["packages"]))
+
+    def test_final_check_detects_dependencies_broken_by_removing_rich_provider(self):
+        self.install_health_fixture("client", headers="Requires: (missing-addon or condition)")
+        self.install_health_fixture("condition")
+        self.migrations = MigrationPlan(remove={"condition"})
+        with self.assertRaisesRegex(UpdateError, "missing-addon|client"):
+            self.prepare()
+        self.assertFalse((self.job / "transaction.json").exists())
+
+    def test_generic_obsoletes_respects_epoch_version_ranges_and_leaves_orphans(self):
+        self.install_health_fixture("legacy-alpha", "99", headers="Epoch: 1")
+        self.install_health_fixture("legacy-beta", "3")
+        self.install_health_fixture("unrelated-orphan")
+        self.install_health_fixture("media-replacement", headers=(
+            "Obsoletes: legacy-alpha < 2:1-1\nObsoletes: legacy-beta < 3"))
+        result = self.prepare()
+        removed = {p["name"] for p in result["packages"] if p["action"] == "Remove"}
+        self.assertEqual(removed, {"legacy-alpha"})
+        self.assertIn("legacy-alpha-1:99-1.noarch", result["migrations"]["remove"])
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        self.check_fixture_health()
+
+    def test_generic_obsoletes_removes_only_matching_multilib_version(self):
+        self.install_health_fixture("legacy-lib", "1", arch="i686", payload="/usr/lib/legacy-lib.so")
+        self.install_health_fixture("legacy-lib", "3", arch="x86_64", payload="/usr/lib64/legacy-lib.so")
+        self.install_health_fixture("media-replacement", headers="Obsoletes: legacy-lib < 2")
+        result = self.prepare()
+        changed = {(p["arch"], p["action"]) for p in result["packages"] if p["name"] == "legacy-lib"}
+        self.assertEqual(changed, {("i686", "Remove")})
+
+    def test_generic_obsoletes_uses_replacement_metadata_after_its_upgrade(self):
+        self.install_health_fixture("legacy-tool")
+        self.install_health_fixture("replacement-tool", "1", headers="Obsoletes: legacy-tool")
+        self.add_obsolete_repo_package("replacement-tool", "2")
+        result = self.prepare()
+        self.assertTrue(any(p["name"] == "replacement-tool" and p["action"] == "Upgrade" for p in result["packages"]))
+        self.assertFalse(any(p["name"] == "legacy-tool" for p in result["packages"]))
+
+    def test_generic_obsoletes_preserves_old_package_when_replacement_is_removed(self):
+        self.install_health_fixture("legacy-tool")
+        self.install_health_fixture("replacement-tool", headers="Obsoletes: legacy-tool")
+        self.migrations = MigrationPlan(remove={"replacement-tool"})
+        result = self.prepare()
+        self.assertFalse(any(p["name"] == "legacy-tool" for p in result["packages"]))
+
+    def test_generic_obsoletes_does_not_erase_package_being_upgraded_past_cutoff(self):
+        self.install_health_fixture("legacy-tool", "1")
+        self.install_health_fixture("replacement-tool", headers="Obsoletes: legacy-tool < 2")
+        self.add_obsolete_repo_package("legacy-tool", "2")
+        result = self.prepare()
+        changed = {p["action"] for p in result["packages"] if p["name"] == "legacy-tool"}
+        self.assertEqual(changed, {"Upgrade", "Replaced"})
+
+    def test_generic_obsoletes_preserves_locals_and_unknown_origin_packages(self):
+        for name, origin in (("local-tool", "@commandline"), ("unknown-tool", "")):
+            self.install_health_fixture(name, origin=origin)
+        self.install_health_fixture("replacement-tool", headers="Obsoletes: local-tool\nObsoletes: unknown-tool")
+        result = self.prepare()
+        self.assertFalse(any(p["name"] in {"local-tool", "unknown-tool"} for p in result["packages"]))
+
+    def test_generic_obsoletes_preserves_essential_and_installonly_packages(self):
+        self.install_health_fixture("bash")
+        self.install_health_fixture("retained-image", headers="Provides: installonlypkg(kernel)")
+        self.install_health_fixture("replacement-tool", headers="Obsoletes: bash\nObsoletes: retained-image")
+        result = self.prepare()
+        self.assertFalse(any(p["name"] in {"bash", "retained-image"} for p in result["packages"]))
+
+    def test_generic_obsoletes_does_not_allow_cascading_application_removal(self):
+        self.install_health_fixture("legacy-library")
+        self.install_health_fixture("replacement-library", headers="Obsoletes: legacy-library")
+        self.install_health_fixture("user-application", headers="Requires: legacy-library")
+        with self.assertRaisesRegex(UpdateError, "user-application"), patch.object(b.Transaction, "download") as download:
+            self.prepare()
+        download.assert_not_called()
+
+    def test_obsoletes_chain_keeps_packages_without_a_surviving_direct_replacement(self):
+        self.install_health_fixture("old-tool")
+        self.install_health_fixture("middle-tool", headers="Obsoletes: old-tool")
+        self.install_health_fixture("new-tool", headers="Obsoletes: middle-tool")
+        result = self.prepare()
+        removed = {p["name"] for p in result["packages"] if p["action"] == "Remove"}
+        self.assertEqual(removed, {"middle-tool"})
+
+    def test_obsoletes_cycle_stops_before_downloading(self):
+        self.install_health_fixture("tool-a", headers="Obsoletes: tool-b")
+        self.install_health_fixture("tool-b", headers="Obsoletes: tool-a")
+        with self.assertRaisesRegex(UpdateError, "cyclic Obsoletes"), patch.object(b.Transaction, "download") as download:
+            self.prepare()
+        download.assert_not_called()
+
+    def test_self_obsoletes_does_not_remove_the_package_itself(self):
+        self.install_health_fixture("self-replacer", headers="Obsoletes: self-replacer")
+        result = self.prepare()
+        self.assertFalse(any(p["name"] == "self-replacer" for p in result["packages"]))
+
+    def test_obsolete_cleanup_cannot_remove_its_own_replacement_as_a_dependent(self):
+        self.install_health_fixture("old-tool")
+        self.install_health_fixture("replacement-tool", headers="Obsoletes: old-tool\nRequires: old-tool")
+        with self.assertRaisesRegex(UpdateError, "replacement-tool"), \
+             patch.object(b.Transaction, "download") as download:
+            self.prepare()
+        download.assert_not_called()
+
+    def test_generic_obsoletes_respects_installed_package_excludes(self):
+        self.install_health_fixture("old-tool")
+        self.install_health_fixture("replacement-tool", headers="Obsoletes: old-tool")
+        native_protect = planner.protect_local_packages
+
+        def exclude(base):
+            result = native_protect(base)
+            packages = planner.rpm_api.PackageQuery(base)
+            packages.filter_installed()
+            packages.filter_name(["old-tool"])
+            base.get_rpm_package_sack().add_user_excludes(packages)
+            return result
+
+        with patch.object(planner, "protect_local_packages", side_effect=exclude):
+            result = self.prepare()
+        self.assertFalse(any(p["name"] == "old-tool" for p in result["packages"]))
+
+    def test_preflight_still_rejects_missing_installed_dependencies(self):
+        self.install_health_fixture("broken-fixture", headers="Requires: missing-fixture-dependency")
+        with self.assertRaisesRegex(UpdateError, "missing-fixture-dependency"):
+            self.check_fixture_health()
+
+    def test_preflight_still_rejects_installed_conflicts(self):
+        self.install_health_fixture("conflicting-fixture", headers="Conflicts: nobara-offline-fixture")
+        with self.assertRaisesRegex(UpdateError, "conflict"):
+            self.check_fixture_health()
+
+    def test_preflight_still_rejects_duplicate_versions(self):
+        # Keep the previously installed version 1 in the database too.
+        subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts", "--noplugins",
+                        "--ignoresize", "-i", str(self.new)], check=True, capture_output=True)
+        with self.assertRaisesRegex(UpdateError, "duplicate"):
+            self.check_fixture_health()
 
     def updater_fixture(self, repository_version):
         installed = self.build_rpm("nobara-updater", "2")
@@ -485,6 +1005,44 @@ echo {version} > %{{buildroot}}{payload}
         result = self.prepare()
         self.assertFalse(any(p["name"] == "labwc" for p in result["packages"]))
         self.assertEqual(next(p for p in result["package_origins"] if p["name"] == "labwc")["kind"], "unknown")
+
+    def test_missing_history_for_distribution_signed_rpm_does_not_hold_upgrade(self):
+        self.local_desktop_fixture(origin="<unknown>")
+        with patch.object(origins, "distribution_signed_packages", return_value={"labwc-0:5-1.noarch"}):
+            result = self.prepare()
+        self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Upgrade" for p in result["packages"]))
+
+    def test_explicit_local_origin_is_preserved_even_with_distribution_signature(self):
+        self.local_desktop_fixture(origin="@commandline")
+        with patch.object(origins, "distribution_signed_packages", return_value={"labwc-0:5-1.noarch"}):
+            self.assertFalse(any(p["name"] == "labwc" for p in self.prepare()["packages"]))
+
+    def kernel_development_fixture(self, *, matching=True):
+        self.local_desktop_fixture()
+        for name in ("dkms", "kernel-core"):
+            headers = "Provides: kernel-uname-r = 1-1.noarch" if name == "kernel-core" else ""
+            installed = self.build_rpm(name, "1", headers=headers)
+            subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts",
+                            "--noplugins", "--ignoresize", "-i", str(installed)], check=True, capture_output=True)
+            self.set_origin(name, "nobara-kernel-mainline")
+        shutil.copy2(self.build_rpm("kernel-core", "2", headers="Provides: kernel-uname-r = 2-1.noarch"), self.repo)
+        if matching:
+            shutil.copy2(self.build_rpm("kernel-lto-devel", "2", headers="Provides: kernel-devel-uname-r = 2-1.noarch"), self.repo)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+
+    def test_kernel_development_uses_matching_lto_provider_without_generic_devel(self):
+        self.kernel_development_fixture()
+        with patch.object(planner, "check_selection_support"):
+            result = self.prepare()
+        self.assertTrue(any(p["name"] == "kernel-lto-devel" and p["action"] == "Install" for p in result["packages"]))
+        self.assertFalse(any(p["name"] == "kernel-devel" for p in result["packages"]))
+
+    def test_missing_matching_development_provider_stops_before_download(self):
+        self.kernel_development_fixture(matching=False)
+        with patch.object(b.Transaction, "download") as download:
+            with self.assertRaisesRegex(UpdateError, "kernel-devel-uname-r = 2-1.noarch"):
+                self.prepare()
+            download.assert_not_called()
 
     def test_obsoletes_cannot_replace_local_package_under_a_different_name(self):
         self.local_desktop_fixture()

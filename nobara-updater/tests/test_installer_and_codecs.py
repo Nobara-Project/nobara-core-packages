@@ -53,6 +53,7 @@ class CodecFixupTests(unittest.TestCase):
                 base = Mock()
                 repo = Mock()
                 repo.get_id.return_value = "nobara-pikaos-additional"
+                repo.get_config.return_value.get_baseurl_option.return_value.get_value.return_value = []
                 option = repo.get_config.return_value.get_enabled_option.return_value
                 option.get_value.return_value = enabled
                 with patch.object(planner.base_api, "Base", return_value=base), \
@@ -85,6 +86,7 @@ class InstallerTargetTests(unittest.TestCase):
         patch.object(backend, "TRIGGER", self.root / "system-update").start()
         patch.object(backend, "in_installer_root", return_value=True).start()
         patch.object(backend, "rpm_fingerprint", return_value="fixture").start()
+        patch.object(backend, "check_installed_system").start()
 
     def test_target_install_replays_once_then_reexecs_validation_without_services_or_snapshot(self):
         with patch.object(backend, "prepare") as prepare, patch.object(backend, "run") as run, \
@@ -131,7 +133,7 @@ class InstallerTargetTests(unittest.TestCase):
             backend.finalize(self.root, installer=True)
         self.assertEqual(state.read_state(self.root)["status"], "installer-complete")
         announce.assert_not_called()
-        self.assertEqual([call.args[0] for call in run.call_args_list], [["dnf5", "--disable-repo=*", "check"]])
+        self.assertEqual([call.args[0] for call in run.call_args_list], [["dnf5", "--disable-repo=*", "check", "--dependencies", "--duplicates"]])
         # Calamares next invokes install-codecs. It must not be blocked by a
         # pending desktop reboot or the first installer's started marker.
         with patch.object(planner, "prepare_transaction", return_value={"empty": True, "codecs": True}), \
@@ -148,6 +150,14 @@ class InstallerTargetTests(unittest.TestCase):
         with patch.object(backend, "run") as run:
             backend.apply_hooks(["enable-falcond"])
         run.assert_called_once_with(["systemctl", "--root=/", "enable", "falcond.service"])
+
+    def test_plymouth_payload_repair_rebuilds_boot_images_during_finalization(self):
+        ready = dict(self.ready, migrations={"hooks": ["plymouth-rebuild"]})
+        state.write_state(self.root, ready, "validating", started=True)
+        with patch.object(backend, "run"), patch.object(backend, "os_release", return_value="44"), \
+             patch.object(backend, "validate_boot") as validate:
+            backend.finalize(self.root, installer=True)
+        validate.assert_called_once_with([], rebuild_all=True)
 
     def test_chroot_detection_uses_explicit_probe_and_rejects_probe_errors(self):
         with patch.object(state.subprocess, "run", return_value=Mock(returncode=0, stderr="")) as run:

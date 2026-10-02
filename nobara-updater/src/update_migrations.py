@@ -6,7 +6,16 @@ packages before replacements have been downloaded and mutates boot files.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from pathlib import Path
+
+from .update_codecs import CODEC_REPLACEMENTS, CODEC_MULTILIB, CODEC_NATIVE
+
+LOG = logging.getLogger(__name__)
+BGRT_FILES = {
+    "plymouth-theme-spinner": "/usr/share/plymouth/themes/bgrt/bgrt.plymouth",
+    "plymouth-plugin-two-step": "/usr/lib64/plymouth/two-step.so",
+}
 
 
 @dataclass
@@ -57,6 +66,10 @@ def plan_migrations(installed: list[dict], *, product: str = "", nvidia_closed: 
         plan.remove.update(name for name in names if name == "sddm" or name.startswith("sddm-"))
         plan.install.add("plasma-login-manager")
         plan.hooks.append("plasma-login")
+    if names & {"sddm", "plasma-login-manager"}:
+        # These settings require SDDM and otherwise prevent its replacement,
+        # or pull it back in after a partially completed login migration.
+        plan.remove.update(names & {"kde-settings-sddm"})
     if {"tigervnc-license", "tigervnc-server-minimal"} <= names:
         plan.install.update({"tigervnc-x11-server", "tigervnc-selinux"} - names)
     for old, new in (("rubberband.i686", "rubberband-libs"), ("tesseract.i686", "tesseract-libs")):
@@ -86,7 +99,7 @@ def plan_migrations(installed: list[dict], *, product: str = "", nvidia_closed: 
                     plan.remove.add(f"{family}.{arch}")
                     plan.install.add(f"{family}-freeworld.{arch}")
     if any("fsync" in p.get("version", "") or "fsync" in p.get("release", "") for p in installed if p["name"] == "kernel"):
-        plan.install.update({"kernel", "kernel-devel"})
+        plan.install.add("kernel")
     # ROCm packages with surviving names are handled by distro-sync. Only
     # retire packages from the old repository that have no replacement name;
     # the planner checks availability before adding those removals.
@@ -106,29 +119,58 @@ def machine_product() -> str:
     return " ".join(values)
 
 
+def add_plymouth_migration(plan: MigrationPlan, installed: list[dict], *,
+                          current_theme: str | None = None, root: Path = Path("/")) -> set[str]:
+    """Restore the BGRT fallback before selecting themes or rebuilding initramfs.
+
+    Return installed packages that need their missing payload restored. A
+    same-version install alone is a no-op, so the planner must either upgrade
+    these packages or explicitly reinstall them within the saved transaction.
+    """
+    names = {package["name"] for package in installed}
+    gaming = names & {"gamescope-htpc-common", "gamescope-session-common"}
+    if "plymouth" not in names and not gaming:
+        return set()
+    repairs = set()
+    missing = False
+    for package, filename in BGRT_FILES.items():
+        if not (root / filename.lstrip("/")).is_file():
+            LOG.warning("Plymouth file %s is missing; preparing repair using %s.", filename, package)
+            missing = True
+            if package in names:
+                repairs.add(package)
+            else:
+                plan.install.add(package)
+    hook = None
+    if gaming:
+        wanted = "steamos" if len(gaming) == 2 else "bgrt"
+        if current_theme != wanted or (wanted == "bgrt" and missing):
+            # BGRT belongs to the spinner package and uses two-step, not script.
+            provider = "plymouth-plugin-script" if wanted == "steamos" else "plymouth-theme-spinner"
+            if provider not in names:
+                plan.install.add(provider)
+            hook = "plymouth-" + wanted
+    if missing and hook is None:
+        # Preserve a custom/current theme while restoring the default fallback.
+        hook = "plymouth-rebuild"
+    if hook and hook not in plan.hooks:
+        plan.hooks.append(hook)
+    return repairs
+
+
 def add_codec_migration(plan: MigrationPlan, installed: list[dict]) -> None:
     specs = {f'{pkg["name"]}.{pkg["arch"]}' for pkg in installed}
     names = {pkg["name"] for pkg in installed}
-    replacements = {"ffmpeg": "ffmpeg-free", "ffmpeg-libs": "libavcodec-free",
-                    "libavdevice": "libavdevice-free", "noopenh264": "openh264",
-                    "x264": "x264-libs", "x265": "x265-libs",
-                    "mesa-libgallium": "mesa-libgallium-freeworld",
-                    "mesa-va-drivers": "mesa-va-drivers-freeworld",
-                    "mesa-vulkan-drivers": "mesa-vulkan-drivers-freeworld",
-                    "mesa-vulkan-drivers-git": "mesa-vulkan-drivers-git-freeworld"}
-    for old, new in replacements.items():
+    for old, new in CODEC_REPLACEMENTS.items():
         for arch in ("x86_64", "i686"):
             if f"{old}.{arch}" in specs:
                 plan.remove.add(f"{old}.{arch}")
                 plan.install.discard(f"{old}.{arch}")
                 plan.install.add(f"{new}.{arch}")
-    for name in ("mesa-libgallium-freeworld", "libavcodec-free", "libavutil-free", "libswresample-free",
-                 "libavformat-free", "libswscale-free", "libavfilter-free", "libavdevice-free",
-                 "gstreamer1-plugins-bad-free-extras", "openh264", "x264-libs", "x265-libs",
-                 "libavcodec-freeworld", "libheif-freeworld", "libheif"):
+    for name in CODEC_MULTILIB:
         plan.install.update({f"{name}.x86_64", f"{name}.i686"})
     if not any(name.startswith("mesa-vulkan-drivers") for name in names):
         plan.install.difference_update({"mesa-vulkan-drivers.x86_64", "mesa-vulkan-drivers.i686"})
         plan.install.update({"mesa-vulkan-drivers-freeworld.x86_64", "mesa-vulkan-drivers-freeworld.i686"})
-    plan.install.update({"ffmpeg-free.x86_64", "mozilla-openh264.x86_64", "pipewire-codec-aptx"})
+    plan.install.update(name if name == "pipewire-codec-aptx" else name + ".x86_64" for name in CODEC_NATIVE)
     plan.hooks.append("enable-codecs")

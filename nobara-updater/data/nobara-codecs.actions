@@ -1,0 +1,3 @@
+# Recompute protection from the current RPMDB, including dependency providers.
+# Nobara's verified offline/live replay deliberately runs without DNF plugins.
+pre_transaction:::mode=json raise_error=1:/usr/libexec/nobara-codec-guard

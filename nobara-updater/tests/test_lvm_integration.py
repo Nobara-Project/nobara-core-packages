@@ -80,7 +80,9 @@ class LvmIntegrationTests(unittest.TestCase):
                      partitions=[root], filesystem_use={}))
                 fake = types.SimpleNamespace(globalstorage=gs, job=types.SimpleNamespace(configuration={}))
                 with patch.dict(sys.modules, {"libcalamares": fake}):
-                    spec = importlib.util.spec_from_file_location("nobaralvm_test", PROJECT / "integrations/calamares-lvm/main.py")
+                    if not os.environ.get("CALAMARES_SOURCE"):
+                        self.skipTest("Requires CALAMARES_SOURCE with the patched installer")
+                    spec = importlib.util.spec_from_file_location("nobaralvm_test", Path(os.environ["CALAMARES_SOURCE"]) / "src/modules/nobaralvm/main.py")
                     installer = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(installer)
                     installer.create()

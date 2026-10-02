@@ -14,7 +14,7 @@ from collections import deque
 from pathlib import Path
 
 from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root
-from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment
+from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment, check_recovery_space
 from .update_report import arm_report, publish_recovery, publish_failure, resolve_notice
 from .update_origins import annotate_failure
 from .update_state import (ACTIVE, STATE_DIR, TRIGGER, UpdateError, atomic_json, file_digest,
@@ -22,7 +22,7 @@ from .update_state import (ACTIVE, STATE_DIR, TRIGGER, UpdateError, atomic_json,
                            verify_files, write_state)
 
 LOG = logging.getLogger(__name__)
-ENGINE_FILES = ("update_state.py", "update_migrations.py", "update_plan.py", "update_policy.py", "update_boot.py", "update_recovery.py", "update_lvm.py", "update_backend.py", "update_report.py", "update_origins.py")
+ENGINE_FILES = ("update_state.py", "update_migrations.py", "update_plan.py", "update_policy.py", "update_boot.py", "update_recovery.py", "update_lvm.py", "update_backend.py", "update_report.py", "update_origins.py", "update_codecs.py", "update_health.py", "update_repositories.py")
 
 
 def announce(message: str) -> None:
@@ -45,7 +45,7 @@ def run(command: list[str]) -> None:
                                umask=0o022 if Path(command[0]).name == "dnf5" else -1,
                                env=dict(os.environ, LC_ALL="C.UTF-8"))
     assert process.stdout is not None
-    rpm_errors = []
+    rpm_errors = deque(maxlen=20)
     last_lines = deque(maxlen=5)
     for line in process.stdout:
         LOG.info("%s", line.rstrip())
@@ -54,12 +54,13 @@ def run(command: list[str]) -> None:
         # Native DNF5 can exit 0 after nonfatal RPM scriptlet failures. Its
         # C-locale callback diagnostics must also be treated as a failure.
         if "replay" in command and re.search(r"(?:[Ee]rror in .* scriptlet:|[Uu]npack error:|[Cc]pio error:|scriptlet failed, exit status)", line):
-            rpm_errors.append(line.strip())
+            rpm_errors.append(line.strip()[-2000:])
     process.stdout.close()
     if process.wait() != 0:
-        raise UpdateError(f"{command[0]} failed with exit code {process.returncode}:\n" + "\n".join(last_lines))
+        details = dict.fromkeys([*rpm_errors, *last_lines])
+        raise UpdateError(f"{command[0]} failed with exit code {process.returncode}:\n" + "\n".join(details))
     if rpm_errors:
-        raise UpdateError("RPM reported installation errors: " + "; ".join(rpm_errors))
+        raise UpdateError("RPM reported installation errors:\n" + "\n".join(rpm_errors))
 
 
 def job_directory(state: dict, root: Path = STATE_DIR) -> Path:
@@ -129,7 +130,7 @@ def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = F
         completed = {"complete", "live-complete", "recovered"} | ({"installer-complete"} if installer else set())
         if previous.get("started") and previous.get("status") not in completed:
             if not previous.get("recovery", {}).get("created"):
-                raise UpdateError("The previous installation did not complete and no automatic rollback is available. Open System Update Recovery or run nobara-sync recovery-report to review the error and get repair guidance before retrying.")
+                raise UpdateError("The previous installation did not complete and no automatic rollback is available. Run nobara-sync recovery-report, repair the reported problem, then run sudo nobara-sync retry-update to validate repairs and prepare a fresh update.")
             raise UpdateError("The previous installation did not complete. Recover it before preparing another update.")
         if TRIGGER.is_symlink() or TRIGGER.exists():
             raise UpdateError("Another offline update is scheduled. Finish or cancel it first.")
@@ -145,6 +146,7 @@ def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = F
             job.mkdir(parents=True, mode=0o700)
             write_state(root, state, "preparing")
             try:
+                check_installed_system(preparing=True)
                 result = prepare_transaction(job, codecs=codecs,
                                              allow_live=settings["live_updates"] and not settings["require_recovery"])
                 state["package_origins"] = result.get("package_origins", [])
@@ -174,6 +176,7 @@ def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = F
                 if not installer and not live and not recovery["available"]:
                     LOG.warning("Automatic rollback is unavailable: %s", recovery["reason"])
                 elif not installer and not live:
+                    check_recovery_space(recovery, result.get("boot_space", {}))
                     LOG.info("Automatic rollback is available for this system layout.")
                     if recovery.get("shared_mounts"):
                         LOG.info("Recovery will preserve current container data at: %s",
@@ -275,6 +278,42 @@ def cancel(root: Path = STATE_DIR) -> None:
         prune_payloads(root)
 
 
+def check_installed_packages() -> None:
+    # An installed Obsoletes relationship is not a broken dependency. In
+    # particular, obsolete packages can survive a previous transition.
+    # Let the transaction planner handle those; do not abort preparation or
+    # roll back an otherwise healthy boot solely for an obsoleted leftover.
+    run(["dnf5", "--disable-repo=*", "check", "--dependencies", "--duplicates"])
+
+
+def check_installed_system(*, preparing: bool = False) -> None:
+    LOG.info("Checking the installed RPM database before preparing updates.")
+    run(["rpm", "--verifydb"])
+    if not preparing:
+        check_installed_packages()
+    # During preparation the planner repairs missing dependencies in the
+    # saved transaction and validates the complete final RPM set. Requiring
+    # healthy dependencies here would prevent that repair from being planned.
+
+
+def retry_failed(root: Path = STATE_DIR) -> None:
+    """Explicit repair acknowledgement; never replay a partially applied plan."""
+    with update_lock(root):
+        state = read_state(root)
+        if state.get("status") not in {"failed", "interrupted"} or not state.get("started"):
+            raise UpdateError("There is no failed installation awaiting repair. Run nobara-sync cli normally.")
+        if state.get("recovery", {}).get("created"):
+            raise UpdateError("Boot the previous-system recovery first, repair it, then run nobara-sync cli.")
+        if TRIGGER.exists() or TRIGGER.is_symlink():
+            raise UpdateError("An offline update trigger is still present. Do not retry while an update is scheduled.")
+        check_installed_system()
+        # Retain the original state and all diagnostic files for support.
+        atomic_json(job_directory(state, root) / "failed-state.json", state)
+        write_state(root, {"previous_failed_job": state["job"], "repair_acknowledged": True,
+                           "started": False}, "idle")
+        LOG.info("RPM database and dependency checks passed. Preparing a fresh update is now allowed; the previous failure report is retained.")
+
+
 def replay(job: Path, *, test: bool = False) -> None:
     # Every payload is local. Keep native DNF5 in its own process so a Python
     # or libdnf5 upgrade cannot replace modules used by an in-flight binding.
@@ -331,7 +370,7 @@ def execute(root: Path = STATE_DIR) -> None:
         Path("/run/nobara-updater-offline").touch(mode=0o600)
         TRIGGER.unlink()
         announce("Preparing recovery files. Keep the computer powered on.")
-        recovery = create_recovery(job, state["recovery"])
+        recovery = create_recovery(job, state["recovery"], boot_space=state.get("boot_space", {}))
         write_state(root, state, "installing", started=True, recovery=recovery)
         arm_report(state)
         trial_boot(recovery)
@@ -395,6 +434,9 @@ def apply_hooks(hooks: list[str]) -> None:
             run(["systemctl", "--root=/", "enable", "falcond.service"])
         elif hook == "enable-codecs":
             run(["dnf5", "config-manager", "setopt", "nobara-pikaos-additional.enabled=1"])
+        elif hook == "migrate-media-repository":
+            from .update_repositories import persist_media_migration
+            persist_media_migration(run)
         elif hook in {"nvidia", "nvidia-closed"}:
             text = "options nvidia-drm modeset=1 fbdev=1\n"
             if hook == "nvidia-closed":
@@ -404,12 +446,25 @@ def apply_hooks(hooks: list[str]) -> None:
                 config.write_text(config.read_text().replace("MODULE_VARIANT=kernel-open", "MODULE_VARIANT=kernel"))
                 text += "options nvidia NVreg_EnableGpuFirmware=0\n"
             Path("/etc/modprobe.d/nvidia-modeset.conf").write_text(text)
+        elif hook == "plymouth-rebuild":
+            # finalize() rebuilds boot images for every plymouth-* hook. Leave
+            # the selected theme alone when only repairing fallback files.
+            pass
         elif hook in {"plymouth-steamos", "plymouth-bgrt"}:
             run(["plymouth-set-default-theme", hook.removeprefix("plymouth-")])
             # Preserve the administrator's GRUB menu policy. Hiding recovery
             # entries automatically would undermine the recovery mechanism.
         elif hook != "rocm-transition":
             raise UpdateError(f"Unknown migration hook: {hook}")
+
+
+def dkms_status_records(text: str) -> list[dict]:
+    """Read DKMS package identities and states, excluding unrelated warnings."""
+    pattern = re.compile(r"(?P<name>[^/,\s:]+)/(?P<version>[^,\s]+?)"
+                         r"(?:,\s*(?P<kernel>[^,\s]+),\s*(?P<arch>[^,:\s]+))?"
+                         r":\s*(?P<status>\S.*)")
+    return [match.groupdict() for line in text.splitlines()
+            if (match := pattern.fullmatch(line.strip()))]
 
 
 def validate_boot(packages: list[dict], *, rebuild_all: bool = False) -> None:
@@ -431,15 +486,29 @@ def validate_boot(packages: list[dict], *, rebuild_all: bool = False) -> None:
         if not re.fullmatch(r"[A-Za-z0-9_.+~-]+", kernel):
             raise UpdateError("Invalid target kernel version.")
         if shutil.which("dkms"):
-            before = subprocess.run(["dkms", "status"], capture_output=True, text=True, check=True).stdout
-            expected = {line.split("/", 1)[0] for line in before.splitlines() if "/" in line}
+            environment = dict(os.environ, LC_ALL="C.UTF-8")
+            architecture = os.uname().machine
+            before = subprocess.run(["dkms", "status"], capture_output=True, text=True,
+                                    check=True, env=environment).stdout
+            expected = {record["name"] for record in dkms_status_records(before)}
             if expected and not (Path("/usr/lib/modules") / kernel / "build/Makefile").is_file():
                 raise UpdateError(f"Kernel development files are missing for {kernel}.")
             run(["dkms", "autoinstall", "-k", kernel])
-            after = subprocess.run(["dkms", "status", "-k", kernel], capture_output=True, text=True, check=True).stdout
-            installed = {line.split("/", 1)[0] for line in after.splitlines() if "/" in line and line.rstrip().endswith(": installed")}
+            after = subprocess.run(["dkms", "status", "-k", kernel, "-a", architecture],
+                                   capture_output=True, text=True, check=True, env=environment).stdout
+            detail = after.strip() or "No DKMS status entries were returned."
+            LOG.info("DKMS status for %s (%s):\n%s", kernel, architecture, detail)
+            # DKMS saves the original in-tree module when a driver replaces it.
+            # That annotation is informational; missing/differing module files
+            # and unknown annotations must still block boot validation. DKMS
+            # itself resolves BUILT_MODULE_NAME/DEST_MODULE_NAME, so compare its
+            # package identity rather than guessing a .ko name from the package.
+            installed = {record["name"] for record in dkms_status_records(after)
+                         if record["kernel"] == kernel and record["arch"] == architecture
+                         and record["status"] in {"installed", "installed (Original modules exist)"}}
             if expected - installed:
-                raise UpdateError(f"Modules missing for kernel {kernel}: {', '.join(sorted(expected - installed))}")
+                raise UpdateError(f"DKMS did not confirm a clean installed state for kernel {kernel}: "
+                                  f"{', '.join(sorted(expected - installed))}\nReported DKMS status:\n{detail}")
         if shutil.which("akmods"):
             run(["akmods", "--force", "--kernels", kernel])
         if subprocess.run(["rpm", "-q", "dkms-nvidia"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
@@ -500,7 +569,7 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
             for item in state["packages"]:
                 if item["action"] in {"Install", "Upgrade", "Downgrade", "Reinstall"}:
                     run(["rpm", "-q", item["nevra"]])
-            run(["dnf5", "--disable-repo=*", "check"])
+            check_installed_packages()
             if os_release() != state["target_release"]:
                 raise UpdateError("Installed release does not match the prepared release.")
             if not live:
@@ -641,7 +710,7 @@ def confirm_boot(root: Path = STATE_DIR) -> None:
         expected_kernel = state.get("boot_selection", {}).get("kernel")
         if expected_kernel and os.uname().release != expected_kernel:
             raise UpdateError(f"The system booted kernel {os.uname().release}, but this update selected {expected_kernel}.")
-        run(["dnf5", "--disable-repo=*", "check"])
+        check_installed_packages()
         if not (Path("/usr/lib/modules") / os.uname().release).is_dir():
             raise UpdateError("Modules for the running kernel are missing.")
         # A desktop install must at least reach its login manager before its

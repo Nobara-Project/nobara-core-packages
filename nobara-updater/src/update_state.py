@@ -140,7 +140,9 @@ def status_message(state: dict) -> str:
         "complete": "System update completed and startup checks passed.",
         "unchanged": "System packages are up to date.",
         "failed": "System update failed: " + state.get("error", "See the update log."),
-        "interrupted": "A system update was interrupted. Recovery is required before another update.",
+        "interrupted": ("A system update was interrupted. Boot recovery before another update."
+                        if state.get("recovery", {}).get("created") else
+                        "A system update was interrupted. Read nobara-sync recovery-report; after repairing the problem, run sudo nobara-sync retry-update."),
         "recovering": "Restoring the previous system boot selection.",
         "recovered": "The previous system was restored. The update did not complete.",
     }

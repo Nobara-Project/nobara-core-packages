@@ -20,7 +20,7 @@ LOG = logging.getLogger("nobara-sync")
 RESULT_PREFIX = "NOBARA_UPDATE_RESULT "
 COMMANDS = {"cli", "prepare-update", "install-updates", "install-fixups", "install-codecs",
             "repair", "check-updates", "check-repos", "update-status", "schedule-update",
-            "cancel-update", "reboot", "recovery-report"}
+            "cancel-update", "reboot", "recovery-report", "retry-update"}
 
 
 def parse_args(argv=None):
@@ -39,6 +39,7 @@ def parse_args(argv=None):
         "check-repos": "Refresh and validate enabled repository metadata.",
         "schedule-update": "Install the prepared update on the next restart.",
         "cancel-update": "Cancel an update that has not begun installation.",
+        "retry-update": "After manual repairs without rollback, validate and prepare a fresh update.",
         "reboot": "Restart now and install the prepared update.",
     }.items():
         commands.add_parser(name, help=help_text)
@@ -125,6 +126,11 @@ def result_message(state):
 
 
 def dispatch(args):
+    if args.command == "retry-update":
+        if in_installer_root():
+            raise UpdateError("Retry after repair is only available on an installed system.")
+        if not worker_action("retry", LOG):
+            return False
     if args.command == "check-repos":
         run(["dnf5", "--refresh", "--setopt=skip_if_unavailable=False", "makecache"])
         return True

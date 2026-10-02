@@ -11,10 +11,14 @@ welcome center's existing codec-wizard script.
 
 ## What happens
 
-1. A systemd service refreshes the existing enabled repositories, detects the
+1. A systemd service checks the existing RPM database, refreshes the enabled repositories, detects the
    target release, and resolves one distro-sync transaction, including known
    package migrations and updates to installed group/environment members.
-2. It refuses broken dependencies, unexpected removals, missing required
+   Missing dependencies of unchanged packages are added as native DNF provider
+   requests in the same transaction. Such repairs require offline installation.
+2. It checks the complete proposed RPM set, including unchanged/excluded packages,
+   using RPM's dependency checks without installing packages or running scripts.
+   It refuses unresolved dependencies, conflicts, duplicate versions, unexpected removals, missing required
    repositories, untrusted packages, or insufficient space. Every RPM is
    downloaded, signature-checked, and RPM-tested before the update is ready.
 3. It saves the exact replay transaction, comps definitions, RPMs, checksums,
@@ -53,6 +57,24 @@ package). Installed group packages are updated through distro-sync. Required
 new Nobara packages are added through explicit migrations, without rewriting
 repository metadata or changing installed group membership.
 
+### Obsolete-package cleanup
+
+After the initial dependency solve, the planner computes which installed RPMs
+remain and which RPM versions will be installed. It uses libdnf5's native
+Obsoletes matching against that final set to find leftovers, regardless of
+package name. This also handles replacements already installed before the
+update, which distro-sync can otherwise leave uncleaned.
+
+Cleanup requests select exact installed RPMs, preserving architecture and epoch,
+and are resolved in the same goal with unused-dependency autoremove disabled.
+The planner verifies that a matching replacement survives every subsequent
+solve. It never uses obsolete metadata from a replacement that is being removed
+or whose new version no longer carries that Obsoletes declaration. Replacement
+chains are reevaluated after each solve; ambiguous cycles stop preparation with
+package names. Existing local-RPM, essential-package, install-only, exclusion,
+and unexpected-removal safeguards remain in effect. Merely disappearing from
+the repositories does not make a package a cleanup target.
+
 ### Local RPMs and third-party repositories
 
 DNF5's recorded installation repository determines package origin, not whether
@@ -62,7 +84,12 @@ updates. See [DNF5's package-origin API](https://dnf5.readthedocs.io/en/stable/a
 
 The updater preserves RPMs recorded as `@commandline`/`commandline`, and
 conservatively preserves packages whose origin is missing, `<unknown>`, or
-`@System` (including direct `rpm` installs). It excludes repository replacements
+`@System` (including direct `rpm` installs), unless the installed RPM's full
+signature key ID matches a local Fedora/Nobara distribution public key.
+This recovers distribution provenance lost by older package managers without
+assuming a package is official based on its name, vendor, or version. Explicit
+`@commandline`/`commandline` installs are still preserved even if signed.
+It excludes repository replacements
 before solving and rejects any resolved migration that would remove, replace,
 or reinstall a protected local RPM. Different-name replacements through RPM
 Obsoletes are excluded too. Unrelated updates proceed when dependencies allow.
@@ -74,8 +101,8 @@ or protected by this policy; neither can unrecorded edits to packaged files.
 
 RPM Fusion's free/nonfree repository release packages, including their tainted
 and rawhide variants, are exempt from local RPM protection. Nobara no longer
-ships these packages, and the updater does not schedule their removal or other
-fixups. Any available updates follow normal DNF resolution.
+ships these packages, and the updater has no RPM Fusion-specific fixups.
+Available updates and declared Obsoletes follow the normal transaction policy.
 
 The Nobara repository IDs are `nobara`, `nobara-updates`,
 `nobara-kernel-mainline`, `nobara-kernel-lts`, `nobara-pikaos-additional`,
@@ -93,6 +120,26 @@ failures, without claiming rollback occurred. The saved transaction and
 separate boot diagnostics retain origin information for errors after reboot.
 Reports identify exact packages named by failure evidence; the presence of a
 local/third-party package alone is not treated as proof it caused an error.
+
+After a failed installation without a created recovery target, an administrator
+can repair the system and run `nobara-sync retry-update`. It holds the updater
+lock, requires failed/interrupted state, refuses active transactions and boot
+triggers, and checks the RPM database and installed dependencies. It archives
+the failed state before allowing a new preparation; it never replays the failed
+plan. Reports remain available. See [RECOVERY.md](RECOVERY.md).
+
+Kernel development files are requested through `kernel-devel-uname-r` for each
+target kernel, including retained kernels when driver changes require rebuilding
+them. This accepts matching LTO/LTS providers without requesting every version of
+the generic `kernel-devel` package. Repository priorities and excludes still apply.
+
+DKMS validation checks the reported package state for the target kernel and
+architecture. `installed (Original modules exist)` is accepted: DKMS has saved
+the original in-tree module for restoration when the replacement is removed.
+DKMS handles differing package, built-module and destination-module names.
+Missing files, differences between built and installed modules, and other
+unrecognized status annotations still stop validation. The exact reported DKMS
+status is saved in the update log and included in validation failures.
 
 If a transaction includes comps definitions, its local XML comes from libdnf5's
 serializer. A repository cutover which deletes an RPM while downloading fails
@@ -463,7 +510,7 @@ a failed or interrupted update, explicitly saying that no rollback occurred.
 Failed startup validation without a recovery target preserves FAILED status
 but does not divert normal boot to an unavailable recovery system. A partial
 installation stays blocked from automatic retry; the report suggests
-`sudo dnf5 check` and error-specific repair or support. Merely reaching the
+`sudo dnf5 check --dependencies --duplicates` and error-specific repair or support. Merely reaching the
 desktop never marks the update successful. No notification can be shown if
 the machine cannot reach a working desktop session.
 

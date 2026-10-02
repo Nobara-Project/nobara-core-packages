@@ -151,7 +151,7 @@ class LiveWorkflowTests(unittest.TestCase):
         with patch.object(backend, "run") as run, patch.object(backend, "validate_boot") as boot:
             backend.finalize(self.root, live=True)
         self.assertEqual([call.args[0] for call in run.call_args_list],
-                         [["rpm", "-q", "editor-2-1.x86_64"], ["dnf5", "--disable-repo=*", "check"]])
+                         [["rpm", "-q", "editor-2-1.x86_64"], ["dnf5", "--disable-repo=*", "check", "--dependencies", "--duplicates"]])
         boot.assert_not_called()
         self.assertEqual(state.read_state(self.root)["status"], "live-complete")
 
@@ -172,7 +172,8 @@ class LiveWorkflowTests(unittest.TestCase):
 
     def test_completed_live_job_allows_a_new_preparation(self):
         state.write_state(self.root, dict(self.ready), "live-complete", started=True)
-        with patch("nobara_updater.update_plan.prepare_transaction", return_value={"empty": True}) as prepare:
+        with patch.object(backend, "check_installed_system"), \
+             patch("nobara_updater.update_plan.prepare_transaction", return_value={"empty": True}) as prepare:
             backend.prepare(self.root)
         prepare.assert_called_once()
         self.assertEqual(state.read_state(self.root)["status"], "unchanged")
@@ -182,6 +183,7 @@ class LiveWorkflowTests(unittest.TestCase):
             state.write_state(self.root, dict(self.ready), "idle")
             settings = dict(prepare_attempts=1, live_updates=live_updates, require_recovery=require_recovery)
             with self.subTest(settings=settings), patch.object(backend, "policy", return_value=settings), \
+                 patch.object(backend, "check_installed_system"), \
                  patch("nobara_updater.update_plan.prepare_transaction", return_value={"empty": True}) as prepare:
                 backend.prepare(self.root)
             self.assertIs(prepare.call_args.kwargs["allow_live"], False)

@@ -22,6 +22,33 @@ KERNEL_CMDLINE = Path("/etc/kernel/cmdline")
 INBOUND = {"Install", "Upgrade", "Downgrade", "Reinstall"}
 
 
+def boot_space_requirements(packages, hooks, *, boot=BOOT) -> dict[str, int]:
+    """Budget new images and one temporary rebuild, excluding generic rescue images."""
+    mib = 1024**2
+    incoming = [p for p in packages if p["action"] in INBOUND]
+    kernels = sum(p["name"] == "kernel-core" or
+                  (p["name"].startswith("kernel-") and p["name"].endswith("-core")
+                   and "modules" not in p["name"]) for p in incoming)
+    rebuild = bool(kernels) or any(any(word in p["name"] for word in ("dkms", "akmod", "kmod", "dracut"))
+                                  for p in incoming) or any(h.startswith("plymouth-") for h in hooks)
+
+    def largest(directory, pattern, default):
+        return max((p.stat().st_size for p in directory.glob(pattern)
+                    if "0-rescue" not in p.name and p.is_file()), default=default)
+
+    initramfs = largest(boot, "initramfs-*.img", 128 * mib)
+    kernel = largest(boot, "vmlinuz-*", 32 * mib)
+    budgets = {str(boot): 32 * mib + kernels * (kernel + initramfs) + int(rebuild) * initramfs}
+    for directory in (boot / "EFI/Linux", boot / "efi/EFI/Linux"):
+        if any(directory.glob("*.efi")):
+            mount = boot / "efi" if directory == boot / "efi/EFI/Linux" else boot
+            budgets[str(mount)] = max(budgets.get(str(mount), 0),
+                                     32 * mib + (kernels + int(rebuild)) * largest(directory, "*.efi", 160 * mib))
+    if (boot / "efi").is_mount() and any(p["name"].startswith(("shim", "grub2-efi", "systemd-boot")) for p in incoming):
+        budgets[str(boot / "efi")] = budgets.get(str(boot / "efi"), 0) + 32 * mib
+    return budgets
+
+
 def changes_kernel(packages: list[dict]) -> bool:
     return any(p["name"] in {"kernel", "kernel-core"} and p["action"] in INBOUND for p in packages)
 

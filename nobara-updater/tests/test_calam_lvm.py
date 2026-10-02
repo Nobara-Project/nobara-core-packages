@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 PROJECT = Path(__file__).resolve().parents[1]
+CALAMARES = Path(os.environ.get("CALAMARES_SOURCE", "/nonexistent")) / "src/modules"
 
 
 class Storage:
@@ -20,6 +21,7 @@ class Storage:
     def insert(self, key, value): self.values[key] = value
 
 
+@unittest.skipUnless((CALAMARES / "nobaralvm/main.py").is_file(), "Requires CALAMARES_SOURCE with the patched installer")
 class InstallerConfigurationTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -34,7 +36,7 @@ class InstallerConfigurationTests(unittest.TestCase):
         self.fake = types.SimpleNamespace(globalstorage=self.gs, job=types.SimpleNamespace(configuration={}),
                                          utils=types.SimpleNamespace(target_env_call=Mock(return_value=0)))
         with patch.dict(sys.modules, {"libcalamares": self.fake}):
-            spec = importlib.util.spec_from_file_location("installer_storage_test", PROJECT / "integrations/calamares-lvm/main.py")
+            spec = importlib.util.spec_from_file_location("installer_storage_test", CALAMARES / "nobaralvm/main.py")
             self.module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(self.module)
         self.addCleanup(patch.stopall)
@@ -86,12 +88,13 @@ class InstallerConfigurationTests(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("g++"), "C++ compiler unavailable")
+@unittest.skipUnless((CALAMARES / "partition/core/NobaraLvmLayout.h").is_file(), "Requires CALAMARES_SOURCE with the patched installer")
 class LayoutSizingTests(unittest.TestCase):
     def test_real_installer_sizing_reserves_full_root_and_refuses_small_disks(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             cpp = path / "layout.cpp"
-            cpp.write_text('#include "' + str(PROJECT / "integrations/calamares-lvm/NobaraLvmLayout.h") + '''"
+            cpp.write_text('#include "' + str(CALAMARES / "partition/core/NobaraLvmLayout.h") + '''"
 #include <cassert>
 int main() {
     using namespace NobaraLvm;

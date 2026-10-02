@@ -1,0 +1,4 @@
+#!/usr/bin/python3 -I
+from nobara_updater.update_codecs import guard_main
+
+raise SystemExit(guard_main())

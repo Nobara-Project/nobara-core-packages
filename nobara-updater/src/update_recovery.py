@@ -179,7 +179,27 @@ def probe_recovery() -> dict:
         return {"available": False, "reason": f"Recovery layout could not be verified: {error}"}
 
 
-def create_recovery(job: Path, layout: dict) -> dict:
+def recovery_boot_space(layout: dict) -> int:
+    if not layout.get("available"):
+        return 0
+    payloads = boot_payloads(Path(layout["entry"]))
+    required = sum(p.stat().st_size for p in set(payloads))
+    if layout.get("backend") == "lvm":
+        # LVM additionally builds a recovery initramfs with merge support.
+        required += max((p.stat().st_size for p in payloads), default=128 * 1024**2) + 64 * 1024**2
+    return required
+
+
+def check_recovery_space(layout: dict, boot_space: dict) -> None:
+    if not layout.get("available"):
+        return
+    required = recovery_boot_space(layout) + boot_space.get("/boot", 32 * 1024**2)
+    free = shutil.disk_usage("/boot").free
+    if free < required:
+        raise UpdateError(f"Not enough space on /boot for recovery and this update: need {required // 1024**2} MiB free, have {free // 1024**2} MiB. Free space before retrying; no update has been installed.")
+
+
+def create_recovery(job: Path, layout: dict, *, boot_space: dict | None = None) -> dict:
     if not layout.get("available"):
         return layout
     job_id = job.name
@@ -195,9 +215,7 @@ def create_recovery(job: Path, layout: dict) -> dict:
             raise UpdateError("The recovery volume changed after preparation.")
     ensure_recovery_bootloader()
     layout = actual
-    payload_size = sum(p.stat().st_size for p in boot_payloads(Path(layout["entry"])))
-    if shutil.disk_usage("/boot").free < payload_size + 256 * 1024**2:
-        raise UpdateError("There is not enough free space in /boot for recovery images and new boot files.")
+    check_recovery_space(layout, boot_space or {})
     archive_size = sum(int(output(["du", "-sx", "--block-size=1", str(mount)]).split()[0])
                        for mount in (Path("/boot"), Path("/boot/efi")) if mount.is_mount())
     if shutil.disk_usage(job).free < archive_size + 512 * 1024**2:

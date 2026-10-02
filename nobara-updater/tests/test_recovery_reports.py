@@ -35,7 +35,8 @@ class ReportTests(unittest.TestCase):
         self.public = self.root / "public"
         self.old_handlers = list(logging.getLogger().handlers)
         self.addCleanup(self.close_handlers)
-        for name, value in (("BOOT_REPORTS", self.boot), ("REPORTS", self.public), ("STATE_DIR", self.root / "state")):
+        for name, value in (("BOOT_REPORTS", self.boot), ("REPORTS", self.public),
+                            ("STATE_DIR", self.root / "state"), ("DKMS_LOG_ROOT", self.root / "dkms")):
             patcher = patch.object(reports, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -86,6 +87,102 @@ class ReportTests(unittest.TestCase):
         report = reports.latest_report()
         self.assertEqual(report["error"], "offline RPM failure")
         self.assertEqual(report["recovery_error"], "boot unavailable")
+
+    def test_confirmation_failure_preserves_installation_error_and_its_journal(self):
+        self.publish()
+        journal = self.boot / JOB / "failure-journal.log"
+        journal.write_text("original installation journal\n")
+        with patch.object(reports.subprocess, "run"):
+            reports.record_failure(self.state, "confirm", UpdateError("The previous update did not finish."))
+        reports.publish_recovery(JOB)
+        report = reports.latest_report()
+        self.assertEqual(report["phase"], "execute")
+        self.assertEqual(report["error"], "offline RPM failure")
+        self.assertEqual(report["confirmation_error"], "The previous update did not finish.")
+        self.assertEqual(journal.read_text(), "original installation journal\n")
+        self.assertIn("original installation journal", Path(report["log"]).read_text())
+
+    def test_journal_timeout_keeps_partial_output_and_publishes_without_snapshot(self):
+        self.state["recovery"] = {}
+        reports.arm_report(self.state)
+
+        def timeout(command, **options):
+            options["stdout"].write(b"partial journal evidence\n")
+            raise subprocess.TimeoutExpired(command, options["timeout"])
+
+        with patch.object(reports.subprocess, "run", side_effect=timeout):
+            reports.record_failure(self.state, "execute", UpdateError("driver compilation failed"))
+        report = reports.latest_report()
+        self.assertEqual(report["error"], "driver compilation failed")
+        self.assertFalse(report["recovered"])
+        text = Path(report["log"]).read_text()
+        self.assertIn("partial journal evidence", text)
+        self.assertIn("Journal collection timed out", text)
+        self.assertTrue(Path(report["bundle"]).is_file())
+
+    def test_unavailable_journal_does_not_prevent_failure_publication(self):
+        self.state["recovery"] = {}
+        reports.arm_report(self.state)
+        with patch.object(reports.subprocess, "run", side_effect=OSError("journal unavailable")):
+            reports.record_failure(self.state, "execute", UpdateError("driver compilation failed"))
+        report = reports.latest_report()
+        self.assertEqual(report["error"], "driver compilation failed")
+        self.assertIn("journal unavailable", Path(report["log"]).read_text())
+
+    def test_referenced_dkms_build_log_survives_rollback_and_journal_timeout(self):
+        path = reports.DKMS_LOG_ROOT / "fixture-driver/1/build/make.log"
+        path.parent.mkdir(parents=True)
+        path.write_text("fixture.c:42: error: incompatible kernel API\n")
+        reports.arm_report(self.state)
+        logging.getLogger().warning("Consult %s for more information.", path)
+        with patch.object(reports.subprocess, "run", side_effect=subprocess.TimeoutExpired("journalctl", 15)):
+            reports.record_failure(self.state, "execute", UpdateError("fixture driver failed"))
+        path.unlink()  # Rollback restored the root, losing the failed build.
+        with patch.object(reports.subprocess, "run"):
+            reports.record_failure(self.state, "confirm", UpdateError("installation incomplete"))
+        reports.publish_recovery(JOB)
+        report = reports.latest_report()
+        with tarfile.open(report["bundle"]) as archive:
+            text = archive.extractfile("update.log").read().decode()
+        self.assertIn("fixture.c:42: error: incompatible kernel API", text)
+        self.assertEqual(report["error"], "fixture driver failed")
+        self.assertEqual((self.boot / JOB / "failure-build.log").stat().st_mode & 0o777, 0o600)
+
+    def test_build_log_collection_is_bounded_and_cannot_follow_symlinks_outside_dkms(self):
+        reports.arm_report(self.state)
+        outside = self.root / "private.txt"
+        outside.write_text("private credentials\n")
+        link = reports.DKMS_LOG_ROOT / "outside/1/build/make.log"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(outside)
+        valid = reports.DKMS_LOG_ROOT / "fixture/1/build/make.log"
+        valid.parent.mkdir(parents=True)
+        valid.write_text("x" * 2000 + "\nFinal compiler error\n")
+        logging.getLogger().warning("Consult %s or %s for more information.", link, valid)
+        with patch.object(reports, "LIMIT", 1024):
+            reports.capture_build_logs(self.boot / JOB)
+        saved = self.boot / JOB / "failure-build.log"
+        self.assertLessEqual(saved.stat().st_size, 1024)
+        self.assertNotIn("private credentials", saved.read_text())
+        self.assertIn("Final compiler error", saved.read_text())
+
+    def test_build_log_collection_error_does_not_block_report(self):
+        self.state["recovery"] = {}
+        with patch.object(reports, "capture_build_logs", side_effect=PermissionError("unreadable")), \
+             patch.object(reports.subprocess, "run"), self.assertLogs(reports.LOG, level="WARNING"):
+            reports.record_failure(self.state, "execute", UpdateError("driver compilation failed"))
+        self.assertEqual(reports.latest_report()["error"], "driver compilation failed")
+
+    def test_build_log_collection_ignores_previous_jobs_when_current_log_exists(self):
+        old = reports.DKMS_LOG_ROOT / "old-driver/1/build/make.log"
+        old.parent.mkdir(parents=True)
+        old.write_text("unrelated compiler failure\n")
+        reports.STATE_DIR.mkdir()
+        (reports.STATE_DIR / "update.log").write_text(f"Old job: consult {old}\n")
+        reports.arm_report(self.state)
+        logging.getLogger().warning("Current job failed for a different reason")
+        reports.capture_build_logs(self.boot / JOB)
+        self.assertFalse((self.boot / JOB / "failure-build.log").exists())
 
     def origin(self):
         return dict(name="labwc", arch="x86_64", nevra="labwc-0:5-1.x86_64",

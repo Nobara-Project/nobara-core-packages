@@ -35,10 +35,20 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(plan_migrations(installed).as_dict(), plan_migrations([]).as_dict())
 
     def test_login_replacement_is_one_plan_with_deferred_config(self):
-        result = plan_migrations([package("sddm"), package("sddm-wayland-plasma")])
-        self.assertTrue({"sddm", "sddm-wayland-plasma"} <= result.remove)
+        result = plan_migrations([package("sddm"), package("sddm-wayland-plasma"), package("kde-settings-sddm")])
+        self.assertTrue({"sddm", "sddm-wayland-plasma", "kde-settings-sddm"} <= result.remove)
         self.assertIn("plasma-login-manager", result.install)
         self.assertIn("plasma-login", result.hooks)
+
+    def test_login_migration_cleans_leftover_settings_after_plasma_login_install(self):
+        result = plan_migrations([package("plasma-login-manager"), package("kde-settings-sddm")])
+        self.assertIn("kde-settings-sddm", result.remove)
+        self.assertNotIn("plasma-login", result.hooks)
+
+    def test_sddm_settings_alone_do_not_trigger_login_migration(self):
+        result = plan_migrations([package("kde-settings-sddm")])
+        self.assertNotIn("kde-settings-sddm", result.remove)
+        self.assertNotIn("plasma-login-manager", result.install)
 
     def test_nvidia_same_name_packages_are_not_removed(self):
         result = plan_migrations([package("akmod-nvidia"), package("nvidia-driver", epoch="4")], nvidia_closed=True)
@@ -68,6 +78,17 @@ class MigrationTests(unittest.TestCase):
 
 
 class StateTests(unittest.TestCase):
+    def test_prepare_leaves_dependency_repair_and_validation_to_planner(self):
+        with patch.object(backend, "run") as run:
+            backend.check_installed_system(preparing=True)
+        run.assert_called_once_with(["rpm", "--verifydb"])
+
+    def test_retry_still_requires_installed_system_to_be_healthy(self):
+        with patch.object(backend, "run") as run:
+            backend.check_installed_system()
+        self.assertEqual([call.args[0] for call in run.call_args_list], [
+            ["rpm", "--verifydb"], ["dnf5", "--disable-repo=*", "check", "--dependencies", "--duplicates"]])
+
     def test_scheduling_checks_service_load_and_target_membership(self):
         for load, wants, valid in (("loaded", "nobara-updater-offline.service other.service", True),
                                    ("masked", "nobara-updater-offline.service", False),
@@ -145,6 +166,47 @@ class WorkflowTests(unittest.TestCase):
         patch.object(backend, "check_offline_service").start()
         patch.object(backend, "arm_report").start()
         patch.object(backend, "publish_failure").start()
+        patch.object(backend, "check_installed_system").start()
+
+    def test_repaired_failed_installation_can_prepare_fresh_without_replaying_old_job(self):
+        write_state(self.root, self.state, "interrupted", started=True, error="old failure")
+        with patch.object(backend, "replay") as replay:
+            backend.retry_failed(self.root)
+            replay.assert_not_called()
+        archived = json.loads((self.job / "failed-state.json").read_text())
+        self.assertEqual(archived["error"], "old failure")
+        self.assertTrue(archived["started"])
+        self.assertFalse(read_state(self.root)["started"])
+        with patch("nobara_updater.update_plan.prepare_transaction", return_value={"empty": True}):
+            backend.prepare(self.root)
+        self.assertNotEqual(read_state(self.root)["job"], archived["job"])
+
+    def test_retry_keeps_failure_if_repairs_are_incomplete(self):
+        write_state(self.root, self.state, "failed", started=True)
+        before = read_state(self.root)
+        with patch.object(backend, "check_installed_system", side_effect=UpdateError("broken dependencies")):
+            with self.assertRaisesRegex(UpdateError, "broken dependencies"):
+                backend.retry_failed(self.root)
+        self.assertEqual(read_state(self.root), before)
+
+    def test_retry_refuses_active_update_snapshot_recovery_and_boot_trigger(self):
+        for status, recovery, trigger in (("installing", False, False), ("failed", True, False), ("failed", False, True)):
+            with self.subTest(status=status, recovery=recovery, trigger=trigger):
+                write_state(self.root, self.state, status, started=True, recovery={"created": recovery})
+                if trigger:
+                    self.trigger.symlink_to(self.root)
+                with self.assertRaises(UpdateError):
+                    backend.retry_failed(self.root)
+                self.assertTrue(read_state(self.root)["started"])
+
+    def test_corrupt_rpm_database_stops_before_transaction_preparation(self):
+        write_state(self.root, self.state, "idle")
+        with patch.object(backend, "check_installed_system", side_effect=UpdateError("RPM database is corrupt")), \
+             patch("nobara_updater.update_plan.prepare_transaction") as prepare:
+            with self.assertRaisesRegex(UpdateError, "RPM database"):
+                backend.prepare(self.root)
+            prepare.assert_not_called()
+        self.assertFalse(read_state(self.root)["started"])
 
     def test_lost_trigger_is_recreated_only_after_validation(self):
         write_state(self.root, self.state, "scheduled")
@@ -308,6 +370,16 @@ class WorkflowTests(unittest.TestCase):
         process.wait.return_value = 0
         with patch.object(backend.subprocess, "Popen", return_value=process):
             with self.assertRaisesRegex(UpdateError, "RPM reported installation errors"):
+                backend.run(["dnf5", "replay", str(self.job)])
+
+    def test_nonzero_exit_keeps_scriptlet_failure_before_unrelated_trailing_output(self):
+        output = "[RPM] %posttrans(fixture-driver-1-1.x86_64) scriptlet failed, exit status 10\n"
+        output += "Finished another package scriptlet\n" * 10
+        output += "Transaction failed: Rpm transaction failed.\n"
+        process = Mock(stdout=io.StringIO(output), returncode=1)
+        process.wait.return_value = 1
+        with patch.object(backend.subprocess, "Popen", return_value=process):
+            with self.assertRaisesRegex(UpdateError, "fixture-driver-1-1.x86_64"):
                 backend.run(["dnf5", "replay", str(self.job)])
 
     def test_module_failure_stops_before_building_initramfs(self):

@@ -73,6 +73,73 @@ downgrade packages according to repository priorities and available versions.
 The local RPM protection rules described in the [recovery guide](RECOVERY.md#how-packages-are-handled)
 also apply.
 
+The Plasma Login migration removes SDDM's `kde-settings-sddm` settings package
+alongside SDDM, so its dependency cannot block the replacement login manager.
+
+Some installations have a newer `libdnf5-plugin-systemd-inhibit` package than
+the DNF build available from the rolling repositories. If that optional plugin
+has no available replacement and requires a library version the repositories
+no longer offer, the updater can retire it while synchronizing the DNF packages
+in the same offline transaction. A matching repository build is used when
+available. Locally protected RPMs remain protected, and dependent applications
+cannot be removed automatically. Nobara Updater's services provide their own
+shutdown inhibition; this compatibility fixup does not remove the actions
+plugin used for codec protection or other DNF plugins.
+
+For older installations still using the retired PikaOS media URL ending in
+`/nobara/media`, preparation uses the current `/nobara/media/$basearch/`
+endpoint. The old URL continues to serve an outdated package set. This migration
+preserves repository priorities, signature checks, exclusions, and custom
+mirrors. Configuration changes are saved after installation, rather than while
+checking or downloading updates. A disabled codec repository remains disabled
+unless the existing codec opt-in rules or an explicit Codec Wizard request
+enable it.
+
+Before preparing a transaction, it checks that the current RPM database is
+readable and valid. If an installed package has missing dependencies, the updater
+tries to restore them within the same offline transaction. DNF selects providers
+using the enabled repositories and their priorities, including the correct
+32-bit libraries for 32-bit applications. Locally installed packages remain
+protected; repairing their dependencies does not authorize replacing them.
+
+Before staging, it checks the complete proposed package set, including unchanged
+and excluded packages, for missing dependencies, conflicts, and duplicate
+versions. An unresolved problem stops preparation before installation or reboot.
+It does not remove applications to force a repair. An installed package being
+marked obsolete by another package does not by itself indicate a broken
+dependency or trigger rollback.
+
+DNF can remove a redundant `noarch` copy when the same package will remain
+installed for the native architecture, or vice versa. The updater recognizes
+that replacement without treating it as an unrelated package deletion. A
+64-bit library is never treated as a replacement for its 32-bit counterpart
+under this rule.
+
+Obsolete-package cleanup applies to all package names. DNF handles incoming
+replacements; the updater also finds obsolete leftovers whose replacement is
+already installed. It uses RPM's version and epoch rules and checks the final
+planned package set, including replacements that change version or architecture.
+Cleanup occurs within the same prepared, tested transaction as the update.
+
+The log names each obsolete package being removed and the replacement that
+will remain installed. Locally installed RPMs, packages with unverified origins,
+essential packages, and install-only packages such as retained kernels remain
+protected. Being absent from a repository is not enough to remove a package.
+
+If a replacement is also being removed or no longer declares the old package
+obsolete in its new version, that relationship cannot authorize cleanup.
+Ambiguous replacement cycles stop preparation with the affected package names.
+Unexpected removals of dependent applications also stop preparation. Resolve
+those conflicts using [RECOVERY.md](RECOVERY.md); the updater does not erase
+applications just to force obsolete-package cleanup through.
+
+On systems using Plymouth, the updater also repairs missing BGRT theme files
+and its `two-step` plugin. It installs missing packages or restores deleted
+files from installed packages using an upgrade or reinstall. These RPMs are
+prepared and verified before theme selection and initramfs rebuilding; a bad
+repository payload stops preparation. Restoring the BGRT fallback preserves
+custom theme selection and the existing SteamOS/BGRT session-selection policy.
+
 Before declaring an update ready, it downloads the required RPMs, checks
 their signatures, tests the planned installation, and checks required space
 and other prerequisites. Conflicts or missing packages stop preparation
@@ -85,6 +152,40 @@ have not yet been installed. You can save your work and restart when ready.
 If you install or remove RPM packages after preparation, the saved plan may
 no longer match your system. The updater refuses to apply an outdated plan;
 run it again to prepare a fresh one.
+
+## Storage, logs, and the offline trigger
+
+Downloaded RPMs and the saved transaction live under
+`/var/lib/nobara-updater/jobs/<id>`, not on `/boot`. The updater uses systemd's
+standard offline-update trigger: `/system-update` is a symlink to
+`/var/lib/nobara-updater`. A Nobara service then installs the saved transaction
+using DNF5 replay and manages snapshots, validation, and recovery. It does not
+use DNF5's own `install --offline` job storage.
+
+`/boot` holds kernel/initramfs images, recovery boot images, and bounded recovery
+diagnostics. Boot recovery archives are stored with the job on the root/state
+filesystem. Required free space depends on the transaction and recovery layout:
+normal boot images determine the estimate, not the often much larger generic
+`0-rescue` initramfs. Kernel or driver changes need room for new/temporary images;
+a transaction that leaves them unchanged does not reserve space for rebuilding
+them. Recovery space is included only when recovery is available. A 1 GiB
+`/boot` is not automatically unsupported, but it still needs enough actual free
+space. If it is full, review unused kernels with Nobara's kernel management tools;
+do not delete the running kernel or updater recovery files by hand.
+
+An installation without a separate `/boot` can still use offline updates unless
+its administrator requires automatic recovery. Automatic rollback remains
+unavailable for that layout. After a failure and manual repair, follow
+[RECOVERY.md](RECOVERY.md) and use `sudo nobara-sync retry-update`.
+Do not manually create `/system-update` or delete updater state to force a retry.
+
+Logs are saved automatically in `/var/lib/nobara-updater/client.log` and
+`/var/lib/nobara-updater/update.log`; service output is also in the system journal.
+Use `nobara-sync recovery-report` for a readable failure report, or
+`nobara-sync recovery-report --save update-logs.tar.gz` to export it without
+internet access. Downloads, dependency checks, RPM verification, and rebuilding
+drivers/initramfs can consume CPU; a busy CPU alone does not establish a stuck
+update. Include these logs when reporting a stall or unusually long update.
 
 ## What happens during an offline update
 
@@ -230,6 +331,29 @@ Rollback protection covers installation and initial startup validation.
 Once confirmation retires the snapshot, it is no longer available to undo
 a problem discovered later. A future offline update creates fresh recovery
 data when the system layout supports it.
+
+## Media codec protection
+
+Nobara manages the media packages detected or installed by its Codec Wizard.
+DNF5 and DNF App Center block manual removals, provider swaps, downgrades,
+and reinstalls of these packages and their installed required dependencies.
+New codec providers must also be installed through the wizard. Ordinary
+upgrades of the same package and architecture remain allowed.
+
+Protection applies to the installed codec family before running the wizard
+and to its replacements afterward, including required dependencies and
+32-bit packages. The check uses the current installed package database for
+every transaction, so no manual refresh or reboot is needed to protect the
+new packages.
+
+Use the **Codec Wizard** or `nobara-sync install-codecs` to change the codec
+family. System updates through `nobara-sync cli` can also perform Nobara's
+managed replacements. A blocked manual transaction lists the affected
+packages and points to these tools.
+
+This is protection against accidental package changes through DNF5 and its
+App Center integration. It is not a restriction on administrators using RPM
+directly or deliberately disabling DNF plugins.
 
 ## Scope of this guide
 

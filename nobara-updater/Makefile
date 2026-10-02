@@ -22,6 +22,8 @@ install:
 	mkdir -p $(LIBEXEC_DIR) $(SYSTEMD_DIR)/system-update.target.wants $(SYSTEMD_DIR)/multi-user.target.wants
 	install -m 755 src/update_worker.py $(LIBEXEC_DIR)/nobara-update-worker
 	install -m 755 src/update_notice.py $(LIBEXEC_DIR)/nobara-update-notice
+	install -m 755 data/nobara-codec-guard $(LIBEXEC_DIR)/nobara-codec-guard
+	install -D -m 644 data/nobara-codecs.actions $(DESTDIR)/etc/dnf/libdnf5-plugins/actions.d/nobara-codecs.actions
 	install -D -m 644 data/nobara-update-notice.desktop $(DESTDIR)/etc/xdg/autostart/nobara-update-notice.desktop
 	install -D -m 644 data/nobara-update-recovery.desktop $(DESKTOP_DIR)/nobara-update-recovery.desktop
 	mkdir -p $(DESTDIR)/etc/grub.d
@@ -63,6 +65,7 @@ clean:
 	rm -rf $(TARGET_DIR)
 	rm -f $(BIN_DIR)/nobara-updater $(BIN_DIR)/nobara-sync $(LIBEXEC_DIR)/nobara-update-worker
 	rm -f $(LIBEXEC_DIR)/nobara-update-notice $(DESTDIR)/etc/xdg/autostart/nobara-update-notice.desktop $(DESKTOP_DIR)/nobara-update-recovery.desktop
+	rm -f $(LIBEXEC_DIR)/nobara-codec-guard $(DESTDIR)/etc/dnf/libdnf5-plugins/actions.d/nobara-codecs.actions
 	rm -f $(BIN_DIR)/nobara-codec-wizard $(DESKTOP_DIR)/nobara-codec-wizard.desktop
 	rm -rf $(CODEC_WIZARD_DIR)
 	rm -f $(SYSTEMD_DIR)/nobara-updater-*.service

@@ -47,10 +47,25 @@ preparing the new update.
 Reaching the desktop does not confirm that installation completed. Some
 packages may have changed, and automatic retries remain blocked.
 
-Read the report before making repairs. You can run `sudo dnf5 check` to check
-installed package dependencies without installing or removing packages.
+Read the report before making repairs. You can run
+`sudo dnf5 check --dependencies --duplicates` to check installed dependencies,
+conflicts, and duplicate package versions without changing packages. Plain
+`dnf5 check` also reports obsolete packages; an obsolete-package notice alone
+does not mean dependencies are broken and does not trigger updater rollback.
 Save the report and ask Nobara support for repair steps appropriate to the
 error. Rebooting alone does not repair or retry the failed installation.
+
+After repairs, run **`sudo nobara-sync retry-update`**. This explicitly
+acknowledges the repair, checks the RPM database and installed dependencies,
+and prepares a new transaction from the current system. If checks fail, the
+failed state remains blocked. The previous failure state and logs are kept.
+Restart only if the updater requests it. This command is for a failed
+installation without a created rollback snapshot; after booting a recovery
+snapshot, use `sudo nobara-sync cli` normally.
+
+Do not delete the lock file or `state.json`, enable services manually, or create
+`/system-update` yourself. A blocked failed installation is a saved state,
+not a stale process lock, and bypassing it cannot make the old plan safe.
 
 ## How packages are handled
 
@@ -58,7 +73,10 @@ error. Rebooting alone does not repair or retry the failed installation.
   downgrade packages according to repository priorities, versions, and
   dependencies.
 - **Locally installed RPMs are preserved.** This includes local RPM
-  installations and packages with no recorded repository origin. Installing
+  installations and packages with no recorded repository origin, except when
+  their installed RPM signatures identify a Fedora/Nobara distribution build.
+  Missing history alone is not proof of a custom build. Explicit command-line
+  installations remain protected even when signed by the distribution. Installing
   a repository package with `dnf install package-name` does not exempt it
   from updates. These preservation rules apply to Nobara's updater, not
   standalone DNF commands. RPM Fusion's free/nonfree repository release
@@ -82,6 +100,12 @@ error. Rebooting alone does not repair or retry the failed installation.
 Use **Save logs** to save the `.tar.gz` report, including when offline. The
 bundle contains `README.txt` and `update.log` and can be attached to a support
 request or issue.
+
+When a driver build fails, the updater also tries to preserve the referenced
+DKMS `make.log` before rollback restores the filesystem. Its bounded contents
+are included in the report's `update.log`. Later confirmation or recovery
+errors do not replace the original failure, and a journal collection timeout
+does not prevent saving the rest of the report.
 
 When online, **Upload logs** sends the text report to Nobara's paste service
 and returns a link to share. Nothing is uploaded automatically. Review the

@@ -17,6 +17,7 @@ from .update_origins import annotate_failure
 
 BOOT_REPORTS = Path("/boot/nobara-updater")
 REPORTS = Path("/var/lib/nobara-updater-reports")
+DKMS_LOG_ROOT = Path("/var/lib/dkms")
 LIMIT = 1024 * 1024
 LOG = logging.getLogger(__name__)
 PACKAGE_GUIDANCE = """How packages are handled
@@ -24,7 +25,10 @@ The updater uses DNF distro-sync, which can upgrade or downgrade packages
 according to repository priorities, available versions, and dependencies.
 
 Locally installed RPMs are preserved, including RPMs installed from local
-files and packages with no recorded repository origin. A normal repository
+files and packages with no recorded repository origin unless their installed
+RPM signatures identify a Fedora/Nobara distribution build. Missing history
+alone does not make a distribution-signed package a custom build. Explicit
+command-line installations remain protected. A normal repository
 installation using dnf install package-name remains eligible for updates.
 These preservation rules apply to Nobara's updater, not standalone DNF
 commands. Source installations outside the RPM database cannot be protected
@@ -98,11 +102,15 @@ Some packages may have changed; reaching the desktop does not confirm that the u
 
 What to do next
 1. Read the error and update log below before making repairs.
-2. Run sudo dnf5 check to check installed package dependencies without
-   installing or removing packages.
-3. Automatic retries are blocked after a partial installation. Save this
-   report and ask Nobara support for repair steps appropriate to the error.
-   Rebooting alone does not repair or retry the failed installation.
+2. Run sudo dnf5 check --dependencies --duplicates to check installed
+   dependencies, conflicts, and duplicate versions without changing packages.
+3. Repair the reported problem; save this report and ask Nobara support if
+   you need help. After repairs, run: sudo nobara-sync retry-update
+   This checks the RPM database and dependencies, preserves the failure
+   report, and prepares a fresh transaction. It does not replay the old one.
+4. Restart only if the updater asks you to. Rebooting alone does not repair
+   or retry the failed installation. Do not delete state.json or manually
+   create /system-update to bypass the failure.
 """
     else:
         text = """The system update stopped before package installation began. No rollback was needed.
@@ -162,6 +170,57 @@ def attach_log(state: dict) -> None:
     logger.addHandler(handler)
 
 
+def capture_build_logs(directory: Path) -> None:
+    """Save only referenced DKMS make.log files before rollback loses them."""
+    evidence = "\n".join(tail(directory / name) for name in ("failure.log.1", "failure.log"))
+    if not evidence.strip():
+        evidence = tail(STATE_DIR / "update.log")
+    pattern = re.escape(str(DKMS_LOG_ROOT)) + r"/[A-Za-z0-9_.+/@:-]+/make\.log\b"
+    paths = list(dict.fromkeys(re.findall(pattern, evidence)))[-8:]
+    if not paths:
+        return
+    contents = bytearray()
+    for filename in paths:
+        path = Path(filename)
+        try:
+            # Never follow a build-directory symlink into unrelated files.
+            if not path.resolve().is_relative_to(DKMS_LOG_ROOT.resolve()) or not path.is_file():
+                continue
+            text = tail(path)
+        except OSError as error:
+            text = f"Could not read build log: {error}\n"
+        header = f"\nDKMS build log: {filename}\n".encode("utf-8")
+        budget = LIMIT // len(paths) - len(header)
+        if budget > 0:
+            contents.extend(header)
+            contents.extend(text.encode("utf-8")[-budget:])
+    if contents:
+        path = directory / "failure-build.log"
+        path.write_bytes(contents)
+        os.chmod(path, 0o600)
+
+
+def capture_journal(path: Path) -> None:
+    units = ["nobara-updater-prepare.service", "nobara-updater-prepare-codecs.service", "nobara-updater-live.service",
+             "nobara-updater-offline.service", "nobara-updater-recovery.service", "nobara-updater-confirm.service"]
+    command = ["journalctl", "-b", "--no-pager", "--no-hostname", "-o", "short-iso", "-n", "2000"]
+    for unit in units:
+        command.extend(["-u", unit])
+    note = ""
+    with tempfile.TemporaryFile() as output:
+        try:
+            subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=15, check=False)
+        except subprocess.TimeoutExpired:
+            note = "Journal collection timed out after 15 seconds; any partial output is included below.\n"
+        except OSError as error:
+            note = f"Journal collection was unavailable: {error}\n"
+        output.seek(0, os.SEEK_END)
+        output.seek(max(0, output.tell() - (LIMIT - len(note.encode("utf-8")))))
+        journal = output.read(LIMIT).decode("utf-8", errors="replace")
+    path.write_text(note + journal)
+    os.chmod(path, 0o600)
+
+
 def record_failure(state: dict, phase: str, error: Exception) -> None:
     """Best effort only: diagnostics must never prevent recovery."""
     try:
@@ -170,27 +229,27 @@ def record_failure(state: dict, phase: str, error: Exception) -> None:
         directory = report_directory(state)
         path = directory / "failure.json"
         report = json.loads(path.read_text()) if path.exists() else {"job": state["job"]}
-        # A secondary recovery error must not hide the installation failure.
-        if phase == "recover" and report.get("phase") not in {None, "installation or startup"}:
-            report["recovery_error"] = str(error)
+        # Booting the interrupted installation can fail confirmation before
+        # rollback succeeds. Preserve the original failure and its journal.
+        secondary = phase in {"recover", "confirm"} and report.get("phase") not in {None, "installation or startup"}
+        if secondary:
+            report["recovery_error" if phase == "recover" else "confirmation_error"] = str(error)
         else:
             error = annotate_failure(error, state.get("package_origins", []))
             report.update(phase=phase, error=str(error), time=time.time(),
                           package_origins=state.get("package_origins", report.get("package_origins", [])),
                           package_conflicts=getattr(error, "package_conflicts", state.get("package_conflicts", [])))
         atomic_json(path, report)
-        units = ["nobara-updater-prepare.service", "nobara-updater-prepare-codecs.service", "nobara-updater-live.service",
-                 "nobara-updater-offline.service", "nobara-updater-recovery.service", "nobara-updater-confirm.service"]
-        command = ["journalctl", "-b", "--no-pager", "--no-hostname", "-o", "short-iso", "-n", "2000"]
-        for unit in units:
-            command.extend(["-u", unit])
-        with tempfile.TemporaryFile() as output:
-            subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=15, check=False)
-            output.seek(0, os.SEEK_END)
-            output.seek(max(0, output.tell() - LIMIT))
-            journal = output.read(LIMIT).decode("utf-8", errors="replace")
-        (directory / "failure-journal.log").write_text(journal)
-        os.chmod(directory / "failure-journal.log", 0o600)
+        if not secondary and state.get("started"):
+            try:
+                capture_build_logs(directory)
+            except Exception:
+                LOG.warning("Could not collect DKMS build logs; preserving the update failure report.", exc_info=True)
+        journal_name = f"failure-{phase}-journal.log" if secondary else "failure-journal.log"
+        try:
+            capture_journal(directory / journal_name)
+        except Exception:
+            LOG.warning("Could not collect the journal; preserving the update failure report.", exc_info=True)
         if not state.get("recovery", {}).get("created"):
             publish_failure(state)
         os.sync()
@@ -214,7 +273,9 @@ def publish_report(job: str, directory: Path, *, recovered: bool, started: bool,
     report = json.loads(path.read_text()) if path.exists() else dict(
         error=error or "Detailed failure information was not saved by the previous updater.", phase="unknown")
     report.update(job=job, recovered=recovered, installation_started=started, active=True)
-    detail = "\n".join(tail(directory / name) for name in ("failure.log.1", "failure.log", "failure-journal.log"))
+    detail = "\n".join(tail(directory / name) for name in (
+        "failure.log.1", "failure.log", "failure-build.log", "failure-journal.log",
+        "failure-confirm-journal.log", "failure-recover-journal.log"))
     if not detail.strip():
         detail = "No separate failed-boot log was preserved. This updater log may be incomplete.\n" + tail(STATE_DIR / "update.log")
     guidance = instructions(recovered, started)

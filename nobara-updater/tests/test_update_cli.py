@@ -66,6 +66,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result["status"], "scheduled")
         self.assertTrue(result["reboot_required"])
 
+    def test_retry_validates_repair_before_preparing_and_scheduling(self):
+        with patch.object(cli, "worker_action", return_value=True) as worker, \
+             patch.object(cli, "prepare_update", return_value=True) as prepare, \
+             patch.object(cli, "read_state", side_effect=[dict(status="ready"), dict(status="scheduled")]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(cli.dispatch(cli.parse_args(["retry-update"])))
+        self.assertEqual([call.args[0] for call in worker.call_args_list], ["retry", "schedule"])
+        prepare.assert_called_once()
+
+    def test_failed_repair_validation_does_not_start_a_new_preparation(self):
+        with patch.object(cli, "worker_action", return_value=False) as worker, \
+             patch.object(cli, "prepare_update") as prepare:
+            self.assertFalse(cli.dispatch(cli.parse_args(["retry-update"])))
+        worker.assert_called_once_with("retry", cli.LOG)
+        prepare.assert_not_called()
+
     def test_preparation_failure_is_nonzero_and_does_not_schedule(self):
         with patch.object(cli, "elevate"), patch.object(cli, "initialize_logging"), \
              patch.object(cli, "prepare_update", return_value=False), \

@@ -20,6 +20,13 @@ def local(name='labwc', kind='local', repo='@commandline'):
 
 
 class PackageOriginTests(unittest.TestCase):
+    def test_distribution_signature_requires_full_known_key_id(self):
+        text = ("official|RSA/SHA256, Key ID abcdef1234567890|(none)\n"
+                "custom|(none)|(none)\n"
+                "other|RSA/SHA256, Key ID 1111111111111111\n"
+                "short|RSA/SHA256, Key ID 34567890\n")
+        self.assertEqual(origins.signed_package_inventory(text, {"abcdef1234567890"}), {"official"})
+
     def test_repo_origin_not_install_reason_decides_whether_a_package_is_local(self):
         for repo in origins.NOBARA_REPOS:
             self.assertEqual(origins.origin_kind(repo), 'nobara')

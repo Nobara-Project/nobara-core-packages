@@ -6,10 +6,12 @@ Requires: polkit
 Requires: python3-libdnf5 >= 5.4.3
 Requires: dnf5 >= 5.4.3
 Requires: dnf5-plugins
+Requires: libdnf5-plugin-actions >= 5.4.3
 Requires: akmods
 Requires: dracut
 Requires: flatpak
 Requires: rpm
+Requires: python3-rpm
 Requires: systemd
 Requires: util-linux
 Requires: tar

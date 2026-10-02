@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 import re
+import subprocess
 
 from .update_state import UpdateError
 
@@ -71,6 +74,46 @@ def annotate_failure(error, origins, *, replacements=False):
     return PackageOriginError(str(error), packages) if packages else error
 
 
+def distribution_signed_packages(base):
+    """Recover distro provenance lost by older package managers, not local builds.
+
+    Use installed RPM signature IDs and the distribution's local public keys.
+    Package names, vendors and matching repository NEVRAs are not evidence of
+    provenance. Explicit command-line origins remain protected regardless.
+    """
+    import libdnf5.rpm as rpm
+
+    root = Path(base.get_config().get_installroot_option().get_value())
+    keydir = root / "etc/pki/rpm-gpg"
+    keys = set(keydir.glob("RPM-GPG-KEY-fedora-*-primary")) | set(keydir.glob("RPM-GPG-KEY-nobara-*"))
+    signature = rpm.RpmSignature(base)
+    trusted = set()
+    for path in sorted(keys):
+        try:
+            for key in signature.parse_key_file(path.as_uri()):
+                identifier = key.get_key_id().lower()
+                if re.fullmatch(r"[0-9a-f]{16}", identifier):
+                    trusted.add(identifier)
+        except RuntimeError as error:
+            LOG.debug("Cannot read distribution key %s: %s", path, error)
+    if not trusted:
+        return set()
+    result = subprocess.run(["rpm", "--root", str(root), "-qa", "--qf",
+        "%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}|%{RSAHEADER:pgpsig}|%{DSAHEADER:pgpsig}|%{SIGPGP:pgpsig}\\n"],
+        check=True, capture_output=True, text=True, env=dict(os.environ, LC_ALL="C.UTF-8"))
+    return signed_package_inventory(result.stdout, trusted)
+
+
+def signed_package_inventory(text, trusted):
+    packages = set()
+    for line in text.splitlines():
+        nevra, separator, signatures = line.partition("|")
+        identifiers = set(re.findall(r"Key ID ([0-9a-fA-F]{16})(?![0-9a-fA-F])", signatures))
+        if separator and {key.lower() for key in identifiers} & trusted:
+            packages.add(nevra)
+    return packages
+
+
 def protect_local_packages(base):
     # Keep libdnf imports off the recovery/report path: a failed update may
     # have damaged that library in the installation being diagnosed.
@@ -82,6 +125,8 @@ def protect_local_packages(base):
     available.filter_available()
     official = rpm.PackageQuery(available)
     official.filter_repo_id(list(NOBARA_REPOS))
+    signed = (distribution_signed_packages(base)
+              if any(p.get_from_repo_id() in UNKNOWN_REPOS for p in installed) else set())
     origins = []
     excludes = rpm.PackageSet(base)
     for package in installed:
@@ -89,6 +134,9 @@ def protect_local_packages(base):
             continue
         repo = package.get_from_repo_id()
         kind = origin_kind(repo)
+        if kind == "unknown" and package.get_full_nevra() in signed:
+            LOG.debug("Allowing distribution-signed package with missing origin: %s", package.get_full_nevra())
+            continue
         if kind == "nobara":
             continue
         counterparts = rpm.PackageQuery(official)
