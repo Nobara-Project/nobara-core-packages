@@ -136,5 +136,139 @@ class RecoveryBootTests(unittest.TestCase):
         self.assertNotIn("nobara_trial", self.env)
 
 
+class LvmTunedEntryTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="nobara-lvm-tuned-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.boot = self.root / "boot"
+        self.entries = self.boot / "loader/entries"
+        self.entries.mkdir(parents=True)
+        for image in ("vmlinuz", "initramfs", "tuned.img"):
+            (self.boot / image).write_text(image)
+        self.entry = self.entries / "normal.conf"
+        self.entry.write_text("title Nobara\nlinux /vmlinuz\ninitrd /initramfs $tuned_initrd\n"
+                              "options $kernelopts $tuned_params\n")
+        self.env = dict(kernelopts="root=UUID=original ro rd.luks.uuid=luks-123 resume=UUID=swap rd.lvm.lv=old/root",
+                        tuned_params="isolcpus=1", tuned_initrd="/tuned.img")
+        self.job = self.root / "jobs" / JOB
+        self.job.mkdir(parents=True)
+        self.layout = dict(vg=ORIGIN["vg_name"], lv="root", origin_uuid=ORIGIN["lv_uuid"],
+                           vg_uuid=ORIGIN["vg_uuid"], origin_path=ORIGIN["lv_path"], reclaim=[],
+                           snapshot_bytes=int(RESERVE["lv_size"]), entry=str(self.entry))
+
+        def command(args, **kwargs):
+            if args[0] == "dracut":
+                Path(args[-1]).write_text("recovery initrd")
+            elif args[0] != "lsinitrd":
+                raise AssertionError(args)
+            return subprocess.CompletedProcess(args, 0)
+
+        for patcher in (patch.object(lvm, "BOOT", self.boot), patch.object(recovery, "BOOT", self.boot),
+                        patch.object(recovery, "grub_environment", side_effect=lambda: dict(self.env)),
+                        patch.object(lvm, "inventory", return_value=[ORIGIN, SNAPSHOT]),
+                        patch.object(lvm, "output"), patch.object(lvm.os, "sync"),
+                        patch.object(lvm.subprocess, "run", side_effect=command)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.restored = self.entries / ("nobara-restored-" + JOB + ".conf")
+        self.recovery_entry = self.entries / ("nobara-recovery-" + JOB + ".conf")
+        self.archive = self.boot / "nobara-updater" / JOB
+
+    def create(self):
+        return lvm.create(self.job, self.layout)
+
+    def options(self, entry):
+        return next(line[8:] for line in entry.read_text().splitlines() if line.startswith("options "))
+
+    def finish(self):
+        with patch.object(lvm, "inventory", return_value=[ORIGIN, RESERVE]):
+            lvm.finish(self.layout, JOB, state_root=self.root)
+
+    def test_confirmed_restored_entry_follows_new_profiles_but_keeps_archived_images(self):
+        saved = self.create()
+        images = [line for line in self.restored.read_text().splitlines() if line.startswith(("linux ", "initrd "))]
+        self.assertIn("/nobara-updater/" + JOB + "/tuned.img", images[-1])
+        for entry in (self.restored, self.recovery_entry):
+            self.assertIn("isolcpus=1", self.options(entry))
+            self.assertNotIn("$", entry.read_text())
+            self.assertIn("rd.luks.uuid=luks-123", self.options(entry))
+        self.assertIn("nobara.rollback=" + JOB, self.options(self.recovery_entry))
+        self.env.update(saved_entry=saved["restored_entry"], tuned_params="isolcpus=2", tuned_initrd="/missing-live.img")
+        self.finish()
+        options = self.options(self.restored)
+        self.assertIn(" $tuned_params", options)
+        self.assertNotIn("'$tuned_params'", options)
+        self.assertNotIn("isolcpus=1", options)
+        self.assertNotIn("$kernelopts", options)
+        self.assertIn("isolcpus=2", recovery.expand_bls("options", options, self.env))
+        self.assertIn("root=" + ORIGIN["lv_path"], options)
+        self.assertIn("rd.lvm.lv=nobara_test/root", options)
+        self.assertNotIn("resume=", options)
+        self.assertEqual(images, [line for line in self.restored.read_text().splitlines() if line.startswith(("linux ", "initrd "))])
+        self.assertEqual((self.archive / "tuned.img").read_text(), "tuned.img")
+        self.assertFalse(self.recovery_entry.exists())
+        self.finish()
+        self.assertEqual(options, self.options(self.restored))
+
+    def test_armed_recovery_does_not_restore_dynamic_arguments_or_remove_entries(self):
+        self.create()
+        before = self.restored.read_text()
+        self.env.update(saved_entry=self.restored.stem, nobara_fallback=self.recovery_entry.stem)
+        with self.assertRaisesRegex(UpdateError, "before boot confirmation"):
+            self.finish()
+        self.assertEqual(self.restored.read_text(), before)
+        self.assertTrue(self.recovery_entry.exists())
+        lvm.output.assert_called_once()  # Only snapshot creation ran.
+
+    def test_successful_updated_boot_does_not_promote_unused_restored_entry(self):
+        self.create()
+        self.env["saved_entry"] = "normal"
+        with patch.object(lvm, "restore_tuned_options") as restore:
+            self.finish()
+        restore.assert_not_called()
+        self.assertFalse(self.restored.exists())
+        self.assertFalse(self.archive.exists())
+
+    def test_empty_tuned_variables_can_follow_a_profile_enabled_after_recovery(self):
+        self.env.pop("tuned_params")
+        self.env.pop("tuned_initrd")
+        self.create()
+        self.env.update(saved_entry=self.restored.stem, tuned_params="isolcpus=2")
+        self.finish()
+        self.assertIn("isolcpus=2", recovery.expand_bls("options", self.options(self.restored), self.env))
+
+    def test_entries_without_tuned_and_legacy_archives_remain_unchanged(self):
+        self.entry.write_text(self.entry.read_text().replace(" $tuned_params", ""))
+        self.create()
+        self.assertFalse((self.archive / "bls-source.json").exists())
+        before = self.restored.read_text()
+        self.env["saved_entry"] = self.restored.stem
+        self.finish()
+        self.assertEqual(before, self.restored.read_text())
+
+    def test_manual_boot_option_changes_are_preserved(self):
+        self.create()
+        self.restored.write_text(self.restored.read_text().replace("isolcpus=1", "isolcpus=3"))
+        before = self.restored.read_text()
+        self.env["saved_entry"] = self.restored.stem
+        with self.assertLogs(level="WARNING"):
+            self.finish()
+        self.assertEqual(before, self.restored.read_text())
+
+    def test_wrong_root_in_saved_template_cannot_replace_the_confirmed_entry(self):
+        self.create()
+        source = self.archive / "bls-source.json"
+        record = json.loads(source.read_text())
+        record["options"] = record["options"].replace(ORIGIN["lv_path"], "/dev/other/root")
+        source.write_text(json.dumps(record))
+        before = self.restored.read_text()
+        self.env["saved_entry"] = self.restored.stem
+        with self.assertRaisesRegex(UpdateError, "confirmed root"):
+            self.finish()
+        self.assertEqual(before, self.restored.read_text())
+        self.assertTrue(self.recovery_entry.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

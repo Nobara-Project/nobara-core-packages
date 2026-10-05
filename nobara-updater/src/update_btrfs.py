@@ -162,6 +162,11 @@ def reference_files(journal, environment):
 
     def transform(options, *, normal=False):
         expanded = options.replace("$kernelopts", environment.get("kernelopts", ""))
+        # Normal entries must keep following the selected TuneD profile after
+        # the recovered root is renamed. Append the variable after shlex.join
+        # so it remains a GRUB substitution, rather than a quoted literal.
+        expanded, tuned = re.subn(r"(?<!\S)\$tuned_params(?!\S)", "", expanded)
+        suffix = " $tuned_params" if tuned else ""
         if "$" in expanded:
             raise UpdateError("Unsupported variable in Btrfs boot options.")
         tokens = shlex.split(expanded)
@@ -185,10 +190,12 @@ def reference_files(journal, environment):
             affected = True
         if not affected:
             return options, options
-        stable = root_options(expanded, f"subvolid={identifier}")
-        after = root_options(expanded, "subvol=" + target) if identifier == root_id else stable
+        stable = root_options(expanded, f"subvolid={identifier}") + suffix
+        after = root_options(expanded, "subvol=" + target) + suffix if identifier == root_id else stable
         return stable, after
 
+    from .update_recovery import expand_bls, grub_variables
+    variables = grub_variables(environment, boot=BOOT)
     found = False
     for path in sorted((BOOT / "loader/entries").glob("*.conf")):
         before = path.read_text()
@@ -205,7 +212,7 @@ def reference_files(journal, environment):
             found = True
             for kind in ("linux", "initrd"):
                 images = re.findall(r"(?m)^" + kind + r"\s+(.+)$", before)
-                paths = [(BOOT / p.lstrip("/")) for row in images for p in shlex.split(row)]
+                paths = [(BOOT / p.lstrip("/")) for row in images for p in expand_bls(kind, row, variables)]
                 if not paths or any(not p.resolve().is_relative_to(BOOT.resolve()) or not p.is_file() for p in paths):
                     raise UpdateError("The confirmed boot entry has missing boot images.")
     if not found:

@@ -262,6 +262,14 @@ Boot entries may use GRUB's `$kernelopts` and TuneD's `$tuned_params` and
 TuneD's extra initrd is saved with the other boot images. Entries that use
 other GRUB variables are reported as unsupported.
 
+When a recovered Btrfs root returns to its original subvolume name, normal
+boot entries retain dynamic TuneD parameters. On ext4/XFS with LVM, the first
+boot after restoring the snapshot uses the saved parameters. Once that boot
+is confirmed, its normal entry follows TuneD profile changes again. The
+copied kernel and initrd images remain available while that entry is selected.
+Manually edited boot options are preserved; older LVM recovery archives without
+saved TuneD options keep their existing parameters.
+
 The updater reports whether automatic recovery is available. Installations
 configured to require it stop before installation if it is unavailable.
 Other configurations can permit offline updates without automatic rollback.

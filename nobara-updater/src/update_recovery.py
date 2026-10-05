@@ -102,14 +102,14 @@ BLS_VARIABLES = {"options": {"$kernelopts", "$tuned_params"}, "initrd": {"$tuned
 PLAIN_GRUB_VALUE = re.compile(r"[^$\"'\\`;|&<>{}()\x00-\x1f]*")
 
 
-def grub_variables() -> dict[str, str]:
+def grub_variables(environment: dict[str, str] | None = None, *, boot: Path | None = None) -> dict[str, str]:
     """grubenv, plus TuneD's values exactly as GRUB uses them at boot.
 
     00_header loads grubenv; TuneD's later 00_tuned block in grub.cfg then sets
     tuned_params and tuned_initrd, so it wins. An unset variable expands to nothing.
     """
-    variables = grub_environment()
-    config = BOOT / "grub2/grub.cfg"
+    variables = dict(grub_environment() if environment is None else environment)
+    config = (BOOT if boot is None else boot) / "grub2/grub.cfg"
     text = config.read_text() if config.exists() else ""
     block = re.search(r"(?ms)^### BEGIN /etc/grub\.d/00_tuned ###$(.*?)^### END /etc/grub\.d/00_tuned ###$", text)
     for name in ("tuned_params", "tuned_initrd"):

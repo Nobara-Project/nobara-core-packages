@@ -140,6 +140,65 @@ class RootLayoutTests(unittest.TestCase):
         self.assert_restored()
         self.assertIsNone(self.restore())
 
+    def tuned_entry(self, params="", initrd=""):
+        self.normal.write_text("title Nobara\nversion 7.2\nlinux /vmlinuz\n"
+                               "initrd /initramfs $tuned_initrd\noptions $kernelopts $tuned_params\n")
+        cmdline = self.active / "etc/kernel/cmdline"
+        cmdline.write_text(self.options + " $tuned_params\n")
+        config = self.boot / "grub2/grub.cfg"
+        config.parent.mkdir(exist_ok=True)
+        config.write_text('### BEGIN /etc/grub.d/00_tuned ###\n'
+                          f'set tuned_params="{params}"\nset tuned_initrd="{initrd}"\n'
+                          '### END /etc/grub.d/00_tuned ###\n')
+
+    def assert_tuned_restored(self):
+        self.assert_restored()
+        for path in (self.normal, self.active / "etc/kernel/cmdline"):
+            self.assertIn(" $tuned_params\n", path.read_text())
+            self.assertNotIn("'$tuned_params'", path.read_text())
+            self.assertNotIn("isolcpus=", path.read_text())
+        self.assertIn("initrd /initramfs $tuned_initrd\n", self.normal.read_text())
+
+    def test_empty_tuned_variables_allow_restoring_the_root_name(self):
+        self.tuned_entry()
+        self.restore()
+        self.assert_tuned_restored()
+
+    def test_tuned_overlay_uses_grub_config_precedence_and_options_stay_dynamic(self):
+        self.tuned_entry("isolcpus=1", "/tuned.img")
+        self.environment.update(tuned_params="isolcpus=2", tuned_initrd="/stale.img")
+        (self.boot / "tuned.img").write_bytes(b"overlay")
+        self.restore()
+        self.assert_tuned_restored()
+
+    def test_tuned_root_repair_can_resume_after_interruption(self):
+        self.tuned_entry("isolcpus=1")
+        with patch.object(layout.os, "rename", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                self.restore()
+        self.assertIn("subvolid=300 $tuned_params", self.normal.read_text())
+        self.restore()
+        self.assert_tuned_restored()
+
+    def test_missing_or_external_tuned_overlay_stops_before_any_root_changes(self):
+        outside = self.directory / "outside.img"
+        outside.write_bytes(b"overlay")
+        (self.boot / "external.img").symlink_to(outside)
+        for initrd in ("/missing.img", "/external.img", "/../outside.img", "$unknown"):
+            with self.subTest(initrd=initrd):
+                self.tuned_entry(initrd=initrd)
+                with self.assertRaises(UpdateError):
+                    self.restore()
+                self.assertTrue(self.source.exists())
+                self.assertFalse((self.state_root / layout.JOURNAL).exists())
+
+    def test_unknown_boot_variable_still_stops_before_any_root_changes(self):
+        self.normal.write_text(self.normal.read_text().replace(self.options, self.options + " $unknown"))
+        with self.assertRaisesRegex(UpdateError, "Unsupported variable"):
+            self.restore()
+        self.assertTrue(self.source.exists())
+        self.assertFalse((self.state_root / layout.JOURNAL).exists())
+
     def test_uses_recorded_non_timeshift_root_name(self):
         original = self.top / "root"
         self.original.replace(original)

@@ -114,7 +114,12 @@ class LvmIntegrationTests(unittest.TestCase):
                 entry.parent.mkdir(parents=True)
                 (boot / "vmlinuz-test").write_text("retained kernel fixture")
                 (boot / "initramfs-test.img").write_text("retained initrd fixture")
-                entry.write_text("title Nobara\nversion test\nlinux /vmlinuz-test\ninitrd /initramfs-test.img\noptions root=/dev/" + vg + "/root\n")
+                (boot / "tuned.img").write_text("retained TuneD overlay")
+                (boot / "grub2").mkdir()
+                (boot / "grub2/grub.cfg").write_text('### BEGIN /etc/grub.d/00_tuned ###\n'
+                    'set tuned_params="isolcpus=1"\nset tuned_initrd="/tuned.img"\n'
+                    '### END /etc/grub.d/00_tuned ###\n')
+                entry.write_text("title Nobara\nversion test\nlinux /vmlinuz-test\ninitrd /initramfs-test.img $tuned_initrd\noptions root=/dev/" + vg + "/root $tuned_params\n")
                 job = mounted_root / "jobs" / ("a" * 32)
                 job.mkdir(parents=True)
                 fstab = mounted_root / "etc/fstab"
@@ -151,6 +156,11 @@ class LvmIntegrationTests(unittest.TestCase):
                 with patch.object(backend.subprocess, "run", side_effect=command), \
                      patch.object(update_recovery, "grub_environment", return_value={}):
                     saved = backend.create(job, layout)
+                restored = boot / "loader/entries" / (saved["restored_entry"] + ".conf")
+                recovery_entry = boot / "loader/entries" / (saved["entry_id"] + ".conf")
+                self.assertIn("isolcpus=1", restored.read_text())
+                self.assertIn("isolcpus=1", recovery_entry.read_text())
+                self.assertNotIn("$", restored.read_text())
                 config = directory / "rollback.conf"
                 shutil.copy2(job / "lvm-recovery.conf", config)
                 (mounted_root / "etc/version").write_text("broken new operating system")
@@ -198,6 +208,11 @@ class LvmIntegrationTests(unittest.TestCase):
                 # root once the old snapshot has merged away.
                 with patch.object(update_recovery, "grub_environment", return_value={"saved_entry": saved["restored_entry"]}):
                     backend.finish(saved, "a" * 32, state_root=directory)
+                self.assertIn(" $tuned_params\n", restored.read_text())
+                self.assertNotIn("isolcpus=1", restored.read_text())
+                self.assertIn("/nobara-updater/" + "a" * 32 + "/tuned.img", restored.read_text())
+                self.assertEqual((boot / "nobara-updater" / ("a" * 32) / "tuned.img").read_text(), "retained TuneD overlay")
+                self.assertFalse(recovery_entry.exists())
                 reserve = next(r for r in backend.inventory() if r["lv_name"] == "nobara_reserve")
                 self.assertIn(backend.RESERVE_TAG, backend.tags(reserve))
                 self.assertEqual(reserve["lv_attr"][1], "r")

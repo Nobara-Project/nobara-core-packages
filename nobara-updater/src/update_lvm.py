@@ -6,6 +6,7 @@ Recovery runs from a pre-update initramfs, independent of installed Python.
 from __future__ import annotations
 
 import json
+import logging
 from decimal import Decimal
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ from .update_state import UpdateError
 RESERVE_TAG = "nobara.rollback.reserve"
 SNAPSHOT_TAG = "nobara.rollback.snapshot"
 LV_FIELDS = "vg_name,vg_uuid,lv_name,lv_uuid,lv_path,lv_size,lv_attr,segtype,origin,origin_uuid,lv_tags,data_percent"
+BOOT = Path("/boot")
 
 
 def output(args):
@@ -115,7 +117,7 @@ def create(job, layout):
         output(["lvm", "lvremove", "--yes", vg + "/" + name(old["name"])])
         if old["name"].startswith("nobara_rollback_"):
             old_id = old["name"].removeprefix("nobara_rollback_")
-            (Path("/boot/loader/entries") / ("nobara-recovery-" + old_id + ".conf")).unlink(missing_ok=True)
+            (BOOT / "loader/entries" / ("nobara-recovery-" + old_id + ".conf")).unlink(missing_ok=True)
     snap = "nobara_rollback_" + job_id
     # lvcreate suspends the origin while inserting the snapshot target.
     os.sync()
@@ -124,7 +126,7 @@ def create(job, layout):
     row = next(r for r in inventory() if r["vg_name"] == vg and r["lv_name"] == snap)
     if row["origin_uuid"] != layout["origin_uuid"] or row["lv_attr"][0] != "s":
         raise UpdateError("LVM did not create a valid root snapshot.")
-    destination = Path("/boot/nobara-updater") / job_id
+    destination = BOOT / "nobara-updater" / job_id
     destination.mkdir(parents=True, exist_ok=True, mode=0o700)
     from .update_state import atomic_json
     atomic_json(destination / "owner.json", {"owner": "nobara-updater", "job": job_id, "backend": "lvm"})
@@ -143,6 +145,12 @@ def create(job, layout):
     options = None
     lines = []
     env = grub_variables()
+
+    def root_options(value, variables):
+        tokens = shlex.split(" ".join(expand_bls("options", value, variables)))
+        tokens = [p for p in tokens if not p.startswith(("nobara.rollback=", "rd.lvm.lv=", "root=", "resume="))]
+        return tokens + ["root=/dev/" + origin_path, "rd.lvm.lv=" + origin_path]
+
     for line in entry.read_text().splitlines():
         fields = line.split(None, 1)
         if len(fields) != 2:
@@ -152,25 +160,67 @@ def create(job, layout):
         if key == "title":
             line = "title Nobara — previous system (" + job_id[:8] + ")"
         elif key in {"linux", "initrd"}:
-            line = key + " " + " ".join("/" + str((destination / Path(p).name).relative_to("/boot")) for p in expand_bls(key, value, env))
+            line = key + " " + " ".join("/" + str((destination / Path(p).name).relative_to(BOOT)) for p in expand_bls(key, value, env))
         elif key == "options":
-            options = shlex.split(" ".join(expand_bls(key, value, env)))
-            options = [p for p in options if not p.startswith(("nobara.rollback=", "rd.lvm.lv=", "root=", "resume="))]
-            options += ["root=/dev/" + origin_path, "rd.lvm.lv=" + origin_path]
+            options = root_options(value, env)
             line = "options " + " ".join(options)
+            if "$tuned_params" in value.split():
+                # Keep the first restored boot identical to the saved system.
+                # After confirmation, restore only the dynamic TuneD argument;
+                # kernelopts must not later switch this entry to another root.
+                dynamic = shlex.join(root_options(value, dict(env, tuned_params=""))) + " $tuned_params"
+                atomic_json(destination / "bls-source.json", dict(options=dynamic, resolved_options=" ".join(options)))
         lines.append(line)
     if options is None:
         raise UpdateError("Recovery boot entry is missing root options.")
     # A separate normal entry keeps copied old boot files usable after merge.
-    entries = Path("/boot/loader/entries")
+    entries = BOOT / "loader/entries"
     (entries / (values["restored_entry"] + ".conf")).write_text("\n".join(lines) + "\n")
     recovery_lines = [line for line in lines if not line.startswith("initrd ")]
-    recovery_lines += ["initrd /" + str(image.relative_to("/boot"))]
+    recovery_lines += ["initrd /" + str(image.relative_to(BOOT))]
     recovery_lines = [("options " + " ".join(options) + " noresume nobara.rollback=" + job_id) if line.startswith("options ") else line for line in recovery_lines]
     entry_id = "nobara-recovery-" + job_id
     (entries / (entry_id + ".conf")).write_text("\n".join(recovery_lines) + "\n")
     os.sync()
     return dict(layout, created=True, entry_id=entry_id, snapshot=snap, snapshot_uuid=row["lv_uuid"], restored_entry=values["restored_entry"])
+
+
+def restore_tuned_options(job_id, origin):
+    """Restore dynamic tuning only for a confirmed, updater-owned normal entry."""
+    from .update_boot import write_boot_file
+    directory = BOOT / "nobara-updater" / job_id
+    source = directory / "bls-source.json"
+    if not source.exists():
+        return  # Older snapshots and entries without TuneD have no template.
+    owner = directory / "owner.json"
+    entry = BOOT / "loader/entries" / ("nobara-restored-" + job_id + ".conf")
+    if (any(p.is_symlink() for p in (directory, source, owner, entry))
+            or json.loads(owner.read_text()) != dict(owner="nobara-updater", job=job_id, backend="lvm")):
+        raise UpdateError("Cannot verify ownership of the restored LVM boot entry.")
+    record = json.loads(source.read_text())
+    if (not isinstance(record, dict) or set(record) != {"options", "resolved_options"}
+            or any(not isinstance(v, str) or "\n" in v or "\r" in v for v in record.values())):
+        raise UpdateError("Invalid saved LVM boot options.")
+    desired = record["options"]
+    plain, count = re.subn(r"(?<!\S)\$tuned_params(?!\S)", "", desired)
+    root = name(origin["vg_name"]) + "/" + name(origin["lv_name"])
+    for value in (plain, record["resolved_options"]):
+        tokens = shlex.split(value)
+        if (count != 1 or "$" in value
+                or [p for p in tokens if p.startswith("root=")] != ["root=/dev/" + root]
+                or [p for p in tokens if p.startswith("rd.lvm.lv=")] != ["rd.lvm.lv=" + root]
+                or any(p.startswith(("nobara.rollback=", "resume=")) for p in tokens)):
+            raise UpdateError("Saved LVM boot options do not identify the confirmed root.")
+    text = entry.read_text()
+    current = re.findall(r"(?m)^options\s+(.+)$", text)
+    if current == [desired]:
+        return  # An interrupted cleanup can safely repeat this step.
+    if current != [record["resolved_options"]]:
+        logging.warning("Keeping manually changed boot options in %s; dynamic TuneD parameters were not restored.", entry.name)
+        return
+    # The archived initrds stay intact: TuneD's live overlay path may refer to
+    # the boot-image archive while running the restored kernel.
+    write_boot_file(entry, text=re.sub(r"(?m)^options\s+.+$", lambda _: "options " + desired, text))
 
 
 def finish(layout, job_id, state_root=None):
@@ -194,9 +244,11 @@ def finish(layout, job_id, state_root=None):
         raise UpdateError("Cannot verify the confirmed root LV.")
     vg = name(origins[0]["vg_name"])
     snapshots = [r for r in owned_snapshots(rows, origins[0]) if r["lv_name"] == "nobara_rollback_" + job_id]
-    entry = Path("/boot/loader/entries") / ("nobara-recovery-" + job_id + ".conf")
+    entry = BOOT / "loader/entries" / ("nobara-recovery-" + job_id + ".conf")
     if env.get("saved_entry") == entry.stem:
         raise UpdateError("Cannot retire the selected recovery entry.")
+    if env.get("saved_entry") == "nobara-restored-" + job_id:
+        restore_tuned_options(job_id, origins[0])
     # Remove the menu entry before its backing snapshot, so interruption
     # cannot leave a selectable destructive recovery without a snapshot.
     entry.unlink(missing_ok=True)
@@ -214,7 +266,7 @@ def finish(layout, job_id, state_root=None):
                 "--permission", "r", "--zero", "n", "--wipesignatures", "n", "--addtag", RESERVE_TAG, vg])
     # Only paths carrying our ownership record are eligible for cleanup.
     # Keep the selected restored kernel/images after a rollback.
-    for directory in Path("/boot/nobara-updater").glob("*"):
+    for directory in (BOOT / "nobara-updater").glob("*"):
         if not re.fullmatch(r"[a-f0-9]{32}", directory.name) or directory.is_symlink():
             continue
         owner = directory / "owner.json"
@@ -232,6 +284,6 @@ def finish(layout, job_id, state_root=None):
         if env.get("saved_entry") in identifiers:
             continue
         for identifier in identifiers:
-            (Path("/boot/loader/entries") / (identifier + ".conf")).unlink(missing_ok=True)
+            (BOOT / "loader/entries" / (identifier + ".conf")).unlink(missing_ok=True)
         shutil.rmtree(directory)
     os.sync()

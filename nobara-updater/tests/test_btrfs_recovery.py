@@ -75,20 +75,23 @@ class BtrfsRecoveryTests(unittest.TestCase):
                 fstab += f"UUID={uuid} /home/data btrfs subvol=@/home/data,relatime 0 0\n"
             (active / "etc/fstab").write_text(fstab)
             options = f"root=UUID={uuid} ro rd.luks.uuid=preserved rootflags=subvol={relative},compress=zstd:1"
-            (active / "etc/kernel/cmdline").write_text(options + "\n")
+            (active / "etc/kernel/cmdline").write_text(options + " $tuned_params\n")
             (active / "etc/default/grub").write_text(f'GRUB_DEFAULT=saved\nGRUB_CMDLINE_LINUX="{options}"\n')
             run(["mount", "-t", "tmpfs", "tmpfs", str(boot)])
             mounted.append(boot)
             (boot / "grub2").mkdir()
+            (boot / "grub2/grub.cfg").write_text('### BEGIN /etc/grub.d/00_tuned ###\n'
+                'set tuned_params="isolcpus=1"\nset tuned_initrd="/tuned.img"\n'
+                '### END /etc/grub.d/00_tuned ###\n')
             grubenv = boot / "grub2/grubenv"
             run(["grub2-editenv", str(grubenv), "create"])
             run(["grub2-editenv", str(grubenv), "set", "saved_entry=normal", "kernelopts=" + options])
             entries = boot / "loader/entries"
             entries.mkdir(parents=True)
-            for name in ("kernel", "initramfs"):
+            for name in ("kernel", "initramfs", "tuned.img"):
                 (boot / name).write_text(name)
             normal = entries / "normal.conf"
-            normal.write_text(f"title Nobara\nlinux /kernel\ninitrd /initramfs\noptions {options}\n")
+            normal.write_text(f"title Nobara\nlinux /kernel\ninitrd /initramfs $tuned_initrd\noptions {options} $tuned_params\n")
             root_id = layout.subvolume_id(active)
             native_rename = os.rename
             def interrupted(source, target):
@@ -105,6 +108,7 @@ class BtrfsRecoveryTests(unittest.TestCase):
                     # A fresh mount using the persisted BLS selector must boot
                     # the repaired system at every intermediate rename boundary.
                     self.assertIn("subvolid=" + str(root_id), normal.read_text())
+                    self.assertIn(" $tuned_params\n", normal.read_text())
                     run(["mount", "-o", mount_prefix + f"subvolid={root_id}", str(backing), str(booted)])
                     mounted.append(booted)
                     self.assertEqual((booted / "system").read_text(), "custom labwc repaired in recovery")
@@ -114,6 +118,9 @@ class BtrfsRecoveryTests(unittest.TestCase):
                 self.assertEqual(result["root_id"], root_id)
                 self.assertEqual(json.loads(run(["findmnt", "--json", "--mountpoint", str(active), "-o", "FSROOT"]))["filesystems"][0]["fsroot"], "/@")
                 self.assertEqual(layout.subvolume_id(original), root_id)
+                self.assertIn(" $tuned_params\n", normal.read_text())
+                self.assertIn("initrd /initramfs $tuned_initrd\n", normal.read_text())
+                self.assertNotIn("isolcpus=1", normal.read_text())
                 self.assertIsNone(layout.restore_root_layout(state_root, dict(status="complete")))
             run(["mount", "-o", mount_prefix + "subvol=@", str(backing), str(booted)])
             mounted.append(booted)
