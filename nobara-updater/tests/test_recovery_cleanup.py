@@ -102,6 +102,20 @@ class RecoveryCleanupTests(unittest.TestCase):
         self.assertEqual((archive / 'microcode').read_text(), 'microcode')
         self.assertFalse(list(self.entries.glob('nobara-recovery-*.conf')))
 
+    def test_tuned_variables_in_normal_entries_do_not_block_cleanup(self):
+        # TuneD's kernel-install hook re-adds these to every entry after a kernel update.
+        text = self.normal.read_text().replace('initrd /initramfs', 'initrd /initramfs $tuned_initrd')
+        self.normal.write_text(text.rstrip('\n') + ' $tuned_params\n')
+        self.cleanup()
+        self.assertFalse(list(self.entries.glob('nobara-recovery-*.conf')))
+
+    def test_unknown_variable_in_boot_images_blocks_all_deletion(self):
+        self.normal.write_text(self.normal.read_text().replace('initrd /initramfs', 'initrd /initramfs $early_initrd'))
+        with self.assertRaises(UpdateError):
+            self.cleanup()
+        self.assertEqual(len(list(self.entries.glob('nobara-recovery-*.conf'))), 3)
+        self.assertFalse([c for c in self.commands if c[:3] == ['btrfs', 'subvolume', 'delete']])
+
     def test_armed_or_recovery_default_blocks_all_deletion(self):
         for values in ({'nobara_fallback': 'fallback'}, {'nobara_trial': 'normal'},
                        {'next_entry': 'other'}, {'saved_entry': 'nobara-recovery-' + CURRENT}):

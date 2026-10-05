@@ -124,6 +124,41 @@ class RecoveredBootRootTests(unittest.TestCase):
         self.assertNotIn("$kernelopts", self.canonical.read_text())
         self.assertIn("nobara_fallback", self.environment)
 
+    def test_tuned_params_are_kept_for_grub_to_expand(self):
+        # TuneD's kernel-install hook appends $tuned_params to normal entries.
+        self.canonical.write_text(self.canonical.read_text().replace(self.options, self.options + " $tuned_params"))
+        self.cmdline.write_text(self.options + " $tuned_params\n")
+        boot.synchronize_boot_root()
+        for options in (self.canonical.read_text().split("\noptions ")[1].split("\n")[0], self.cmdline.read_text().strip()):
+            self.assertTrue(options.endswith(" $tuned_params"), options)
+            self.assertEqual(options.count("$tuned_params"), 1)
+            self.assertIn("subvol=" + SUBVOL, options)
+
+    def test_recovered_normal_entry_gets_tuned_params_back_instead_of_snapshot_values(self):
+        # The recovery entry holds TuneD's values resolved at snapshot time and a
+        # copied TuneD initrd; the archive records the original options line.
+        overlay = "/nobara-updater/" + JOB + "/initrd-1-tuned-initrd.img"
+        (self.archive / "initrd-1-tuned-initrd.img").write_bytes(b"tuned overlay")
+        text = self.recovery.read_text()
+        text = text.replace(".img\n", ".img " + overlay + "\n").replace(self.options, self.options + " nobara_e2e=1")
+        self.recovery.write_text(text)
+        (self.archive / "bls-source.json").write_text(json.dumps({"options": self.options + " $tuned_params"}))
+        boot.synchronize_boot_root(recovery_entry="nobara-recovery-" + JOB)
+        canonical = self.canonical.read_text()
+        options = canonical.split("\noptions ")[1].split("\n")[0]
+        self.assertTrue(options.endswith(" $tuned_params"), options)
+        self.assertNotIn("nobara_e2e=1", options)
+        self.assertIn("subvol=" + SUBVOL, options)
+        # The copied TuneD initrd keeps booting even if TuneD's own variable is stale.
+        self.assertIn("initrd /initramfs-" + KERNEL + ".img " + overlay + "\n", canonical)
+
+    def test_invalid_archived_options_record_is_refused(self):
+        (self.archive / "bls-source.json").write_text(json.dumps({"options": ["not", "text"]}))
+        before = self.canonical.read_text()
+        with self.assertRaises(UpdateError):
+            boot.synchronize_boot_root(recovery_entry="nobara-recovery-" + JOB)
+        self.assertEqual(self.canonical.read_text(), before)
+
     def test_missing_recovery_payload_stops_before_changing_any_boot_files(self):
         (self.archive / ("initrd-0-initramfs-" + KERNEL + ".img")).unlink()
         original = self.canonical.read_bytes(), self.cmdline.read_bytes()

@@ -257,6 +257,11 @@ a separate `/boot`, a supported bootloader configuration, and sufficient
 recovery space. Automatic rollback requires a recovery target that was
 successfully created before installation.
 
+Boot entries may use GRUB's `$kernelopts` and TuneD's `$tuned_params` and
+`$tuned_initrd` variables. Recovery entries store their resolved values, and
+TuneD's extra initrd is saved with the other boot images. Entries that use
+other GRUB variables are reported as unsupported.
+
 The updater reports whether automatic recovery is available. Installations
 configured to require it stop before installation if it is unavailable.
 Other configurations can permit offline updates without automatic rollback.

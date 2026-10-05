@@ -284,9 +284,12 @@ def synchronize_boot_root(*, recovery_entry: str | None = None) -> str | None:
 
     def expand(options):
         options = options.replace("$kernelopts", environment.get("kernelopts", ""))
+        # TuneD's kernel-install hook appends $tuned_params; GRUB fills it in
+        # at boot. Keep it as the last word (shlex.join would quote it).
+        options, tuned = re.subn(r"(?<!\S)\$tuned_params(?!\S)", "", options)
         if "$" in options or [token for token in shlex.split(options) if token.startswith("root=")] != ["root=UUID=" + uuid]:
             raise UpdateError("The boot entry does not identify the recovered root filesystem unambiguously.")
-        return replace_root_subvolume(options, subvolume)
+        return replace_root_subvolume(options, subvolume) + (" $tuned_params" if tuned else "")
 
     # Construct and check the complete change before writing anything.
     images = []
@@ -301,14 +304,22 @@ def synchronize_boot_root(*, recovery_entry: str | None = None) -> str | None:
         linux = re.findall(r"(?m)^linux\s+(\S+)\s*$", "\n".join(lines))
         if len(linux) != 1 or not any(line.startswith("initrd ") for line in lines):
             raise UpdateError("The recovery boot entry has incomplete boot images.")
+        archive = BOOT / "nobara-updater" / match[1]
+        # The recovery entry holds TuneD's values resolved at snapshot time; the
+        # normal entry gets the original options back, with $tuned_params.
+        record = archive / "bls-source.json"
+        source_options = json.loads(record.read_text()).get("options") if record.is_file() else None
+        if source_options is not None and (not isinstance(source_options, str) or "\n" in source_options):
+            raise UpdateError("The recovery archive's boot entry record is invalid.")
         rewritten = []
         for line in lines:
             fields = line.split(None, 1)
-            if len(fields) == 2 and fields[0] in {"linux", "initrd"}:
+            if len(fields) == 2 and fields[0] == "options" and source_options:
+                line = "options " + source_options
+            elif len(fields) == 2 and fields[0] in {"linux", "initrd"}:
                 paths = []
                 for name in fields[1].split():
                     source = BOOT / name.lstrip("/")
-                    archive = BOOT / "nobara-updater" / match[1]
                     if not source.resolve().is_relative_to(archive.resolve()) or not source.is_file():
                         raise UpdateError("A saved recovery boot image is missing or outside its archive.")
                     if fields[0] == "linux":

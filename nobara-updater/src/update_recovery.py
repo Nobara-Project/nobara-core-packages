@@ -94,6 +94,62 @@ def grub_environment() -> dict[str, str]:
     return dict(line.split("=", 1) for line in output(["grub2-editenv", "-", "list"]).splitlines() if "=" in line)
 
 
+# Variables GRUB substitutes into BLS fields that recovery understands. TuneD's
+# kernel-install hook appends $tuned_params to options and $tuned_initrd to
+# initrd on every entry. Anything else is refused, not guessed.
+BLS_VARIABLES = {"options": {"$kernelopts", "$tuned_params"}, "initrd": {"$tuned_initrd"}}
+# GRUB lexes options again after substitution; refuse values it would reinterpret.
+PLAIN_GRUB_VALUE = re.compile(r"[^$\"'\\`;|&<>{}()\x00-\x1f]*")
+
+
+def grub_variables() -> dict[str, str]:
+    """grubenv, plus TuneD's values exactly as GRUB uses them at boot.
+
+    00_header loads grubenv; TuneD's later 00_tuned block in grub.cfg then sets
+    tuned_params and tuned_initrd, so it wins. An unset variable expands to nothing.
+    """
+    variables = grub_environment()
+    config = BOOT / "grub2/grub.cfg"
+    text = config.read_text() if config.exists() else ""
+    block = re.search(r"(?ms)^### BEGIN /etc/grub\.d/00_tuned ###$(.*?)^### END /etc/grub\.d/00_tuned ###$", text)
+    for name in ("tuned_params", "tuned_initrd"):
+        if not re.search(r"(?m)^\s*set\s+" + name + "=", text):
+            continue
+        values = re.findall(r'(?m)^set ' + name + r'="(.*)"$', block[1]) if block else []
+        if (len(re.findall(r"(?m)^\s*set\s+" + name + "=", text)) != 1 or len(values) != 1
+                or "load_env" in text[block.end():]):
+            raise UpdateError(f"GRUB sets {name} in a way recovery cannot verify.")
+        variables[name] = values[0]
+    for name in ("tuned_params", "tuned_initrd"):
+        if not PLAIN_GRUB_VALUE.fullmatch(variables.get(name, "")):
+            raise UpdateError(f"GRUB variable {name} has a value recovery cannot verify.")
+    return variables
+
+
+def expand_bls(key: str, value: str, variables: dict[str, str]) -> list[str]:
+    """Words of a BLS field as GRUB boots them, for whole-word known variables only."""
+    words = []
+    for word in value.split():
+        if word in BLS_VARIABLES.get(key, ()):
+            word = variables.get(word[1:], "")
+        elif "$" in word:
+            raise UpdateError(f"Recovery cannot interpret {word} in the BLS {key} line.")
+        words.extend(word.split())
+    if any("$" in word for word in words):
+        raise UpdateError(f"The BLS {key} line expands to an unsupported variable.")
+    return words
+
+
+def boot_files(key: str, value: str, variables: dict[str, str]) -> list[Path]:
+    files = []
+    for name in expand_bls(key, value, variables):
+        source = BOOT / name.lstrip("/")
+        if not source.resolve().is_relative_to(BOOT.resolve()) or not source.is_file():
+            raise UpdateError(f"Recovery boot image is unavailable: {name}")
+        files.append(source)
+    return files
+
+
 def replace_subvolume(options: str, subvolume: str) -> str:
     tokens = shlex.split(options)
     flags = []
@@ -116,18 +172,42 @@ def boot_payloads(entry: Path) -> list[Path]:
             fields.setdefault(parts[0], []).append(parts[1])
     if any(key not in fields for key in ("linux", "initrd", "options")):
         raise UpdateError("Recovery requires a split kernel/initramfs BLS entry with explicit options.")
-    options = fields["options"][0].replace("$kernelopts", grub_environment().get("kernelopts", ""))
-    if "$" in options or not any(token.startswith("root=") for token in shlex.split(options)):
+    variables = grub_variables()
+    options = " ".join(expand_bls("options", fields["options"][0], variables))
+    if not any(token.startswith("root=") for token in shlex.split(options)):
         raise UpdateError("Recovery BLS options do not identify a usable root device.")
-    payloads = []
-    for key in ("linux", "initrd"):
-        for value in fields[key]:
-            for name in value.split():
-                source = Path("/boot") / name.lstrip("/")
-                if not source.resolve().is_relative_to(Path("/boot")) or not source.is_file():
-                    raise UpdateError(f"Recovery boot image is unavailable: {name}")
-                payloads.append(source)
-    return payloads
+    return [source for key in ("linux", "initrd") for value in fields[key] for source in boot_files(key, value, variables)]
+
+
+def recovery_entry(entry: Path, job_id: str, subvolume: str) -> str:
+    """Copy the entry's boot images into the job archive and return its recovery entry.
+
+    GRUB variables are written resolved, so the entry depends only on the archive.
+    """
+    destination = BOOT / "nobara-updater" / job_id
+    destination.mkdir(parents=True, mode=0o700)
+    variables = grub_variables()
+    entry_lines = []
+    for line in entry.read_text().splitlines():
+        key, separator, value = line.partition(" ")
+        value = value.strip()
+        if key == "title":
+            line = "title Nobara — previous system (" + job_id[:8] + ")"
+        elif key in {"linux", "initrd"}:
+            paths = []
+            for index, source in enumerate(boot_files(key, value, variables)):
+                target = destination / f"{key}-{index}-{source.name}"
+                shutil.copy2(source, target)
+                paths.append("/" + str(target.relative_to(BOOT)))
+            line = key + " " + " ".join(paths)
+        elif key == "options":
+            if "$tuned_params" in value.split():
+                # A normal entry rebuilt from this one after a rollback must not
+                # pin TuneD's current values; synchronize_boot_root() restores this.
+                atomic_json(destination / "bls-source.json", {"options": value})
+            line = "options " + replace_subvolume(" ".join(expand_bls(key, value, variables)), subvolume)
+        entry_lines.append(line)
+    return "\n".join(entry_lines) + "\n"
 
 
 def probe_recovery() -> dict:
@@ -245,33 +325,9 @@ def create_recovery(job: Path, layout: dict, *, boot_space: dict | None = None) 
         atomic_json(restored / "etc/nobara-updater-recovery.json", {"job": job_id, "original_subvolume": layout["fsroot"]})
     finally:
         subprocess.run(["umount", str(mountpoint)], check=True)
-    destination = Path("/boot/nobara-updater") / job_id
-    destination.mkdir(parents=True, mode=0o700)
-    environment = grub_environment()
-    entry_lines = []
-    for line in Path(layout["entry"]).read_text().splitlines():
-        key, separator, value = line.partition(" ")
-        value = value.strip()
-        if key == "title":
-            line = "title Nobara — previous system (" + job_id[:8] + ")"
-        elif key in {"linux", "initrd"}:
-            paths = []
-            for index, name in enumerate(value.split()):
-                source = Path("/boot") / name.lstrip("/")
-                if not source.resolve().is_relative_to(Path("/boot")) or not source.is_file():
-                    raise UpdateError(f"Recovery boot image is unavailable: {name}")
-                target = destination / f"{key}-{index}-{source.name}"
-                shutil.copy2(source, target)
-                paths.append("/" + str(target.relative_to("/boot")))
-            line = key + " " + " ".join(paths)
-        elif key == "options":
-            value = value.replace("$kernelopts", environment.get("kernelopts", ""))
-            if "$" in value:
-                raise UpdateError("Recovery BLS options contain an unsupported variable.")
-            line = "options " + replace_subvolume(value, relative)
-        entry_lines.append(line)
+    text = recovery_entry(Path(layout["entry"]), job_id, relative)
     entry_id = "nobara-recovery-" + job_id
-    (Path("/boot/loader/entries") / (entry_id + ".conf")).write_text("\n".join(entry_lines) + "\n")
+    (Path("/boot/loader/entries") / (entry_id + ".conf")).write_text(text)
     os.sync()
     return dict(layout, entry_id=entry_id, subvolume=relative, created=True)
 
@@ -299,7 +355,7 @@ def prune_recovery(recovery: dict, confirmed_job: str, *, state_root=None) -> No
     current = json.loads(output(["findmnt", "--json", "--mountpoint", "/", "--output", "FSTYPE,UUID,FSROOT"]))["filesystems"][0]
     if current["fstype"] != "btrfs" or current["uuid"] != recovery["uuid"]:
         raise UpdateError("Cannot verify the confirmed Btrfs root for recovery cleanup.")
-    environment = grub_environment()
+    environment = grub_variables()
     if any(environment.get(key) for key in ("nobara_fallback", "nobara_trial", "next_entry")):
         raise UpdateError("Cannot remove recovery snapshots while a boot trial is armed.")
     selected = environment.get("saved_entry", "")
@@ -346,9 +402,8 @@ def prune_recovery(recovery: dict, confirmed_job: str, *, state_root=None) -> No
                     continue
                 key, value = fields
                 if key in {"linux", "initrd", "efi"}:
-                    if "$" in value:
-                        raise UpdateError("Cannot identify boot-image references for recovery cleanup.")
-                    images = {(BOOT / name.lstrip("/")).resolve() for name in shlex.split(value)}
+                    # Unknown variables still stop cleanup; it is retried later.
+                    images = {(BOOT / name.lstrip("/")).resolve() for name in expand_bls(key, value, environment)}
                     if entry.stem == selected and any(not image.is_file() for image in images):
                         raise UpdateError("The confirmed normal boot entry has missing boot images.")
                     referenced_images.update(images)
