@@ -124,6 +124,16 @@ class RecoveredBootRootTests(unittest.TestCase):
         self.assertNotIn("$kernelopts", self.canonical.read_text())
         self.assertIn("nobara_fallback", self.environment)
 
+    def test_tuned_params_are_kept_for_grub_to_expand(self):
+        # TuneD's kernel-install hook appends $tuned_params to normal entries.
+        self.canonical.write_text(self.canonical.read_text().replace(self.options, self.options + " $tuned_params"))
+        self.cmdline.write_text(self.options + " $tuned_params\n")
+        boot.synchronize_boot_root()
+        for options in (self.canonical.read_text().split("\noptions ")[1].split("\n")[0], self.cmdline.read_text().strip()):
+            self.assertTrue(options.endswith(" $tuned_params"), options)
+            self.assertEqual(options.count("$tuned_params"), 1)
+            self.assertIn("subvol=" + SUBVOL, options)
+
     def test_missing_recovery_payload_stops_before_changing_any_boot_files(self):
         (self.archive / ("initrd-0-initramfs-" + KERNEL + ".img")).unlink()
         original = self.canonical.read_bytes(), self.cmdline.read_bytes()

@@ -275,9 +275,12 @@ def synchronize_boot_root(*, recovery_entry: str | None = None) -> str | None:
 
     def expand(options):
         options = options.replace("$kernelopts", environment.get("kernelopts", ""))
+        # TuneD's kernel-install hook appends $tuned_params; GRUB fills it in
+        # at boot. Keep it as the last word (shlex.join would quote it).
+        options, tuned = re.subn(r"(?<!\S)\$tuned_params(?!\S)", "", options)
         if "$" in options or [token for token in shlex.split(options) if token.startswith("root=")] != ["root=UUID=" + uuid]:
             raise UpdateError("The boot entry does not identify the recovered root filesystem unambiguously.")
-        return replace_root_subvolume(options, subvolume)
+        return replace_root_subvolume(options, subvolume) + (" $tuned_params" if tuned else "")
 
     # Construct and check the complete change before writing anything.
     images = []
