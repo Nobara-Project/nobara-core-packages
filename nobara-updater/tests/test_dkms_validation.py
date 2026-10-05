@@ -15,7 +15,7 @@ if "nobara_updater" not in sys.modules:
     package.__path__ = [str(SOURCE)]
     sys.modules["nobara_updater"] = package
 
-from nobara_updater import update_backend as backend
+from nobara_updater import update_backend as backend, update_boot as boot
 from nobara_updater.update_state import UpdateError
 
 KERNEL = "7.2.4-201.nobara.fc44.x86_64"
@@ -131,6 +131,34 @@ class DkmsValidationTests(unittest.TestCase):
             self.assertEqual(options["env"]["LC_ALL"], "C.UTF-8")
         self.assertEqual(self.status_calls[-1][0], ["dkms", "status", "-k", KERNEL, "-a", ARCH])
 
+    def test_planned_legacy_kernel_is_not_rebuilt_before_new_kernel(self):
+        old = "6.12.6-200.fsync.fc41.x86_64"
+        with patch.object(backend, "installed_boot_kernels", return_value={old, KERNEL}), \
+             patch.object(backend.os, "uname", return_value=Mock(machine=ARCH, release=old)):
+            with self.assertRaises(ReachedInitramfs):
+                backend.validate_boot([dict(name="kernel-core", action="Install", nevra="kernel-core-fixture")],
+                                      rebuild_all=True, preserved_kernels=[old])
+        backend.run.assert_any_call(["dkms", "autoinstall", "-k", KERNEL])
+        self.assertFalse(any(old in call.args[0] for call in backend.run.call_args_list))
+
+    def test_preservation_cannot_bypass_new_kernel_validation(self):
+        with self.assertRaisesRegex(UpdateError, "Cannot skip module and boot validation"):
+            backend.validate_boot([dict(name="kernel-core", action="Install", nevra="kernel-core-fixture")],
+                                  preserved_kernels=[KERNEL])
+        backend.run.assert_not_called()
+
+    def test_reboot_into_preserved_kernel_without_new_kernel_is_rejected(self):
+        with patch.object(backend.os, "uname", return_value=Mock(machine=ARCH, release=KERNEL)):
+            with self.assertRaisesRegex(UpdateError, "Cannot skip module and boot validation"):
+                backend.validate_boot([dict(name="dkms", action="Upgrade")], preserved_kernels=[KERNEL])
+        backend.run.assert_not_called()
+
+    def test_unplanned_missing_headers_still_fail(self):
+        with patch.object(Path, "is_file", return_value=False):
+            with self.assertRaisesRegex(UpdateError, "Kernel development files are missing"):
+                self.validate()
+        backend.run.assert_not_called()
+
     @unittest.skipUnless(shutil.which("dkms"), "needs the native DKMS status command")
     def test_native_status_with_renamed_module_and_original_archive(self):
         # Model DKMS's files under /tmp; status only reads them. No driver is
@@ -174,6 +202,23 @@ class DkmsValidationTests(unittest.TestCase):
             self.after = status()
             with self.assertRaisesRegex(UpdateError, "Built modules are missing"):
                 self.validate()
+
+
+class BootKernelInventoryTests(unittest.TestCase):
+    def test_inventory_excludes_module_only_remnants_and_devel_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "boot").mkdir()
+            for kernel in ("split", "module-image", "orphan", "build-only"):
+                (root / "usr/lib/modules" / kernel).mkdir(parents=True)
+            (root / "boot/vmlinuz-split").touch()
+            (root / "usr/lib/modules/module-image/vmlinuz").touch()
+            (root / "usr/lib/modules/build-only/build").mkdir()
+            self.assertEqual(boot.installed_boot_kernels(root), {"split", "module-image"})
+
+    def test_empty_target_has_no_boot_kernels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(boot.installed_boot_kernels(Path(directory)), set())
 
 
 if __name__ == "__main__":

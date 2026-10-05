@@ -11,11 +11,33 @@ welcome center's existing codec-wizard script.
 
 ## What happens
 
+Before a fresh preparation, the worker upgrades installed `nobara-updater` and
+`drm-awaiter` packages, plus required dependencies, in a separate live DNF5
+upgrade transaction. This ensures the current updater and initramfs helper are
+in place before main fixups, kernel cleanup, boot-space checks, or offline
+installation. In particular, the fixed `drm-awaiter` avoids the old helper's
+incorrect EFI initramfs destination on split-boot installations. This cannot
+create free space on a genuinely full filesystem.
+
+The early transaction uses fresh private metadata, repository priorities and
+excludes, local-RPM protection, signature verification, and native RPM replay
+testing. It does not install an absent helper, downgrade packages, perform
+release migrations, or erase packages to force dependency resolution. No
+rollback snapshot is created for this preliminary live transaction. A partial
+failure is reported and requires repair through the normal `retry-update`
+workflow; a download/solver failure before RPM changes can be retried normally.
+An existing pending update is left intact. After success, the worker starts a
+fresh interpreter from the installed updater, then performs the main sequence
+below. The same early step applies to the codec wizard and Calamares target
+updates. Read-only update checks and offline replay never run it.
+
 1. A systemd service checks the existing RPM database, refreshes the enabled repositories, detects the
    target release, and resolves one distro-sync transaction, including known
    package migrations and updates to installed group/environment members.
    Missing dependencies of unchanged packages are added as native DNF provider
    requests in the same transaction. Such repairs require offline installation.
+   Requirements already satisfied by retained or incoming RPMs are not requested
+   again, avoiding unnecessary provider switches that conflict with codec fixups.
 2. It checks the complete proposed RPM set, including unchanged/excluded packages,
    using RPM's dependency checks without installing packages or running scripts.
    It refuses unresolved dependencies, conflicts, duplicate versions, unexpected removals, missing required
@@ -40,6 +62,9 @@ welcome center's existing codec-wizard script.
    kernel version and enabled login-manager service before recording completion.
 
 No repository publication changes or custom upstream metadata are required.
+Each preparation attempt uses its own DNF5 metadata cache under the job directory
+and expires enabled repositories before loading them. The shared command-line
+DNF cache and DNF4's cache are not used to prepare the update.
 The standard release provide is used where present; Nobara's
 `nobara-release-common` RPM Version is the fallback because current Nobara
 release packages do not advertise `system-release(releasever)`. A different
@@ -47,7 +72,8 @@ release causes the complete goal to be rebuilt with that releasever. Release
 packages are updated in the same transaction as the rest of the OS.
 
 Repository priorities and package excludes remain in effect. The updater does
-not downgrade its own package, preserving its boot/recovery protocol. Locally
+not downgrade its own package or `drm-awaiter`, preserving its boot/recovery
+protocol and the early helper fixes. Locally
 installed RPMs are held at their installed build, including the updater itself.
 Repository-installed updater builds remain eligible for normal upgrades. The updater does
 not automatically upgrade group/environment definitions: Nobara copies Fedora
@@ -132,6 +158,17 @@ Kernel development files are requested through `kernel-devel-uname-r` for each
 target kernel, including retained kernels when driver changes require rebuilding
 them. This accepts matching LTO/LTS providers without requesting every version of
 the generic `kernel-devel` package. Repository priorities and excludes still apply.
+Leftover module packages without a kernel image do not trigger requests for old
+development packages. If a retained fallback kernel's development package has
+disappeared from the repositories, the updater records that in the plan and
+leaves its existing modules and boot files unchanged during final validation.
+It retains that kernel through installation and startup validation. Incoming
+kernels still require matching development files and full boot validation. When
+no kernel is being installed, the running kernel remains mandatory and is
+explicitly selected for the next boot if legacy kernels were left unchanged.
+If the next boot kernel cannot be identified (for example, in an installer chroot), all
+remaining targets remain mandatory. Missing development files for those targets
+still stop preparation before installation.
 
 DKMS validation checks the reported package state for the target kernel and
 architecture. `installed (Original modules exist)` is accepted: DKMS has saved
@@ -192,6 +229,25 @@ Already prepared jobs from older updater versions remain offline; already
 scheduled jobs keep their restart schedule. To reconsider a job which has not
 started installing, cancel it with `nobara-sync cancel-update`, then run
 `nobara-sync cli` again. The new preparation uses current repository contents.
+
+## Offline update display
+
+The offline worker switches Plymouth from estimated boot progress to `updates`
+mode (or `system-upgrade` for a release transition). BGRT and Spinner provide
+their own persistent title and power-off warning in those modes; repeatedly
+sending `display-message` alone cannot provide that display because those
+themes suppress transient messages in update mode. Other themes control their
+own presentation. Plymouth is optional and failures/timeouts never fail RPM
+installation; console and journal logging continue.
+
+The displayed percentage represents stages, not elapsed time: recovery
+preparation starts at 0%, RPM installation uses 5–85% based on completed DNF5
+transaction items, and the fresh finalization interpreter resumes at 90%.
+Only successful package, driver, boot-file and boot-selection validation sets
+100%, immediately before the automatic restart. Startup confirmation still
+runs on the next boot. Unknown DNF output formats cannot report completion;
+the display continues to show the current stage. The helper is included in
+the frozen job engine and is not started for live or installer transactions.
 
 ## Kernel selection after an update
 
@@ -394,9 +450,10 @@ The old boot and EFI files are also archived in the job directory for manual
 recovery. The archives are not automatically written over a working bootloader.
 
 A completed startup removes all unused updater-owned Btrfs rollback snapshots
-and their recovery menu entries, including the latest rollback set. A recovered
-subvolume that became the active root remains in place behind the normal kernel
-entry; its redundant saved snapshot and recovery-labelled entry are removed.
+and their recovery menu entries, including the latest rollback set. After recovery
+is confirmed, the active recovered subvolume resumes the original root path
+(usually `@`). Its identity and contents, including repairs made in recovery,
+are preserved. Its redundant saved snapshot and recovery-labelled entry are removed.
 Mounted subvolumes and subvolumes referenced by remaining boot entries are
 protected. Cleanup refuses to run while a fallback/trial boot is armed.
 On LVM, completed startup or recovery retires the snapshot and restores the
@@ -404,8 +461,31 @@ reserve. Copied boot files still referenced by normal entries are retained.
 Cleanup failures do not invalidate a confirmed boot and are retried at the next
 startup. Failure reports are copied to the restored system before cleanup.
 Obsolete staged payloads/caches are removed. Kernels are retained during the
-upgrade rather than removed before the replacement has booted; ordinary kernel
-retention policy can be applied separately after validation.
+upgrade rather than removed before the replacement has booted. After successful
+startup and recovery cleanup, a separate installed-only DNF transaction applies
+the configured `installonly_limit` (normally 3; 0 disables count-based pruning). It removes
+excess installonly packages, including the matching kernel/core/modules/devel
+packages. The running kernel and its matching package versions are retained even
+if this temporarily exceeds the limit. No repository metadata is downloaded.
+The same cleanup also retires obsolete fallback versions recorded in the update
+plan because their development packages were unavailable. This happens only
+after the replacement system has booted successfully. Old module remnants with
+neither an installed core RPM nor a kernel image are removed too, including
+generated `kmod-<driver>-<kernel-version>` RPMs. These version-specific kernel
+and kmod packages can be removed even if their origin is unknown or
+`@commandline`; other local packages keep their protection. An orphan version
+must be older than the running kernel, and standalone development packages are
+not classified as orphans. These targeted repairs apply even below the retention
+limit or with unlimited retention. Kernel headers, generic kmod tools and driver
+source packages are not part of this targeted cleanup.
+Cleanup is deferred if the running kernel's RPM cannot be identified, recovery
+or another boot selection is armed, a package manager holds the lock, or removing
+an old kernel would also change packages outside the selected kernel/kmod set.
+Failures are logged and retried on a later normal boot or updater invocation;
+they do not invalidate successful update confirmation. Existing excess kernels
+are also cleaned when an updater invocation otherwise has nothing to install.
+Installation, unconfirmed startup, recovery boots and installer chroots do not
+perform this cleanup.
 
 On unsupported layouts the default permits offline updates and explicitly
 reports that automatic rollback is unavailable. New guided installations set
@@ -466,15 +546,36 @@ users. The RPM post-transaction script repairs the six known TOMLs written with
 root-only permissions by earlier workers.
 
 After a Btrfs rollback, the recovered subvolume becomes the active system.
-Normal BLS entries and `/etc/kernel/cmdline` must follow that root; retaining
-`subvol=@` boots the abandoned installation instead. Confirmation restores the
-booted recovery kernel/initramfs to normal paths and promotes its canonical
-entry without moving the active subvolume. Recovery entries remain until
-confirmation retires them. Before later updates rebuild boot files, the updater also synchronizes
-normal entry root arguments and future kernel-install options. Even a transaction
-without a new kernel selects the normal entry for its trial boot. Existing
-completed jobs using the old recovery-labelled default are repaired at confirmation,
-provided no other update has an armed fallback.
+Confirmation first restores the booted recovery kernel/initramfs to normal paths,
+makes the normal entry boot that recovered root, and disarms the trial. Root-layout
+maintenance then follows saved recovery plans back to the original subvolume path.
+It does not assume the name `@` or depend on Timeshift being installed.
+
+Before moving either subvolume, it journals the operation in
+`/var/lib/nobara-updater/btrfs-root-layout.json` and durably pins affected fstab,
+BLS, GRUB kernel options and kernel-install references to stable subvolume IDs.
+It moves the abandoned original root to owned `displaced` storage, then renames
+the mounted recovered root to its original path without copying or reverting
+its contents. Normal root references then use that path again. A power loss at
+either rename boundary leaves the recovered system bootable by ID; the operation
+resumes by checking actual subvolume IDs. Changed configuration or ambiguous
+ownership stops maintenance instead of guessing or overwriting administrator edits.
+
+This restores compatibility with Timeshift's `@` root requirement on installations
+which had that layout before recovery. Other original root names are preserved.
+Shared nested data mounts are pinned by ID before their parent moves. Displaced
+roots are retired only when unmounted, unreferenced by other boot entries or
+preserved mount configuration, and
+free of nested subvolumes; a displaced root containing shared data remains as
+storage. The updater does not delete Timeshift snapshots.
+
+Existing installations still using `.nobara-updater/<job>/root` are repaired on
+a confirmed boot or before a fresh update, provided no update is armed or staged.
+An interrupted layout operation must finish before another transaction is prepared.
+Maintenance failures do not invalidate an already confirmed boot. Before later
+updates rebuild boot files, the updater still synchronizes normal entry root
+arguments and future kernel-install options. Even a transaction without a new
+kernel selects the normal entry for its trial boot.
 
 Release `2.0.1-48` isolates native replay from repository definitions and plugins.
 DNF5 5.4.3 otherwise reuses disabled remote repo objects for saved repo IDs and
@@ -491,6 +592,24 @@ Only updater logs and selected updater service journal entries are included;
 common URL credentials are redacted. Users should still review before sharing.
 The prearmed generic report also covers an interrupted update when Python
 cannot record a specific exception. It cannot reconstruct logs never written.
+
+The offline and confirmation services also collect systemd's exit result and
+selected service journal entries through `ExecStopPost`. This preserves timeout,
+signal and OOM-kill information even when the main worker cannot handle an
+exception, provided Python and report storage are still usable. An existing
+package or boot-file error remains the primary error. These diagnostics are
+saved before the recovery service restarts the system. Root snapshot rollback
+also rolls back journals stored in that root: `journalctl -b -1` from recovery
+may show the snapshot's older boot history rather than the failed trial boot.
+The separately saved report is the first place to look in that case.
+
+Startup confirmation compares the installed RPM inventory with the inventory
+saved after successful installation validation. An unchanged inventory reuses
+the dependency/duplicate check already completed before reboot; a changed or
+missing inventory record requires a fresh check. Release, selected kernel,
+running-kernel modules and display-manager checks still apply. The confirmation
+service allows up to 15 minutes for slow disks, checks and cleanup, instead of
+the former three-minute deadline. This is a limit, not a mandatory boot delay.
 
 Desktop login shows a notice once per recovered job per user. **System Update
 Recovery** in the application menu reopens its error, log viewer, offline Save
@@ -586,6 +705,12 @@ snapshots and writable clones while preserving a mounted recovered root:
 ```sh
 sudo unshare --mount --propagation private env NOBARA_BTRFS_INTEGRATION=1 /usr/bin/python3 -B -m unittest discover -s tests -p test_btrfs_recovery.py -v
 ```
+
+It also tests restoration of the original root name, interrupted renames,
+mounting the recovered system using persisted IDs, and shared nested data.
+Add `NOBARA_BTRFS_VM=1` to boot a disposable image in QEMU with both ID and path
+selectors, using dracut with a deliberately stale embedded root path. This uses
+direct kernel boot and a minimal test root, not a full desktop or GRUB boot.
 
 The opt-in LVM suite uses disposable 44 GiB sparse loop images and a restricted
 LVM inventory. It exercises installer provisioning, ext4 metadata checksums,

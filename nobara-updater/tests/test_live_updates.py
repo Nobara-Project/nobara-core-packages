@@ -89,6 +89,7 @@ class LiveWorkflowTests(unittest.TestCase):
                           migrations={"hooks": []}, packages=[dict(name="editor", action="Upgrade", nevra="editor-2-1.x86_64")])
         state.write_state(self.root, dict(self.ready), "ready")
         for patcher in (patch.object(backend, "TRIGGER", self.root / "system-update"),
+                        patch.object(backend, "maintain_btrfs_root", return_value=True),
                         patch.object(backend, "in_installer_root", return_value=False),
                         patch.object(backend, "rpm_fingerprint", return_value="fixture"),
                         patch.object(backend, "os_release", return_value="44")):
@@ -148,11 +149,13 @@ class LiveWorkflowTests(unittest.TestCase):
 
     def test_validation_checks_packages_and_dependencies_without_boot_work(self):
         state.write_state(self.root, dict(self.ready), "validating-live", started=True)
-        with patch.object(backend, "run") as run, patch.object(backend, "validate_boot") as boot:
+        with patch.object(backend, "run") as run, patch.object(backend, "validate_boot") as boot, \
+             patch.object(backend, "SPLASH") as splash:
             backend.finalize(self.root, live=True)
         self.assertEqual([call.args[0] for call in run.call_args_list],
                          [["rpm", "-q", "editor-2-1.x86_64"], ["dnf5", "--disable-repo=*", "check", "--dependencies", "--duplicates"]])
         boot.assert_not_called()
+        splash.start.assert_not_called()
         self.assertEqual(state.read_state(self.root)["status"], "live-complete")
 
     def test_validation_failure_cannot_claim_completion(self):

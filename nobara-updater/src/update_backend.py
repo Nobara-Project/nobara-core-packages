@@ -13,26 +13,24 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root
+from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root, installed_boot_kernels
 from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment, check_recovery_space
 from .update_report import arm_report, publish_recovery, publish_failure, resolve_notice
 from .update_origins import annotate_failure
+from .update_progress import OfflineProgress
 from .update_state import (ACTIVE, STATE_DIR, TRIGGER, UpdateError, atomic_json, file_digest,
                            in_installer_root, os_release, read_state, rpm_fingerprint, status_message, update_lock,
                            verify_files, write_state)
 
 LOG = logging.getLogger(__name__)
-ENGINE_FILES = ("update_state.py", "update_migrations.py", "update_plan.py", "update_policy.py", "update_boot.py", "update_recovery.py", "update_lvm.py", "update_backend.py", "update_report.py", "update_origins.py", "update_codecs.py", "update_health.py", "update_repositories.py")
+SPLASH = OfflineProgress()
+ENGINE_FILES = ("update_state.py", "update_migrations.py", "update_plan.py", "update_policy.py", "update_boot.py", "update_recovery.py", "update_lvm.py", "update_btrfs.py", "update_backend.py", "update_report.py", "update_origins.py", "update_codecs.py", "update_health.py", "update_repositories.py", "update_progress.py", "update_retention.py")
+EARLY_PACKAGES = ("nobara-updater", "drm-awaiter")
 
 
-def announce(message: str) -> None:
+def announce(message: str, *, percent: int | None = None) -> None:
     LOG.info("%s", message)
-    if shutil.which("plymouth"):
-        try:
-            subprocess.run(["plymouth", "display-message", "--text=" + message],
-                           timeout=2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+    SPLASH.message(message, percent=percent)
 
 
 def run(command: list[str]) -> None:
@@ -47,8 +45,11 @@ def run(command: list[str]) -> None:
     assert process.stdout is not None
     rpm_errors = deque(maxlen=20)
     last_lines = deque(maxlen=5)
+    replaying = Path(command[0]).name == "dnf5" and "replay" in command
     for line in process.stdout:
         LOG.info("%s", line.rstrip())
+        if replaying:
+            SPLASH.transaction_line(line)
         if line.strip():
             last_lines.append(line.strip()[-1000:])
         # Native DNF5 can exit 0 after nonfatal RPM scriptlet failures. Its
@@ -119,21 +120,80 @@ def refresh_pending(root: Path = STATE_DIR) -> None:
         reconcile_pending(root, read_state(root))
 
 
-def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = False) -> None:
-    from .update_plan import prepare_transaction
+def preparation_state(root: Path, *, installer: bool = False) -> dict:
+    """Check eligibility under update_lock before any package changes."""
     if installer and not in_installer_root():
         raise UpdateError("Installer updates require an actual chroot target.")
+    previous = read_state(root)
+    if previous.get("status") in ACTIVE - {"preparing"}:
+        raise UpdateError(status_message(previous))
+    completed = {"complete", "live-complete", "recovered"} | ({"installer-complete"} if installer else set())
+    if previous.get("started") and previous.get("status") not in completed:
+        if not previous.get("recovery", {}).get("created"):
+            raise UpdateError("The previous installation did not complete and no automatic rollback is available. Run nobara-sync recovery-report, repair the reported problem, then run sudo nobara-sync retry-update to validate repairs and prepare a fresh update.")
+        raise UpdateError("The previous installation did not complete. Recover it before preparing another update.")
+    if any(path.is_symlink() or path.exists() for path in (TRIGGER, Path("/etc/system-update"))):
+        raise UpdateError("Another offline update is scheduled. Finish or cancel it first.")
+    return previous
+
+
+def upgrade_early(root: Path = STATE_DIR, *, installer: bool = False) -> None:
+    """Update the preparation engine and initramfs helper before the main plan.
+
+    The caller must start a fresh interpreter afterwards, including when RPM
+    updated Python or its dependencies. Never use this from a frozen replay.
+    """
+    from .update_plan import prepare_early_transaction
     with update_lock(root):
-        previous = read_state(root)
-        if previous.get("status") in ACTIVE - {"preparing"}:
-            raise UpdateError(status_message(previous))
-        completed = {"complete", "live-complete", "recovered"} | ({"installer-complete"} if installer else set())
-        if previous.get("started") and previous.get("status") not in completed:
-            if not previous.get("recovery", {}).get("created"):
-                raise UpdateError("The previous installation did not complete and no automatic rollback is available. Run nobara-sync recovery-report, repair the reported problem, then run sudo nobara-sync retry-update to validate repairs and prepare a fresh update.")
-            raise UpdateError("The previous installation did not complete. Recover it before preparing another update.")
-        if TRIGGER.is_symlink() or TRIGGER.exists():
-            raise UpdateError("Another offline update is scheduled. Finish or cancel it first.")
+        previous = preparation_state(root, installer=installer)
+        if not installer and not maintain_btrfs_root(root, previous):
+            from .update_btrfs import JOURNAL
+            if (root / JOURNAL).exists():
+                raise UpdateError("Finish the interrupted Btrfs root-layout repair before upgrading packages.")
+        prune_payloads(root)
+        check_installed_system(preparing=True)
+        before = rpm_fingerprint()
+        state = dict(job=uuid.uuid4().hex, started=False, early_upgrade=True, installer=installer)
+        job = job_directory(state, root)
+        job.mkdir(parents=True, mode=0o700)
+        write_state(root, state, "preparing")
+        try:
+            LOG.info("Checking early upgrades for %s before preparing the system update.", " and ".join(EARLY_PACKAGES))
+            result = prepare_early_transaction(job, EARLY_PACKAGES)
+            state["package_origins"] = result["package_origins"]
+            if not result["empty"]:
+                replay(job, test=True)
+                if rpm_fingerprint() != before:
+                    raise UpdateError("Installed packages changed during early upgrade preparation. Try again.")
+                write_state(root, state, "installing-live", started=True)
+                replay(job)
+        except Exception as error:
+            # Repository/solver failures with no RPM writes may be retried.
+            # Partial installs (or an unreadable database) need explicit repair.
+            changed = True
+            try:
+                changed = rpm_fingerprint() != before
+            except Exception:
+                pass
+            write_state(root, state, "failed", started=state["started"] and changed,
+                        error="Early updater/helper upgrade failed: " + str(error),
+                        package_conflicts=getattr(error, "package_conflicts", []))
+            raise UpdateError(state["error"]) from error
+        # Preserve installer kernel-selection expectations and any confirmed
+        # recovery cleanup state until the fresh worker makes the main plan.
+        write_state(root, previous, previous["status"])
+
+
+def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = False) -> None:
+    from .update_plan import prepare_transaction
+    with update_lock(root):
+        previous = preparation_state(root, installer=installer)
+        if not installer:
+            if not maintain_btrfs_root(root, previous):
+                from .update_btrfs import JOURNAL
+                if (root / JOURNAL).exists():
+                    raise UpdateError("An interrupted Btrfs root-layout repair must finish before preparing another update. Review the preceding root-layout error and retry.")
+            cleanup_kernel_retention(previous)
         settings = policy()
         prune_payloads(root)
         for attempt in range(1, settings["prepare_attempts"] + 1):
@@ -369,12 +429,13 @@ def execute(root: Path = STATE_DIR) -> None:
             raise UpdateError(state["error"])
         Path("/run/nobara-updater-offline").touch(mode=0o600)
         TRIGGER.unlink()
+        SPLASH.start(release_upgrade=state.get("source_release") != state.get("target_release"))
         announce("Preparing recovery files. Keep the computer powered on.")
         recovery = create_recovery(job, state["recovery"], boot_space=state.get("boot_space", {}))
         write_state(root, state, "installing", started=True, recovery=recovery)
         arm_report(state)
         trial_boot(recovery)
-        announce("Installing the Nobara system update. Keep the computer powered on; this can take several minutes.")
+        announce("Installing the Nobara system update. Keep the computer powered on; this can take several minutes.", percent=5)
         # All RPMs are local, signatures remain required, and replay checks the
         # exact saved operations. No --ignore-installed/--skip-broken escape.
         replay(job)
@@ -467,8 +528,9 @@ def dkms_status_records(text: str) -> list[dict]:
             if (match := pattern.fullmatch(line.strip()))]
 
 
-def validate_boot(packages: list[dict], *, rebuild_all: bool = False) -> None:
+def validate_boot(packages: list[dict], *, rebuild_all: bool = False, preserved_kernels=()) -> None:
     kernels = set()
+    incoming_boot_kernels = set()
     for item in packages:
         if item["action"] in {"Install", "Upgrade", "Reinstall", "Downgrade"} and item["name"] in {"kernel", "kernel-core", "kernel-modules", "kernel-modules-core"}:
             # Ask RPM for the installed package version rather than parsing a
@@ -476,12 +538,22 @@ def validate_boot(packages: list[dict], *, rebuild_all: bool = False) -> None:
             query = subprocess.run(["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}.%{ARCH}\n", item["nevra"]],
                                    capture_output=True, text=True, check=True)
             kernels.update(query.stdout.splitlines())
+            if item["name"] in {"kernel", "kernel-core"}:
+                incoming_boot_kernels.update(query.stdout.splitlines())
+    preserved = set(preserved_kernels)
+    required = kernels | (set() if incoming_boot_kernels else {os.uname().release})
+    if preserved & required:
+        raise UpdateError("Cannot skip module and boot validation for the selected or updated kernel: "
+                          + ", ".join(sorted(preserved & required)) + ". Prepare the update again from the kernel you intend to use.")
     modules_changed = any(any(part in item["name"] for part in ("dkms", "akmod", "kmod", "dracut")) for item in packages)
     if modules_changed or rebuild_all:
         # A running kernel can differ from the selected/default kernel.
-        # Rebuild every installed bootable kernel after a driver change.
-        kernels.update(p.name for p in Path("/usr/lib/modules").iterdir()
-                       if p.is_dir() and ((p / "vmlinuz").is_file() or (Path("/boot") / ("vmlinuz-" + p.name)).is_file()))
+        # Rebuild installed bootable kernels, except legacy fallbacks whose
+        # unavailable development packages were identified during preparation.
+        kernels.update(installed_boot_kernels())
+    for kernel in sorted(kernels & preserved):
+        LOG.warning("Leaving existing modules and boot files unchanged for retained kernel %s, as planned: matching development files are unavailable.", kernel)
+    kernels -= preserved
     for kernel in sorted(kernels):
         if not re.fullmatch(r"[A-Za-z0-9_.+~-]+", kernel):
             raise UpdateError("Invalid target kernel version.")
@@ -554,8 +626,13 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
             verify_files(job, state["files"])
             if live:
                 LOG.info("Checking the installed application updates.")
+            elif installer:
+                LOG.info("Checking the updated system and building boot files. Keep the computer powered on.")
             else:
-                (LOG.info if installer else announce)("Checking the updated system and building boot files. Keep the computer powered on.")
+                # execute() execs a fresh interpreter after the transaction.
+                # Restore the display state without resetting it to zero.
+                SPLASH.start(release_upgrade=state["source_release"] != state["target_release"], percent=90)
+                announce("Checking the updated system and building boot files. Keep the computer powered on.")
             apply_hooks(state["migrations"]["hooks"])
             normal_entry = None
             if not live:
@@ -563,7 +640,8 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
                     # Feed the active root to dracut/kernel-install, including
                     # when this transaction runs from a prior recovery clone.
                     normal_entry = synchronize_boot_root()
-                validate_boot(state["packages"], rebuild_all=any(hook.startswith("plymouth-") for hook in state["migrations"]["hooks"]))
+                validate_boot(state["packages"], rebuild_all=any(hook.startswith("plymouth-") for hook in state["migrations"]["hooks"]),
+                              preserved_kernels=state.get("preserved_kernels", []))
             # A successful DNF exit must actually have installed every planned
             # inbound RPM (including ordinary updates within the same release).
             for item in state["packages"]:
@@ -574,8 +652,11 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
                 raise UpdateError("Installed release does not match the prepared release.")
             if not live:
                 kernel = newest_updated_kernel(state["packages"])
-                if kernel or normal_entry:
+                if kernel or normal_entry or state.get("preserved_kernels"):
                     kernel = kernel or os.uname().release
+                    # A driver-only update can leave an obsolete fallback
+                    # unchanged. Select the kernel we validated, even when
+                    # GRUB was previously pinned to that legacy fallback.
                     # Pin only after all installation/driver/boot checks pass.
                     # Save the exact expectation for confirmation next boot.
                     # Keep recovery armed throughout validation. Package hooks
@@ -594,8 +675,10 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
                 trial_boot(state["recovery"], entry)
             if live:
                 LOG.info("Application installation and validation finished.")
+            elif installer:
+                LOG.info("Target installation validated. Returning to the installer.")
             else:
-                LOG.info("Target installation validated. Returning to the installer." if installer else "Installation and boot-file validation finished. Restarting…")
+                announce("Installation and boot-file validation finished. Restarting…", percent=100)
         except Exception as error:
             if live:
                 write_state(root, state, "failed", error=str(error))
@@ -605,6 +688,11 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
 def recover(root: Path = STATE_DIR) -> None:
     with update_lock(root):
         state = read_state(root)
+        if state.get("status") in {"complete", "recovered", "live-complete"}:
+            # A service timeout during optional cleanup must not roll back a
+            # confirmed system, especially after its snapshot was retired.
+            LOG.warning("Ignoring recovery request after successful confirmation; inspect the cleanup log instead.")
+            return
         if not state.get("started"):
             if TRIGGER.is_symlink() and TRIGGER.resolve() == root.resolve():
                 TRIGGER.unlink()
@@ -612,6 +700,7 @@ def recover(root: Path = STATE_DIR) -> None:
             return
         recovery = state.get("recovery", {})
         if recovery.get("created"):
+            SPLASH.recovery()
             announce("The update failed. Restarting into the previous system.")
             write_state(root, state, "recovering")
             select_recovery(recovery)
@@ -620,9 +709,29 @@ def recover(root: Path = STATE_DIR) -> None:
             raise UpdateError("Automatic rollback is unavailable. Boot recovery media and inspect /var/lib/nobara-updater/state.json.")
 
 
+def maintain_btrfs_root(root: Path, state: dict) -> bool:
+    """Layout maintenance is optional; failure must not undo a confirmed boot."""
+    from .update_btrfs import restore_root_layout
+    try:
+        restored = restore_root_layout(root, state)
+        if restored:
+            # A legacy completed job may already have retired all its rollback
+            # snapshots. The displaced original root now needs cleanup too.
+            recovery = dict(state.get("recovery", {}), created=True, uuid=restored["uuid"])
+            write_state(root, state, state["status"], btrfs_root_layout=restored,
+                        recovery=recovery, recovery_cleanup_complete=False)
+        return True
+    except Exception:
+        LOG.exception("The system is usable, but its original Btrfs root layout could not be restored; maintenance will retry on the next boot or updater run.")
+        return False
+
+
 def cleanup_confirmed_update(root: Path, state: dict) -> None:
     """Cleanup failures never undo confirmation; retry them on a later boot."""
+    if not maintain_btrfs_root(root, state):
+        return
     if state.get("recovery_cleanup_complete"):
+        cleanup_kernel_retention(state)
         return
     try:
         if state["status"] == "recovered":
@@ -636,13 +745,45 @@ def cleanup_confirmed_update(root: Path, state: dict) -> None:
         prune_recovery(state.get("recovery", {}), state["job"], state_root=root)
         prune_payloads(root)
         write_state(root, state, state["status"], recovery_cleanup_complete=True)
+        cleanup_kernel_retention(state)
     except Exception:
         LOG.exception("System boot confirmed, but recovery cleanup could not finish; it will retry on the next boot.")
+
+
+def prune_kernel_packages(*, obsolete_kernels=()) -> None:
+    # execute() must not load libdnf5 into its parent interpreter before the
+    # native replay process potentially upgrades that library and Python.
+    from .update_retention import prune_kernel_packages as prune
+    prune(obsolete_kernels=obsolete_kernels)
+
+
+def cleanup_kernel_retention(state: dict) -> None:
+    """Keep installation/recovery protected; cleanup never invalidates a boot."""
+    if state.get("status") not in {"complete", "unchanged", "live-complete"}:
+        return
+    if state.get("recovery", {}).get("created") and not state.get("recovery_cleanup_complete"):
+        return
+    try:
+        if (TRIGGER.is_symlink() or TRIGGER.exists()
+                or Path("/etc/nobara-updater-recovery.json").exists()):
+            return
+        environment = grub_environment()
+        if (any(environment.get(key) for key in ("nobara_fallback", "nobara_trial", "next_entry"))
+                or environment.get("saved_entry", "").startswith("nobara-recovery-")):
+            return
+        prune_kernel_packages(obsolete_kernels=state.get("preserved_kernels", []))
+    except Exception as error:
+        LOG.warning("Old-kernel cleanup deferred; it will retry on a later boot or updater run: %s", error)
 
 
 def confirm_boot(root: Path = STATE_DIR) -> None:
     with update_lock(root):
         state = read_state(root)
+        from .update_btrfs import JOURNAL
+        if ((root / JOURNAL).exists() and state.get("status") not in ACTIVE
+                and (not state.get("started") or state.get("status") in {"complete", "recovered", "live-complete"})):
+            if not maintain_btrfs_root(root, state):
+                return
         marker = Path("/etc/nobara-updater-recovery.json")
         if marker.exists():
             recovery = json.loads(marker.read_text())
@@ -682,11 +823,19 @@ def confirm_boot(root: Path = STATE_DIR) -> None:
                         write_state(root, state, state["status"], normal_boot_entry=entry, trial_entry=entry)
                 cleanup_confirmed_update(root, state)
             return
+        if state.get("status") in {"unchanged", "live-complete"}:
+            if maintain_btrfs_root(root, state):
+                if state.get("btrfs_root_layout") and not state.get("recovery_cleanup_complete"):
+                    cleanup_confirmed_update(root, state)
+                else:
+                    cleanup_kernel_retention(state)
+            return
         if state.get("status") in {"ready", "scheduled"} and not state.get("started"):
             reconcile_pending(root, state)
             return
         if state.get("status") in {"installing-live", "validating-live"}:
-            write_state(root, state, "interrupted", error="Application installation was interrupted. Inspect the update log before retrying.")
+            phase = "Early updater/helper upgrade" if state.get("early_upgrade") else "Application installation"
+            write_state(root, state, "interrupted", error=phase + " was interrupted. Inspect the update log before retrying.")
             # Application-only failure must not start the boot-recovery
             # service or force the otherwise usable desktop into emergency.
             LOG.error("%s", state["error"])
@@ -710,7 +859,18 @@ def confirm_boot(root: Path = STATE_DIR) -> None:
         expected_kernel = state.get("boot_selection", {}).get("kernel")
         if expected_kernel and os.uname().release != expected_kernel:
             raise UpdateError(f"The system booted kernel {os.uname().release}, but this update selected {expected_kernel}.")
-        check_installed_packages()
+        # finalize() already checked every installed dependency and duplicate
+        # before saving this inventory. Repeating DNF's per-package RPM checks
+        # on a cold boot can take minutes on an HDD and used to exceed the
+        # confirmation service's deadline. Reuse that result only if RPM can
+        # still read the same complete inventory (including install times).
+        LOG.info("Checking whether the installed package inventory changed since validation.")
+        validated = state.get("installed_fingerprint")
+        if validated and rpm_fingerprint() == validated:
+            LOG.info("Installed packages match the inventory validated before restart.")
+        else:
+            LOG.info("Package inventory changed or no saved validation is available; checking dependencies again.")
+            check_installed_packages()
         if not (Path("/usr/lib/modules") / os.uname().release).is_dir():
             raise UpdateError("Modules for the running kernel are missing.")
         # A desktop install must at least reach its login manager before its

@@ -257,6 +257,43 @@ def record_failure(state: dict, phase: str, error: Exception) -> None:
         LOG.exception("Could not preserve update failure diagnostics.")
 
 
+def record_service_failure(state: dict, phase: str, result: str, exit_code: str, exit_status: str) -> None:
+    """ExecStopPost also runs after a timeout, signal, OOM kill or exec failure.
+
+    Python's exception handler cannot record those failures. Save systemd's
+    result and journal outside the root snapshot before OnFailure rolls back.
+    Never replace a more useful error already recorded by the worker.
+    """
+    if result in {"", "success", "exec-condition"} or not state.get("job") or not state.get("started"):
+        return
+    if state.get("status") in {"complete", "recovered", "live-complete", "installer-complete"}:
+        LOG.warning("Update already confirmed; service stopped during cleanup: %s (%s/%s).",
+                    result, exit_code, exit_status)
+        return
+    try:
+        directory = report_directory(state)
+        path = directory / "failure.json"
+        report = json.loads(path.read_text()) if path.exists() else {}
+        unit = "nobara-updater-confirm.service" if phase == "confirm" else "nobara-updater-offline.service"
+        message = f"{unit} stopped before completion: systemd result={result}, exit code={exit_code}, exit status={exit_status}."
+        if result == "timeout":
+            message += " The service exceeded its time limit; this does not by itself prove a package or kernel failure."
+        LOG.error("%s", message)
+        if report.get("phase") in {None, "installation or startup"}:
+            record_failure(state, phase, UpdateError(message))
+        else:
+            # Preserve both the primary error and its journal, including when
+            # finalization already reported a real package/boot-file failure.
+            report["service_failure"] = dict(unit=unit, result=result, exit_code=exit_code, exit_status=exit_status)
+            atomic_json(path, report)
+            capture_journal(directory / f"failure-{phase}-journal.log")
+            if not state.get("recovery", {}).get("created"):
+                publish_failure(state)
+            os.sync()
+    except Exception:
+        LOG.exception("Could not preserve service failure diagnostics.")
+
+
 def publish_recovery(job: str) -> dict:
     """Import from separate /boot into the restored system for desktop users."""
     return publish_report(job, BOOT_REPORTS / valid_job(job), recovered=True, started=True)
@@ -275,7 +312,7 @@ def publish_report(job: str, directory: Path, *, recovered: bool, started: bool,
     report.update(job=job, recovered=recovered, installation_started=started, active=True)
     detail = "\n".join(tail(directory / name) for name in (
         "failure.log.1", "failure.log", "failure-build.log", "failure-journal.log",
-        "failure-confirm-journal.log", "failure-recover-journal.log"))
+        "failure-confirm-journal.log", "failure-execute-journal.log", "failure-recover-journal.log"))
     if not detail.strip():
         detail = "No separate failed-boot log was preserved. This updater log may be incomplete.\n" + tail(STATE_DIR / "update.log")
     guidance = instructions(recovered, started)

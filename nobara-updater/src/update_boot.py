@@ -22,6 +22,15 @@ KERNEL_CMDLINE = Path("/etc/kernel/cmdline")
 INBOUND = {"Install", "Upgrade", "Downgrade", "Reinstall"}
 
 
+def installed_boot_kernels(root: Path = Path("/")) -> set[str]:
+    """Ignore leftover module directories which have no kernel image to boot."""
+    modules = root / "usr/lib/modules"
+    if not modules.is_dir():
+        return set()
+    return {p.name for p in modules.iterdir() if p.is_dir()
+            and ((p / "vmlinuz").is_file() or (root / "boot" / ("vmlinuz-" + p.name)).is_file())}
+
+
 def boot_space_requirements(packages, hooks, *, boot=BOOT) -> dict[str, int]:
     """Budget new images and one temporary rebuild, excluding generic rescue images."""
     mib = 1024**2

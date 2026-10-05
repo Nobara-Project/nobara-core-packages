@@ -129,10 +129,11 @@ class InstallerTargetTests(unittest.TestCase):
         state.write_state(self.root, dict(self.ready), "validating", started=True)
         with patch.object(backend, "run") as run, patch.object(backend, "apply_hooks"), \
              patch.object(backend, "validate_boot"), patch.object(backend, "os_release", return_value="44"), \
-             patch.object(backend, "announce") as announce:
+             patch.object(backend, "announce") as announce, patch.object(backend, "SPLASH") as splash:
             backend.finalize(self.root, installer=True)
         self.assertEqual(state.read_state(self.root)["status"], "installer-complete")
         announce.assert_not_called()
+        splash.start.assert_not_called()
         self.assertEqual([call.args[0] for call in run.call_args_list], [["dnf5", "--disable-repo=*", "check", "--dependencies", "--duplicates"]])
         # Calamares next invokes install-codecs. It must not be blocked by a
         # pending desktop reboot or the first installer's started marker.
@@ -157,7 +158,7 @@ class InstallerTargetTests(unittest.TestCase):
         with patch.object(backend, "run"), patch.object(backend, "os_release", return_value="44"), \
              patch.object(backend, "validate_boot") as validate:
             backend.finalize(self.root, installer=True)
-        validate.assert_called_once_with([], rebuild_all=True)
+        validate.assert_called_once_with([], rebuild_all=True, preserved_kernels=[])
 
     def test_chroot_detection_uses_explicit_probe_and_rejects_probe_errors(self):
         with patch.object(state.subprocess, "run", return_value=Mock(returncode=0, stderr="")) as run:

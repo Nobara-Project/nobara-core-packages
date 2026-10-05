@@ -5,6 +5,7 @@ from collections import defaultdict
 import logging
 
 import rpm
+import libdnf5.rpm as rpm_api
 import libdnf5.transaction as trans
 
 from .update_state import UpdateError
@@ -15,6 +16,23 @@ OUTBOUND = {trans.TransactionItemAction_REMOVE, trans.TransactionItemAction_REPL
 
 def full_nevra(header):
     return header.sprintf("%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}")
+
+
+def requirement_satisfied(packages, requirement):
+    """Check providers in the proposed final set, not all repository RPMs."""
+    dependency = rpm_api.Reldep(packages.get_base(), requirement)
+    check_satisfied = getattr(packages, "is_dep_satisfied", None)
+    if check_satisfied is not None:
+        # This also evaluates rich dependencies against the entire set.
+        return check_satisfied(dependency)
+    # Older DNF5 versions lack the set-level rich dependency check. Keep
+    # those expressions in the repair goal for native solver evaluation;
+    # a provides query alone cannot evaluate conditionals or conjunctions.
+    if rpm_api.Reldep.is_rich_dependency(requirement):
+        return False
+    providers = rpm_api.PackageQuery(packages)
+    providers.filter_provides(dependency)
+    return not providers.empty()
 
 
 class PackageHealth:
@@ -51,13 +69,16 @@ class PackageHealth:
         return {item.get_package().get_rpmdbid() for item in transaction.get_transaction_packages()
                 if item.get_action() in OUTBOUND}
 
-    def repair_requirements(self, transaction):
+    def repair_requirements(self, transaction, projected):
         """Re-resolve requirements of broken RPMs that will remain installed.
 
         Distro-sync alone does not revisit dependencies of unchanged RPMs.
-        Let DNF solve these requirements (including rich dependencies) rather
-        than selecting a provider or architecture ourselves. Requirements of
-        an RPM already being replaced must not pull in its obsolete ABI.
+        Let DNF solve missing requirements (including rich dependencies).
+        Do not re-request requirements already satisfied by retained or
+        incoming RPMs: an explicit provide-install applies repository
+        priorities and can force a different, conflicting codec provider.
+        Requirements of an RPM already being replaced must not pull in its
+        obsolete ABI.
         """
         problems = self.check(self.installed.values())
         broken = {problem.altNEVR for problem in problems if problem.type == rpm.RPMPROB_REQUIRES}
@@ -70,8 +91,9 @@ class PackageHealth:
             self.repair_packages.append(full_nevra(header))
             for dependency in rpm.ds(header, rpm.RPMTAG_REQUIRENAME):
                 requirement = dependency.DNEVR()[2:]  # Strip the RPM dependency kind, "R ".
-                if not requirement.startswith("rpmlib("):
+                if not requirement.startswith("rpmlib(") and not requirement_satisfied(projected, requirement):
                     requirements.add(requirement)
+                    LOG.info("Missing dependency of %s: %s", full_nevra(header), requirement)
         return requirements
 
     def validate(self, transaction, payloads):

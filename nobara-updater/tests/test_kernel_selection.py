@@ -177,9 +177,13 @@ class KernelWorkflowTests(unittest.TestCase):
                           migrations={"hooks": []}, packages=PACKAGES)
         state.write_state(self.root, dict(self.saved), "validating")
         for patcher in (patch.object(backend, "run"), patch.object(backend, "announce"),
+                        patch.object(backend, "SPLASH"),
+                        patch.object(backend, "maintain_btrfs_root", return_value=True),
                         patch.object(backend, "synchronize_boot_root", return_value=None),
                         patch.object(backend, "prune_recovery"), patch.object(backend, "prune_payloads"),
                         patch.object(backend, "resolve_notice"),
+                        patch.object(backend, "prune_kernel_packages"),
+                        patch.object(backend, "grub_environment", return_value={}),
                         patch.object(backend, "os_release", return_value="44"),
                         patch.object(backend, "rpm_fingerprint", return_value="fixture")):
             patcher.start()
@@ -195,6 +199,8 @@ class KernelWorkflowTests(unittest.TestCase):
         self.assertEqual(events, ["validate", "pin"])
         self.assertEqual(state.read_state(self.root)["boot_selection"], selection)
         self.assertEqual(state.read_state(self.root)["status"], "awaiting-boot")
+        backend.SPLASH.start.assert_called_once_with(release_upgrade=False, percent=90)
+        self.assertEqual(backend.announce.call_args.kwargs, {"percent": 100})
 
     def test_boot_validation_failure_never_pins_kernel(self):
         with patch.object(backend, "validate_boot", side_effect=state.UpdateError("module build failed")), \
@@ -203,6 +209,27 @@ class KernelWorkflowTests(unittest.TestCase):
                 backend.finalize(self.root)
         pin.assert_not_called()
         self.assertEqual(state.read_state(self.root)["status"], "validating")
+        self.assertFalse(any(invocation.kwargs.get("percent") == 100 for invocation in backend.announce.call_args_list))
+
+    def test_finalization_passes_preserved_kernel_plan_to_validation(self):
+        state.write_state(self.root, dict(self.saved), "validating", preserved_kernels=["old-kernel"])
+        with patch.object(backend, "validate_boot") as validate, \
+             patch.object(backend, "newest_updated_kernel", return_value=KERNEL), \
+             patch.object(backend, "pin_kernel", return_value=dict(kernel=KERNEL, entry="normal", loader="grub")):
+            backend.finalize(self.root)
+        validate.assert_called_once_with(PACKAGES, rebuild_all=False, preserved_kernels=["old-kernel"])
+
+    def test_driver_only_update_pins_validated_kernel_when_legacy_kernel_was_preserved(self):
+        packages = [dict(name="dkms", action="Upgrade", nevra="dkms-1-1.noarch")]
+        state.write_state(self.root, dict(self.saved), "validating", packages=packages, preserved_kernels=["old-kernel"])
+        selection = dict(kernel=KERNEL, entry="normal", loader="grub")
+        with patch.object(backend, "validate_boot"), \
+             patch.object(backend, "newest_updated_kernel", return_value=None), \
+             patch.object(backend.os, "uname", return_value=Mock(release=KERNEL)), \
+             patch.object(backend, "pin_kernel", return_value=selection) as pin:
+            backend.finalize(self.root)
+        pin.assert_called_once_with(KERNEL)
+        self.assertEqual(state.read_state(self.root)["boot_selection"], selection)
 
     def test_update_from_recovered_root_trials_normal_entry_even_without_kernel_update(self):
         recovery = dict(created=True, entry="/boot/loader/entries/nobara-recovery-old.conf")
@@ -249,6 +276,51 @@ class KernelWorkflowTests(unittest.TestCase):
             self.assertTrue(state.read_state(self.root)["recovery_cleanup_complete"])
             backend.confirm_boot(self.root)
             self.assertEqual(prune.call_count, 2)
+
+    def test_kernel_retention_runs_after_recovery_cleanup_and_retries_nonfatally(self):
+        events = []
+        state.write_state(self.root, dict(self.saved), "complete", normal_boot_entry="normal",
+                          recovery={"created": True})
+        with patch.object(backend, "prune_recovery", side_effect=lambda *a, **kw: events.append("recovery")), \
+             patch.object(backend, "prune_kernel_packages", side_effect=[state.UpdateError("DNF busy"), None]) as prune, \
+             patch.object(Path, "exists", return_value=False), patch.object(Path, "is_symlink", return_value=False):
+            with self.assertLogs(backend.LOG, level="WARNING"):
+                backend.confirm_boot(self.root)
+            self.assertEqual(events, ["recovery"])
+            self.assertEqual(state.read_state(self.root)["status"], "complete")
+            self.assertTrue(state.read_state(self.root)["recovery_cleanup_complete"])
+            backend.confirm_boot(self.root)
+            self.assertEqual(prune.call_count, 2)
+
+    def test_kernel_retention_does_not_run_before_recovery_cleanup_succeeds(self):
+        saved = dict(self.saved, status="complete", recovery={"created": True})
+        backend.cleanup_kernel_retention(saved)
+        backend.prune_kernel_packages.assert_not_called()
+
+    def test_kernel_retention_receives_obsolete_versions_only_after_confirmation(self):
+        saved = dict(self.saved, preserved_kernels=["6.12.6-200.fsync.fc41.x86_64"],
+                     status="complete", recovery_cleanup_complete=True)
+        with patch.object(Path, "exists", return_value=False), patch.object(Path, "is_symlink", return_value=False):
+            backend.cleanup_kernel_retention(saved)
+        backend.prune_kernel_packages.assert_called_once_with(obsolete_kernels=saved["preserved_kernels"])
+
+    def test_kernel_retention_skips_active_failed_recovered_and_installer_states(self):
+        for status in ("ready", "scheduled", "installing", "validating", "awaiting-boot", "failed",
+                       "interrupted", "recovering", "recovered", "installer-complete"):
+            backend.cleanup_kernel_retention(dict(self.saved, status=status))
+        backend.prune_kernel_packages.assert_not_called()
+
+    def test_kernel_retention_skips_armed_boot_entries_and_recovery_markers(self):
+        saved = dict(self.saved, status="complete", recovery_cleanup_complete=True)
+        with patch.object(Path, "exists", return_value=False), patch.object(Path, "is_symlink", return_value=False):
+            for key in ("nobara_fallback", "nobara_trial", "next_entry"):
+                with patch.object(backend, "grub_environment", return_value={key: "entry"}):
+                    backend.cleanup_kernel_retention(saved)
+            with patch.object(backend, "grub_environment", return_value={"saved_entry": "nobara-recovery-old"}):
+                backend.cleanup_kernel_retention(saved)
+        with patch.object(Path, "exists", return_value=True):
+            backend.cleanup_kernel_retention(saved)
+        backend.prune_kernel_packages.assert_not_called()
 
     def test_recovery_diagnostics_must_be_imported_before_snapshot_cleanup(self):
         state.write_state(self.root, dict(self.saved), "recovered", normal_boot_entry="normal", recovery={"created": True})
@@ -315,6 +387,62 @@ class KernelWorkflowTests(unittest.TestCase):
         pin.assert_called_once_with(KERNEL)
         self.assertEqual(state.read_state(self.root)["status"], "installer-complete")
         self.assertEqual(state.read_state(self.root)["boot_selection"]["kernel"], KERNEL)
+
+    def test_unchanged_validated_inventory_avoids_second_full_dependency_scan(self):
+        state.write_state(self.root, dict(self.saved), "awaiting-boot", installed_fingerprint="fixture",
+                          boot_selection=dict(kernel=KERNEL), trial_entry="normal")
+        with patch.object(backend.os, "uname", return_value=Mock(release=KERNEL)), \
+             patch.object(Path, "is_dir", return_value=True), patch.object(Path, "unlink"), \
+             patch.object(Path, "exists", lambda p: str(p) == "/etc/systemd/system/display-manager.service"), \
+             patch.object(backend, "check_installed_packages") as check, \
+             patch.object(backend, "confirm_trial") as confirmed:
+            backend.confirm_boot(self.root)
+        check.assert_not_called()
+        backend.run.assert_called_once_with(["systemctl", "is-active", "--quiet", "display-manager.service"])
+        confirmed.assert_called_once_with("normal")
+        self.assertEqual(state.read_state(self.root)["status"], "complete")
+
+    def test_changed_and_legacy_inventories_still_require_dependency_check(self):
+        for fingerprint in ("different-packages", None):
+            with self.subTest(fingerprint=fingerprint):
+                state.write_state(self.root, dict(self.saved), "awaiting-boot", installed_fingerprint=fingerprint)
+                with patch.object(Path, "exists", return_value=False), \
+                     patch.object(backend, "check_installed_packages", side_effect=state.UpdateError("broken dependency")) as check, \
+                     patch.object(backend, "confirm_trial") as confirmed:
+                    with self.assertRaisesRegex(state.UpdateError, "broken dependency"):
+                        backend.confirm_boot(self.root)
+                check.assert_called_once()
+                confirmed.assert_not_called()
+                self.assertEqual(state.read_state(self.root)["status"], "awaiting-boot")
+
+    def test_unreadable_inventory_never_reuses_saved_validation(self):
+        state.write_state(self.root, dict(self.saved), "awaiting-boot", installed_fingerprint="fixture")
+        with patch.object(Path, "exists", return_value=False), \
+             patch.object(backend, "rpm_fingerprint", side_effect=state.UpdateError("RPM database unreadable")), \
+             patch.object(backend, "confirm_trial") as confirmed:
+            with self.assertRaisesRegex(state.UpdateError, "RPM database unreadable"):
+                backend.confirm_boot(self.root)
+        confirmed.assert_not_called()
+        backend.prune_recovery.assert_not_called()
+
+    def test_matching_inventory_does_not_hide_missing_running_kernel_modules(self):
+        state.write_state(self.root, dict(self.saved), "awaiting-boot", installed_fingerprint="fixture")
+        is_dir = Path.is_dir
+        with patch.object(Path, "exists", return_value=False), \
+             patch.object(Path, "is_dir", lambda p: False if p.parent == Path("/usr/lib/modules") else is_dir(p)), \
+             patch.object(backend, "confirm_trial") as confirmed:
+            with self.assertRaisesRegex(state.UpdateError, "Modules for the running kernel are missing"):
+                backend.confirm_boot(self.root)
+        confirmed.assert_not_called()
+        backend.prune_recovery.assert_not_called()
+
+    def test_failed_installation_check_never_saves_validated_inventory(self):
+        with patch.object(backend, "validate_boot"), \
+             patch.object(backend, "check_installed_packages", side_effect=state.UpdateError("broken dependency")):
+            with self.assertRaisesRegex(state.UpdateError, "broken dependency"):
+                backend.finalize(self.root)
+        self.assertNotIn("installed_fingerprint", state.read_state(self.root))
+        backend.rpm_fingerprint.assert_not_called()
 
     def test_following_installer_codec_transaction_retains_kernel_expectation(self):
         from nobara_updater import update_plan as planner

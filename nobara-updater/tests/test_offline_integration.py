@@ -18,7 +18,7 @@ import tomllib
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 SOURCE = Path(__file__).resolve().parents[1] / "src"
 if "nobara_updater" not in sys.modules:
@@ -32,6 +32,8 @@ import libdnf5.repo as r
 from nobara_updater import update_plan as planner
 from nobara_updater import update_backend as backend
 from nobara_updater import update_origins as origins
+from nobara_updater import update_retention as retention
+import libdnf5.rpm as rpm_api
 from nobara_updater.update_migrations import MigrationPlan, plan_migrations
 from nobara_updater.update_plan import configure_base
 from nobara_updater.update_state import UpdateError, verify_files
@@ -241,6 +243,172 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts", "--noplugins",
                         "--ignoresize", "-i", str(package)], check=True, capture_output=True)
         self.set_origin(name + "." + arch, origin)
+
+    def install_retention_fixtures(self):
+        cls = type(self)
+        if not hasattr(cls, "retention_rpms"):
+            cls.retention_rpms = []
+            for version in ("7.2.3", "7.2.4", "7.2.8", "7.2.10"):
+                for name in ("kernel", "kernel-core", "kernel-modules", "kernel-devel"):
+                    headers = "Provides: installonlypkg(kernel)"
+                    if name != "kernel-core":
+                        headers += f"\nRequires: kernel-core = {version}-1"
+                    cls.retention_rpms.append(cls.build_rpm(name, version, headers=headers,
+                        payload=f"/usr/share/retention/{name}/{version}"))
+        subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts", "--noplugins",
+                        "--ignoresize", "-i", *map(str, cls.retention_rpms)], check=True, capture_output=True)
+
+    def retention_base(self, limit=3):
+        self.install_retention_fixtures()
+        base = self.base(self.job)
+        base.get_config().get_installonly_limit_option().set(limit)
+        return base
+
+    def running_fixture(self, base, version="7.2.10"):
+        query = rpm_api.PackageQuery(base)
+        query.filter_installed()
+        query.filter_name(["kernel-core"])
+        query.filter_version([version])
+        return next(iter(query))
+
+    def test_retention_removes_oldest_complete_kernel_set_with_rpm_version_order(self):
+        base = self.retention_base()
+        with patch.object(rpm_api.PackageSackWeakPtr, "get_running_kernel", return_value=self.running_fixture(base)):
+            transaction = retention.plan_cleanup(base)
+        removed = {(item.get_package().get_name(), item.get_package().get_version())
+                   for item in transaction.get_transaction_packages()}
+        self.assertEqual(removed, {(name, "7.2.3") for name in
+                                  ("kernel", "kernel-core", "kernel-modules", "kernel-devel")})
+
+    def test_retention_respects_custom_limits_and_preserves_entire_running_kernel_set(self):
+        base = self.retention_base(2)
+        with patch.object(rpm_api.PackageSackWeakPtr, "get_running_kernel", return_value=self.running_fixture(base, "7.2.3")):
+            transaction = retention.plan_cleanup(base)
+        self.assertEqual({item.get_package().get_version() for item in transaction.get_transaction_packages()}, {"7.2.4"})
+
+    def test_unlimited_retention_does_not_remove_anything(self):
+        base = self.retention_base(0)
+        with patch.object(rpm_api.PackageSackWeakPtr, "get_running_kernel") as running:
+            self.assertIsNone(retention.plan_cleanup(base))
+        running.assert_not_called()
+
+    def test_unknown_running_kernel_prevents_retention_removals(self):
+        base = self.retention_base()
+        with self.assertRaisesRegex(UpdateError, "Cannot identify the running kernel"):
+            retention.plan_cleanup(base)
+
+    def test_retention_refuses_to_remove_non_kernel_dependents(self):
+        self.install_health_fixture("user-driver", headers="Requires: kernel-core = 7.2.3-1")
+        base = self.retention_base()
+        with patch.object(rpm_api.PackageSackWeakPtr, "get_running_kernel", return_value=self.running_fixture(base)):
+            with self.assertRaises(UpdateError):
+                retention.plan_cleanup(base)
+
+    def install_versioned_kmod(self, kernel, *, requires=""):
+        name = "kmod-v4l2loopback-" + kernel
+        self.install_health_fixture(name, "0.13.2", origin="@commandline", headers=requires)
+        return name
+
+    def cleanup_names(self, base, *, obsolete=(), running="7.2.10"):
+        with patch.object(rpm_api.PackageSackWeakPtr, "get_running_kernel",
+                          return_value=self.running_fixture(base, running)):
+            transaction = retention.plan_cleanup(base, obsolete_kernels=obsolete)
+        return {(item.get_package().get_name(), item.get_package().get_version())
+                for item in transaction.get_transaction_packages()} if transaction else set()
+
+    def test_retention_removes_explicit_obsolete_set_and_generated_kmods_below_limit(self):
+        old = "7.2.8-1.noarch"
+        kmod = self.install_versioned_kmod(old, requires="Requires: kernel-core = 7.2.8-1")
+        unrelated = self.install_versioned_kmod("7.2.4-1.noarch")
+        self.install_health_fixture("labwc", "7.2.8", origin="@commandline")
+        self.install_health_fixture("kernel-headers", "7.2.8")
+        base = self.retention_base(0)
+        removed = self.cleanup_names(base, obsolete=[old])
+        self.assertEqual(removed, {(name, "7.2.8") for name in
+                                  ("kernel", "kernel-core", "kernel-modules", "kernel-devel")} | {(kmod, "0.13.2")})
+        self.assertNotIn((unrelated, "0.13.2"), removed)
+
+    def test_retention_removes_module_only_and_kmod_only_legacy_remnants(self):
+        old = "6.12.6-1.noarch"
+        self.install_health_fixture("kernel-modules-core", "6.12.6", origin="<unknown>",
+                                    headers=f"Provides: kernel-uname-r = {old}\nProvides: installonlypkg(kernel-module)")
+        self.install_health_fixture("kernel-devel", "6.12.6", headers="Provides: installonlypkg(kernel)",
+                                    payload="/usr/src/kernels/6.12.6/Makefile")
+        kmods = {self.install_versioned_kmod(old), self.install_versioned_kmod("6.12.9-1.noarch")}
+        base = self.retention_base(0)
+        removed = self.cleanup_names(base)
+        self.assertEqual(removed, {("kernel-modules-core", "6.12.6"), ("kernel-devel", "6.12.6")}
+                         | {(name, "0.13.2") for name in kmods})
+
+    def test_retention_preserves_entire_running_set_even_if_marked_obsolete(self):
+        current = "7.2.10-1.noarch"
+        self.install_versioned_kmod(current)
+        base = self.retention_base(0)
+        self.assertEqual(self.cleanup_names(base, obsolete=[current]), set())
+
+    def test_retention_cleans_generated_kmods_with_normal_limit_removal(self):
+        old_kmod = self.install_versioned_kmod("7.2.3-1.noarch", requires="Requires: kernel-core = 7.2.3-1")
+        current_kmod = self.install_versioned_kmod("7.2.10-1.noarch")
+        base = self.retention_base()
+        removed = self.cleanup_names(base)
+        self.assertIn((old_kmod, "0.13.2"), removed)
+        self.assertNotIn((current_kmod, "0.13.2"), removed)
+
+    def test_retention_keeps_other_boot_images_and_future_kernel_remnants(self):
+        old = "6.12.6-1.noarch"
+        self.install_health_fixture("kernel-modules-core", "6.12.6",
+                                    headers=f"Provides: kernel-uname-r = {old}")
+        self.install_versioned_kmod(old)
+        (self.root / "boot").mkdir()
+        (self.root / "boot" / ("vmlinuz-" + old)).write_text("manually managed boot image")
+        self.install_health_fixture("kernel-modules-extra", "9.0.0",
+                                    headers="Provides: kernel-uname-r = 9.0.0-1.noarch")
+        self.install_versioned_kmod("9.0.0-1.noarch")
+        base = self.retention_base(0)
+        # The installed fixture core RPMs also have no on-disk boot images:
+        # missing files alone must never identify a kernel as an orphan.
+        self.assertEqual(self.cleanup_names(base), set())
+
+    def test_retention_obsolete_cleanup_refuses_unrelated_dependency_removals(self):
+        self.install_health_fixture("local-tool", origin="@commandline", headers="Requires: kernel-core = 7.2.8-1")
+        base = self.retention_base(0)
+        with self.assertRaises(UpdateError):
+            self.cleanup_names(base, obsolete=["7.2.8-1.noarch"])
+
+    def test_retention_keeps_generic_kmod_packages_and_standalone_development_files(self):
+        for name in ("kmod", "kmod-libs", "kmod-v4l2loopback", "akmod-v4l2loopback"):
+            self.install_health_fixture(name, "6.12.6")
+        self.install_health_fixture("kernel-lto-devel", "6.12.6",
+                                    headers="Provides: kernel-devel-uname-r = 6.12.6-1.noarch\nProvides: installonlypkg(kernel)")
+        base = self.retention_base(0)
+        self.assertEqual(self.cleanup_names(base), set())
+
+    def test_retention_runs_real_removal_only_in_disposable_root(self):
+        old_kmod = self.install_versioned_kmod("7.2.8-1.noarch", requires="Requires: kernel-core = 7.2.8-1")
+        current_kmod = self.install_versioned_kmod("7.2.10-1.noarch")
+        installed = self.retention_base()
+        running = self.running_fixture(installed)
+        installed.unlock_system_repo()
+        base = b.Base()
+        config_path = self.root / "cleanup.conf"
+        config_path.write_text("[main]\ninstallonly_limit=3\n")
+        config = base.get_config()
+        for name, value in {"installroot": str(self.root), "config_file_path": str(config_path),
+                            "reposdir": [], "plugins": False, "use_host_config": True}.items():
+            getattr(config, f"get_{name}_option")().set(value)
+        base.get_vars().set("releasever", "44")
+        with patch.object(retention.base_api, "Base", return_value=base), \
+             patch.object(rpm_api.PackageSackWeakPtr, "get_running_kernel", return_value=running):
+            retention.prune_kernel_packages(obsolete_kernels=["7.2.8-1.noarch"])
+        inventory = subprocess.run(["rpm", "--root", str(self.root), "-qa", "--qf", "%{NAME}|%{VERSION}\n"],
+                                   check=True, capture_output=True, text=True).stdout
+        self.assertNotIn("|7.2.3", inventory)
+        self.assertNotIn("|7.2.8", inventory)
+        self.assertNotIn(old_kmod, inventory)
+        self.assertIn(current_kmod, inventory)
+        for version in ("7.2.4", "7.2.10"):
+            for name in ("kernel", "kernel-core", "kernel-modules", "kernel-devel"):
+                self.assertIn(f"{name}|{version}\n", inventory)
 
     def health_check_command(self, *options):
         return ["dnf5", "--installroot=" + str(self.root), "--releasever=44", "--config=/dev/null",
@@ -548,11 +716,82 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertFalse(any(p["name"] == "labwc" for p in result["packages"]))
         self.assertTrue(any(p["name"] == "custom-runtime" and p["action"] == "Install" for p in result["packages"]))
 
+    def competing_dependency_providers(self, *, selection="migration", rich=False):
+        requirement = "(shared-codec-abi and retained-helper)" if rich else "shared-codec-abi"
+        self.install_health_fixture("media-client", headers=f"Requires: {requirement}\nRequires: missing-runtime")
+        if rich:
+            self.install_health_fixture("retained-helper")
+        if selection == "migration":
+            self.install_health_fixture("alternate-codec", headers="Provides: shared-codec-abi = 1")
+        elif selection == "retained":
+            self.install_health_fixture("selected-codec", headers="Provides: shared-codec-abi = 1")
+        self.add_obsolete_repo_package("selected-codec", "1", headers="Provides: shared-codec-abi = 1")
+        self.add_obsolete_repo_package("alternate-codec", "2",
+                                       headers="Provides: shared-codec-abi = 2\nConflicts: selected-codec")
+        media = Path(self.case.name) / "media"
+        media.mkdir()
+        shutil.copy2(self.top / "RPMS/noarch/alternate-codec-2-1.noarch.rpm", media)
+        subprocess.run(["createrepo_c", str(media)], check=True, capture_output=True)
+        (self.root / "fixture-repos").mkdir()
+        (self.root / "fixture-repos/media.repo").write_text(
+            f"[media]\nname=Media\nbaseurl={media.as_uri()}\nenabled=1\npriority=25\n")
+        self.add_obsolete_repo_package("missing-runtime", "1")
+        if selection != "retained":
+            self.migrations = MigrationPlan(remove={"alternate-codec"} if selection == "migration" else set(),
+                                            install={"selected-codec"})
+
+    def assert_dependency_repair_keeps_selected_provider(self):
+        result = self.prepare()
+        self.assertTrue(any(p["name"] == "missing-runtime" and p["action"] == "Install" for p in result["packages"]))
+        self.assertFalse(any(p["name"] == "alternate-codec" and p["action"] != "Remove" for p in result["packages"]))
+        self.assertFalse(any(p["name"] == "selected-codec" and p["action"] in {"Remove", "Replaced"}
+                             for p in result["packages"]))
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        self.check_fixture_health()
+
+    def test_dependency_repair_preserves_migrated_provider_for_satisfied_requirement(self):
+        self.competing_dependency_providers()
+        self.assert_dependency_repair_keeps_selected_provider()
+
+    def test_dependency_repair_preserves_retained_provider_for_satisfied_requirement(self):
+        self.competing_dependency_providers(selection="retained")
+        self.assert_dependency_repair_keeps_selected_provider()
+
+    def test_dependency_repair_uses_missing_provider_already_in_transaction(self):
+        self.competing_dependency_providers(selection="new")
+        self.assert_dependency_repair_keeps_selected_provider()
+
+    def test_dependency_repair_preserves_satisfied_rich_requirement(self):
+        self.competing_dependency_providers(rich=True)
+        self.assert_dependency_repair_keeps_selected_provider()
+
+    def test_dependency_repair_checks_selected_providers_with_older_dnf5(self):
+        self.competing_dependency_providers()
+        with patch.object(rpm_api.PackageQuery, "is_dep_satisfied", None, create=True):
+            self.assert_dependency_repair_keeps_selected_provider()
+
     def test_rich_dependencies_are_repaired_by_native_solver(self):
         self.install_health_fixture("client", headers="Requires: (addon-a or addon-b)")
         self.add_obsolete_repo_package("addon-b", "1")
         result = self.prepare()
         self.assertTrue(any(p["name"] == "addon-b" and p["action"] == "Install" for p in result["packages"]))
+
+    def test_rich_dependencies_are_repaired_with_older_dnf5(self):
+        with patch.object(rpm_api.PackageQuery, "is_dep_satisfied", None, create=True):
+            self.test_rich_dependencies_are_repaired_by_native_solver()
+
+    def test_dependency_repair_does_not_use_provider_being_removed(self):
+        self.install_health_fixture("client", headers="Requires: shared-abi\nRequires: missing-runtime")
+        self.install_health_fixture("old-provider", headers="Provides: shared-abi")
+        self.add_obsolete_repo_package("new-provider", "1", headers="Provides: shared-abi")
+        self.add_obsolete_repo_package("missing-runtime", "1")
+        self.migrations = MigrationPlan(remove={"old-provider"})
+        result = self.prepare()
+        self.assertTrue(any(p["name"] == "new-provider" and p["action"] == "Install" for p in result["packages"]))
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        self.check_fixture_health()
 
     def test_replacing_broken_consumer_does_not_pull_obsolete_abi(self):
         self.install_health_fixture("kpipewire", "1", headers="Requires: ffmpeg7-abi")
@@ -727,12 +966,12 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         with self.assertRaisesRegex(UpdateError, "duplicate"):
             self.check_fixture_health()
 
-    def updater_fixture(self, repository_version):
-        installed = self.build_rpm("nobara-updater", "2")
-        available = self.build_rpm("nobara-updater", repository_version)
+    def updater_fixture(self, repository_version, name="nobara-updater"):
+        installed = self.build_rpm(name, "2")
+        available = self.build_rpm(name, repository_version)
         subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts", "--noplugins",
                         "--ignoresize", "-i", str(installed)], check=True, capture_output=True)
-        self.set_origin("nobara-updater", "nobara")
+        self.set_origin(name, "nobara")
         private_repo = Path(self.case.name) / "updater-repo"
         shutil.copytree(self.repo, private_repo)
         shutil.copy2(available, private_repo)
@@ -753,6 +992,62 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         # validate the exact saved transaction using only its bundled RPMs.
         replay = subprocess.run(self.replay_command(test=True), capture_output=True, text=True)
         self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+
+    def test_distro_sync_preserves_newer_installed_drm_awaiter(self):
+        self.updater_fixture("1", "drm-awaiter")
+        result = self.prepare()
+        self.assertFalse(any(p["name"] == "drm-awaiter" for p in result["packages"]))
+
+    def prepare_early(self):
+        with patch.object(planner, "configure_base", side_effect=self.base), \
+             patch.object(planner, "os_release", return_value="44"), \
+             patch.object(planner, "boot_space_requirements", side_effect=AssertionError("Too early for boot-space checks")), \
+             patch.object(planner, "plan_migrations", side_effect=AssertionError("Too early for main fixups")):
+            return planner.prepare_early_transaction(self.job, backend.EARLY_PACKAGES)
+
+    def test_early_upgrade_selects_both_helpers_but_leaves_unrelated_updates(self):
+        self.updater_fixture("3")
+        self.install_health_fixture("drm-awaiter", "1")
+        shutil.copy2(self.build_rpm("drm-awaiter", "2"), self.repo)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+        result = self.prepare_early()
+        self.assertFalse(result["empty"])
+        saved = json.loads((self.job / "transaction.json").read_text())
+        # The native serialized NEVRA omits epoch 0; identify via package paths.
+        payloads = {Path(p["package_path"]).name for p in saved["rpms"] if "package_path" in p}
+        self.assertEqual(payloads, {"nobara-updater-3-1.noarch.rpm", "drm-awaiter-2-1.noarch.rpm"})
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        installed = subprocess.run(["rpm", "--root", str(self.root), "-q", "nobara-updater", "drm-awaiter",
+                                    "nobara-offline-fixture", "--qf", "%{NAME}=%{VERSION}\n"],
+                                   check=True, capture_output=True, text=True).stdout
+        self.assertEqual(set(installed.splitlines()), {"nobara-updater=3", "drm-awaiter=2", "nobara-offline-fixture=1"})
+
+    def test_early_upgrade_does_not_downgrade_or_install_absent_helper(self):
+        self.updater_fixture("1")
+        shutil.copy2(self.build_rpm("drm-awaiter", "4"), self.repo)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+        self.assertTrue(self.prepare_early()["empty"])
+        self.assertFalse((self.job / "transaction.json").exists())
+
+    def test_early_upgrade_keeps_local_updater_build(self):
+        self.updater_fixture("3")
+        self.set_origin("nobara-updater", "@commandline")
+        self.assertTrue(self.prepare_early()["empty"])
+
+    def test_early_upgrade_cannot_replace_a_local_dependency(self):
+        self.install_health_fixture("drm-awaiter", "1")
+        self.install_health_fixture("labwc", "1", origin="@commandline")
+        private_repo = Path(self.case.name) / "early-repo"
+        shutil.copytree(self.repo, private_repo)
+        for package in (self.build_rpm("drm-awaiter", "2", headers="Requires: labwc >= 2"),
+                        self.build_rpm("labwc", "2")):
+            shutil.copy2(package, private_repo)
+        subprocess.run(["createrepo_c", str(private_repo)], check=True, capture_output=True)
+        self.repo = private_repo
+        with self.assertRaisesRegex(UpdateError, "labwc"), patch.object(b.Transaction, "download") as download:
+            self.prepare_early()
+        download.assert_not_called()
 
     def test_higher_priority_repo_wins_over_newer_fedora_candidate(self):
         upstream = Path(self.case.name) / "upstream"
@@ -1027,7 +1322,9 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
             self.set_origin(name, "nobara-kernel-mainline")
         shutil.copy2(self.build_rpm("kernel-core", "2", headers="Provides: kernel-uname-r = 2-1.noarch"), self.repo)
         if matching:
-            shutil.copy2(self.build_rpm("kernel-lto-devel", "2", headers="Provides: kernel-devel-uname-r = 2-1.noarch"), self.repo)
+            shutil.copy2(self.build_rpm("kernel-lto-devel", "2", headers=(
+                "Provides: kernel-devel-uname-r = 2-1.noarch\nProvides: installonlypkg(kernel)"),
+                payload="/usr/src/kernels/2-1.noarch/Makefile"), self.repo)
         subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
 
     def test_kernel_development_uses_matching_lto_provider_without_generic_devel(self):
@@ -1043,6 +1340,91 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
             with self.assertRaisesRegex(UpdateError, "kernel-devel-uname-r = 2-1.noarch"):
                 self.prepare()
             download.assert_not_called()
+
+    def kernel_rebuild_fixture(self, *, new_kernel=True):
+        if new_kernel:
+            self.kernel_development_fixture()
+        else:
+            self.local_desktop_fixture()
+            self.install_health_fixture("dkms")
+        # A driver/tool update causes rebuilding retained bootable kernels.
+        shutil.copy2(self.build_rpm("dkms", "2"), self.repo)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+
+    def retained_kernel_fixture(self, kernel, *, image=True):
+        directory = self.root / "usr/lib/modules" / kernel
+        directory.mkdir(parents=True, exist_ok=True)
+        if image:
+            (self.root / "boot").mkdir(exist_ok=True)
+            (self.root / "boot" / ("vmlinuz-" + kernel)).write_text("fixture kernel")
+
+    def test_kernel_development_ignores_local_module_only_remnants(self):
+        self.kernel_rebuild_fixture()
+        old = "6.12.6-200.fsync.fc41.x86_64"
+        self.install_health_fixture("kernel-modules-core", "6.12.6",
+                                    headers=f"Provides: kernel-uname-r = {old}", origin="<unknown>")
+        self.install_health_fixture("kmod-v4l2loopback-" + old, origin="@commandline")
+        self.retained_kernel_fixture(old, image=False)
+        with patch.object(planner, "check_selection_support"), self.assertLogs(planner.LOG, level="INFO") as logs:
+            result = self.prepare()
+        self.assertTrue(any(old in line and "no installed boot image" in line for line in logs.output))
+        self.assertTrue(any(p["name"] == "kernel-lto-devel" for p in result["packages"]))
+        self.assertFalse(any(p["name"] == "kernel-modules-core" or p["name"].startswith("kmod-v4l2loopback")
+                             for p in result["packages"]))
+        self.assertEqual(result["preserved_kernels"], [])
+
+    def test_kernel_development_preserves_old_running_kernel_when_new_kernel_will_boot(self):
+        self.kernel_rebuild_fixture()
+        self.retained_kernel_fixture("1-1.noarch")
+        with patch.object(planner, "check_selection_support"), \
+             patch.object(planner.os, "uname", return_value=Mock(release="1-1.noarch")):
+            result = self.prepare()
+        self.assertEqual(result["preserved_kernels"], ["1-1.noarch"])
+        self.assertTrue(any(p["name"] == "kernel-lto-devel" for p in result["packages"]))
+        self.assertFalse(any(p["name"] == "kernel-core" and p["action"] == "Remove" for p in result["packages"]))
+
+    def test_kernel_development_preserves_old_fallback_during_driver_only_update(self):
+        self.kernel_rebuild_fixture(new_kernel=False)
+        for kernel in ("1-1.noarch", "2-1.noarch"):
+            self.retained_kernel_fixture(kernel)
+        self.install_health_fixture("kernel-lto-devel", "2", headers="Provides: kernel-devel-uname-r = 2-1.noarch")
+        with patch.object(planner.os, "uname", return_value=Mock(release="2-1.noarch")), \
+             patch.object(planner, "check_selection_support") as check:
+            result = self.prepare()
+        check.assert_called_once()
+        self.assertEqual(result["preserved_kernels"], ["1-1.noarch"])
+        self.assertFalse(any(p["name"].startswith("kernel") and p["action"] != "Reason Change"
+                             for p in result["packages"]))
+
+    def test_kernel_development_does_not_skip_current_kernel_without_replacement(self):
+        self.kernel_rebuild_fixture(new_kernel=False)
+        self.retained_kernel_fixture("1-1.noarch")
+        with patch.object(planner.os, "uname", return_value=Mock(release="1-1.noarch")), \
+             patch.object(b.Transaction, "download") as download:
+            with self.assertRaisesRegex(UpdateError, "kernel-devel-uname-r = 1-1.noarch"):
+                self.prepare()
+        download.assert_not_called()
+
+    def test_kernel_development_does_not_guess_chroot_boot_target(self):
+        self.kernel_rebuild_fixture(new_kernel=False)
+        self.retained_kernel_fixture("1-1.noarch")
+        with patch.object(planner.os, "uname", return_value=Mock(release="host-kernel")), \
+             patch.object(b.Transaction, "download") as download:
+            with self.assertRaisesRegex(UpdateError, "kernel-devel-uname-r = 1-1.noarch"):
+                self.prepare()
+        download.assert_not_called()
+
+    def test_kernel_development_still_rebuilds_retained_kernel_with_available_headers(self):
+        self.kernel_rebuild_fixture()
+        self.retained_kernel_fixture("1-1.noarch")
+        shutil.copy2(self.build_rpm("kernel-lto-devel", "1", headers=(
+            "Provides: kernel-devel-uname-r = 1-1.noarch\nProvides: installonlypkg(kernel)"),
+            payload="/usr/src/kernels/1-1.noarch/Makefile"), self.repo)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+        with patch.object(planner, "check_selection_support"):
+            result = self.prepare()
+        self.assertEqual(result["preserved_kernels"], [])
+        self.assertEqual(len([p for p in result["packages"] if p["name"] == "kernel-lto-devel"]), 2)
 
     def test_obsoletes_cannot_replace_local_package_under_a_different_name(self):
         self.local_desktop_fixture()

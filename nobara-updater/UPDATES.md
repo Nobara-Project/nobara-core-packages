@@ -67,6 +67,14 @@ system configuration.
 
 ## What happens before you restart
 
+Before preparing a fresh system update, Nobara first upgrades the installed
+`nobara-updater` and `drm-awaiter` packages and their required dependencies.
+This small preliminary update happens immediately, so preparation and later
+boot-image generation use their latest available fixes. Repository priorities,
+exclusions, and local-package protection still apply. Already prepared updates
+are left intact. This preliminary step has no rollback snapshot; if it fails,
+follow [RECOVERY.md](RECOVERY.md) before retrying.
+
 The updater refreshes repositories and prepares one dependency-resolved
 transaction. It uses DNF's `distro-sync` behavior, which can upgrade or
 downgrade packages according to repository priorities and available versions.
@@ -101,6 +109,10 @@ tries to restore them within the same offline transaction. DNF selects providers
 using the enabled repositories and their priorities, including the correct
 32-bit libraries for 32-bit applications. Locally installed packages remain
 protected; repairing their dependencies does not authorize replacing them.
+Dependencies already satisfied by packages being kept or installed are not
+requested again. For example, repairing an application's missing dependency
+does not force a switch away from codec providers already selected by the
+Codec Wizard fixups. The log identifies requirements still needing repair.
 
 Before staging, it checks the complete proposed package set, including unchanged
 and excluded packages, for missing dependencies, conflicts, and duplicate
@@ -216,6 +228,15 @@ including a new kernel when one was installed. You normally do not need to
 choose a boot entry manually. Keep the computer powered on while installation
 and boot-file preparation are in progress.
 
+With the BGRT or Spinner Plymouth theme, the offline updater shows a dedicated
+update screen with a persistent warning not to turn off the computer. The
+progress bar advances as package operations finish and stays below 100% until
+the installation and boot-file checks have passed. Progress measures update
+stages, not time remaining: driver compilation and initramfs generation can
+take several minutes without moving the bar. Keep the computer powered on;
+press **Esc** to view the detailed console output if needed. Custom Plymouth
+themes determine how they display update mode and messages.
+
 ## When the system enters recovery
 
 **The updater's automatic snapshot recovery mode applies only to systems
@@ -302,8 +323,11 @@ complete and retires the temporary rollback data:
 If the update failed and the previous system was restored, that restored
 system becomes the active system:
 
-- **Btrfs:** The writable recovery subvolume becomes your active root. The
-  normal kernel entry points to it. The updater preserves this active root
+- **Btrfs:** The writable recovery subvolume becomes your active root. After
+  confirmation, the updater restores its original root name (usually `@`) and
+  points the normal kernel entry to it. Changes made in recovery are preserved.
+  This also restores the root layout expected by Timeshift, where applicable;
+  Timeshift does not need to be installed. The updater preserves this active root
   and removes its redundant read-only backup, other unused rollback copies,
   and the temporary recovery menu entries after recovery is confirmed.
 - **ext4 or XFS with LVM:** Recovery merges the snapshot back into the root
@@ -326,6 +350,25 @@ own recovery data, not snapshots created by other tools.
 The temporary **previous system** entries are separate from ordinary kernel
 entries and the generic rescue-kernel entry. Those entries are not rollback
 snapshots and are not removed by snapshot cleanup.
+
+Ordinary kernel packages have a separate cleanup step after a successful boot
+and retirement of recovery data. It honors DNF's configured kernel retention
+limit (normally three versions; zero means unlimited), including the matching
+kernel development and module packages. The running kernel and its matching
+packages are always retained, so an older running kernel can temporarily put
+the total above the limit. Cleanup also catches up on the next updater run,
+even if there are no new updates. If cleanup is unsafe or cannot finish, it is
+logged and retried later without marking the successful update as failed.
+
+After successful boot confirmation, the updater also removes obsolete fallback
+kernels that it could not rebuild because their matching development packages
+were unavailable. Old orphaned kernel module packages are cleaned up with their
+version-specific generated kmod RPMs, including ones recorded as locally
+installed. This targeted cleanup applies even below the retention limit or when
+the limit is zero. It always protects the running kernel and waits until updater
+recovery protection has been retired. Unrelated local packages and generic
+driver packages are preserved. Standalone development packages alone are not
+treated as obsolete.
 
 Rollback protection covers installation and initial startup validation.
 Once confirmation retires the snapshot, it is no longer available to undo

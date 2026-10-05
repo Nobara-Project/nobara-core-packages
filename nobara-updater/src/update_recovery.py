@@ -7,6 +7,7 @@ the recovery entry's images. Other layouts retain offline staging protection.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
@@ -19,6 +20,7 @@ from .update_state import UpdateError, atomic_json
 SHARED_CONTAINER_PATHS = {"var/lib/machines", "var/lib/portables"}
 BOOT = Path("/boot")
 BTRFS_TOP = Path("/run/nobara-updater-btrfs")
+LOG = logging.getLogger(__name__)
 
 
 def nested_recovery_mounts(root: dict, listing: str, fstab: str) -> list[dict]:
@@ -363,7 +365,13 @@ def prune_recovery(recovery: dict, confirmed_job: str, *, state_root=None) -> No
                         if token.startswith("rootflags="):
                             for flag in token[10:].split(","):
                                 if flag.startswith("subvolid="):
-                                    raise UpdateError("A boot entry uses a subvolume ID; refusing ambiguous snapshot cleanup.")
+                                    identifier = flag[9:]
+                                    if not identifier.isdecimal() or int(identifier) <= 5:
+                                        raise UpdateError("A boot entry has an invalid recovery subvolume ID.")
+                                    relative = output(["btrfs", "inspect-internal", "subvolid-resolve", identifier, str(mountpoint)])
+                                    if not relative or ".." in PurePosixPath(relative).parts:
+                                        raise UpdateError("Cannot resolve a boot entry's recovery subvolume ID.")
+                                    protected.add("/" + relative.strip("/"))
                                 if flag.startswith("subvol="):
                                     protected.add("/" + flag[7:].strip("/"))
         # Persist menu removal before deleting any backing snapshots. Retain
@@ -373,13 +381,36 @@ def prune_recovery(recovery: dict, confirmed_job: str, *, state_root=None) -> No
         os.sync()
         pending = False
         for parent in parents:
-            for name in ("root", "saved"):
+            for name in ("root", "saved", "displaced"):
                 path = parent / name
                 relative = "/" + str(path.relative_to(mountpoint))
                 if any(p == relative or p.startswith(relative + "/") for p in protected):
-                    pending |= relative != current["fsroot"] and path.exists()
+                    # A displaced original root may still contain shared
+                    # container/home data or belong to an independent boot
+                    # entry. Retaining that storage is expected, not failed
+                    # rollback-snapshot cleanup.
+                    pending |= name != "displaced" and relative != current["fsroot"] and path.exists()
                     continue
                 if path.exists() and not path.is_symlink():
+                    if name == "displaced":
+                        # This was the old original root before the recovered
+                        # system resumed its name. Never delete shared nested
+                        # data, even when it is temporarily unmounted.
+                        from .update_btrfs import subvolume_id
+                        record = parent / "root-layout.json"
+                        if record.is_symlink() or not record.is_file():
+                            continue
+                        layout = json.loads(record.read_text())
+                        if (layout.get("uuid") != current["uuid"]
+                                or layout.get("displaced") != relative.lstrip("/")
+                                or layout.get("displaced_id") != subvolume_id(path)):
+                            raise UpdateError("Cannot verify the displaced root for cleanup.")
+                        if layout["displaced_id"] in layout.get("retained_ids", []):
+                            LOG.info("Keeping displaced root storage referenced by the recovered system's mount configuration: %s", relative)
+                            continue
+                        if output(["btrfs", "subvolume", "list", "-o", str(path)]):
+                            LOG.info("Keeping displaced root storage containing nested subvolumes: %s", relative)
+                            continue
                     subprocess.run(["btrfs", "subvolume", "delete", str(path)], check=True)
             archive = BOOT / "nobara-updater" / parent.name
             if not any(p.is_relative_to(archive.resolve()) for p in referenced_images):
@@ -387,7 +418,8 @@ def prune_recovery(recovery: dict, confirmed_job: str, *, state_root=None) -> No
                     shutil.rmtree(archive)
             # A promoted recovery root is the live OS, not a rollback copy.
             # Keep its ownership record so future cleanups can identify it.
-            if set(p.name for p in parent.iterdir()) == {"owner.json"} and not archive.exists():
+            if set(p.name for p in parent.iterdir()) <= {"owner.json", "root-layout.json"} and not archive.exists():
+                (parent / "root-layout.json").unlink(missing_ok=True)
                 (parent / "owner.json").unlink()
                 parent.rmdir()
         os.sync()

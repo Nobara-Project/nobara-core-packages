@@ -2,7 +2,7 @@
 Description=Install the prepared Nobara system update
 DefaultDependencies=no
 Requires=sysinit.target
-After=sysinit.target systemd-journald.socket system-update-pre.target
+After=sysinit.target systemd-journald.socket system-update-pre.target plymouth-start.service
 Before=system-update.target shutdown.target
 OnFailure=nobara-updater-recovery.service
 RefuseManualStop=yes
@@ -12,6 +12,7 @@ Type=oneshot
 ExecCondition=/usr/libexec/nobara-update-worker own-trigger
 ExecStart=/usr/libexec/nobara-update-worker execute
 ExecStartPost=/usr/bin/systemctl --no-block reboot
+ExecStopPost=-/usr/libexec/nobara-update-worker offline-stopped
 TimeoutStartSec=infinity
 TimeoutStopSec=infinity
 UMask=0077

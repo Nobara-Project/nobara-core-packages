@@ -120,6 +120,60 @@ class ReportTests(unittest.TestCase):
         self.assertIn("Journal collection timed out", text)
         self.assertTrue(Path(report["bundle"]).is_file())
 
+    def test_systemd_timeout_survives_rollback_even_without_python_exception(self):
+        reports.arm_report(self.state)
+        self.state["status"] = "awaiting-boot"
+        def journal(command, **options):
+            options["stdout"].write(b"nobara-updater-confirm.service: start operation timed out. Terminating.\n")
+        with patch.object(reports.subprocess, "run", side_effect=journal):
+            reports.record_service_failure(self.state, "confirm", "timeout", "killed", "TERM")
+        reports.publish_recovery(JOB)
+        report = reports.latest_report()
+        self.assertEqual(report["phase"], "confirm")
+        self.assertIn("result=timeout", report["error"])
+        self.assertIn("exit status=TERM", report["error"])
+        self.assertIn("start operation timed out", Path(report["log"]).read_text())
+        self.assertEqual(self.state["status"], "awaiting-boot")
+
+    def test_service_failure_keeps_existing_error_and_its_journal(self):
+        self.publish()
+        journal = self.boot / JOB / "failure-journal.log"
+        journal.write_text("original failure evidence\n")
+        def capture(path):
+            path.write_text("later systemd exit details\n")
+        with patch.object(reports, "capture_journal", side_effect=capture):
+            reports.record_service_failure(self.state, "execute", "exit-code", "exited", "1")
+        reports.publish_recovery(JOB)
+        report = reports.latest_report()
+        self.assertEqual(report["error"], "offline RPM failure")
+        self.assertEqual(report["service_failure"]["result"], "exit-code")
+        self.assertEqual(journal.read_text(), "original failure evidence\n")
+        self.assertIn("later systemd exit details", Path(report["log"]).read_text())
+
+    def test_service_kill_without_snapshot_publishes_desktop_report(self):
+        self.state["recovery"] = {}
+        with patch.object(reports.subprocess, "run"):
+            reports.record_service_failure(self.state, "execute", "oom-kill", "killed", "KILL")
+        report = reports.latest_report()
+        self.assertFalse(report["recovered"])
+        self.assertIn("result=oom-kill", report["error"])
+
+    def test_clean_or_confirmed_service_stop_does_not_create_failure(self):
+        with patch.object(reports, "record_failure") as record, patch.object(reports, "capture_journal") as journal:
+            for result in ("", "success", "exec-condition"):
+                reports.record_service_failure(self.state, "confirm", result, "exited", "0")
+            for status in ("complete", "recovered"):
+                reports.record_service_failure(dict(self.state, status=status), "confirm", "timeout", "killed", "TERM")
+            reports.record_service_failure(dict(self.state, started=False), "execute", "exec-condition", "exited", "1")
+        record.assert_not_called()
+        journal.assert_not_called()
+        self.assertFalse(self.boot.exists())
+
+    def test_failure_report_io_error_never_prevents_recovery(self):
+        with patch.object(reports, "report_directory", side_effect=OSError("boot filesystem read-only")), \
+             self.assertLogs(reports.LOG, level="ERROR"):
+            reports.record_service_failure(self.state, "confirm", "timeout", "killed", "TERM")
+
     def test_unavailable_journal_does_not_prevent_failure_publication(self):
         self.state["recovery"] = {}
         reports.arm_report(self.state)
@@ -315,6 +369,33 @@ class ServiceOrderingTests(unittest.TestCase):
                     self.assertEqual(worker.main(), 1 if snapshot else 0)
                     self.assertEqual(write.call_args.args[2], "failed")
                     report.assert_called_once()
+
+    def test_services_capture_systemd_failures_before_recovery(self):
+        for unit, action in (("confirm", "confirm-stopped"), ("offline", "offline-stopped")):
+            self.assertEqual(self.unit(unit)["Service"]["ExecStopPost"],
+                             "-/usr/libexec/nobara-update-worker " + action)
+        self.assertEqual(self.unit("confirm")["Service"]["TimeoutStartSec"], "15min")
+
+    def test_stop_hook_reports_systemd_result_without_changing_state_or_rerunning_update(self):
+        spec = importlib.util.spec_from_file_location("stopped_worker_test", SOURCE / "update_worker.py")
+        worker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(worker)
+        for action, phase in (("confirm-stopped", "confirm"), ("offline-stopped", "execute")):
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as directory:
+                state = dict(job=JOB, status="awaiting-boot", started=True)
+                with patch.object(worker, "STATE_DIR", Path(directory)), \
+                     patch.object(worker.sys, "argv", ["worker", action]), \
+                     patch.object(worker.os, "geteuid", return_value=0), patch.object(worker.os, "umask"), \
+                     patch.object(worker.logging, "basicConfig"), patch.object(worker, "RotatingFileHandler"), \
+                     patch.object(worker, "read_state", return_value=state), patch.object(worker, "write_state") as write, \
+                     patch.object(worker, "record_service_failure") as report, \
+                     patch.object(worker.backend, "confirm_boot") as confirm, patch.object(worker.backend, "execute") as execute, \
+                     patch.dict(worker.os.environ, SERVICE_RESULT="timeout", EXIT_CODE="killed", EXIT_STATUS="TERM"):
+                    self.assertEqual(worker.main(), 0)
+                    report.assert_called_once_with(state, phase, "timeout", "killed", "TERM")
+                    write.assert_not_called()
+                    confirm.assert_not_called()
+                    execute.assert_not_called()
 
 
 if __name__ == "__main__":

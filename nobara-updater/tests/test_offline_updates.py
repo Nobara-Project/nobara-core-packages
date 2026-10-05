@@ -163,10 +163,41 @@ class WorkflowTests(unittest.TestCase):
         patch.object(backend, "TRIGGER", self.trigger).start()
         patch.object(backend, "rpm_fingerprint", return_value="original").start()
         patch.object(backend, "announce").start()
+        patch.object(backend, "SPLASH").start()
         patch.object(backend, "check_offline_service").start()
         patch.object(backend, "arm_report").start()
         patch.object(backend, "publish_failure").start()
         patch.object(backend, "check_installed_system").start()
+        patch.object(backend, "prune_kernel_packages").start()
+        patch.object(backend, "maintain_btrfs_root", return_value=True).start()
+
+    def test_noop_update_still_cleans_excess_kernels_from_prior_updates(self):
+        write_state(self.root, self.state, "unchanged")
+        with patch.object(backend, "grub_environment", return_value={}), \
+             patch("nobara_updater.update_plan.prepare_transaction", return_value={"empty": True}), \
+             patch.object(backend, "prune_kernel_packages") as prune:
+            backend.prepare(self.root)
+        prune.assert_called_once()
+        self.assertEqual(read_state(self.root)["status"], "unchanged")
+
+    def test_interrupted_root_layout_repair_blocks_new_preparation_without_resetting_state(self):
+        from nobara_updater.update_btrfs import JOURNAL
+        write_state(self.root, self.state, "complete", started=False)
+        (self.root / JOURNAL).write_text("{}")
+        with patch.object(backend, "maintain_btrfs_root", return_value=False):
+            with self.assertRaisesRegex(UpdateError, "root-layout repair must finish"):
+                backend.prepare(self.root)
+        backend.check_installed_system.assert_not_called()
+        self.assertEqual(read_state(self.root)["status"], "complete")
+
+    def test_cleanup_service_failure_does_not_reenter_recovery_after_confirmation(self):
+        for status in ("complete", "recovered", "live-complete"):
+            with self.subTest(status=status):
+                write_state(self.root, self.state, status, started=True, recovery={"created": True})
+                with patch.object(backend, "select_recovery") as select:
+                    backend.recover(self.root)
+                select.assert_not_called()
+                self.assertEqual(read_state(self.root)["status"], status)
 
     def test_repaired_failed_installation_can_prepare_fresh_without_replaying_old_job(self):
         write_state(self.root, self.state, "interrupted", started=True, error="old failure")
@@ -331,6 +362,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(state["started"])
         self.assertEqual(run.call_count, 1)
         self.assertIn("--setopt=reposdir=", run.call_args.args[0])
+        backend.SPLASH.start.assert_called_once_with(release_upgrade=False)
+        self.assertFalse(any(invocation.kwargs.get("percent") == 100 for invocation in backend.announce.call_args_list))
         with self.assertRaises(UpdateError):
             backend.cancel(self.root)
 

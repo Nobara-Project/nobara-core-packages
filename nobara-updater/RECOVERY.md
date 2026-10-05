@@ -35,6 +35,14 @@ the normal entry uses your restored system. Once boot is confirmed, unused
 updater rollback snapshots and their recovery entries are removed. Your
 active system remains in place.
 
+On Btrfs, the updater restores a confirmed recovered system to its original
+root-subvolume name, usually `@`, while preserving changes you made in recovery.
+This works with or without Timeshift. Systems left on
+`.nobara-updater/<job>/root` by older updater versions are repaired automatically
+on a confirmed boot or before the next fresh update. Do not delete that subvolume
+manually while it is your active root. If layout repair is interrupted, boot
+references retain the subvolume's stable ID and the updater resumes the repair.
+
 ## If preparation stopped before installation
 
 Some conflicts are detected before packages change. No reboot or rollback

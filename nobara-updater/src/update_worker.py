@@ -13,12 +13,13 @@ if (Path(__file__).parent / "nobara_updater").is_dir():
 
 from nobara_updater.update_state import STATE_DIR, TRIGGER, UpdateError, read_state, read_status, status_message, write_state
 from nobara_updater import update_backend as backend
-from nobara_updater.update_report import attach_log, record_failure
+from nobara_updater.update_report import attach_log, record_failure, record_service_failure
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["prepare", "prepare-codecs", "refresh-pending", "schedule", "reboot", "cancel", "retry", "execute", "finalize", "execute-live", "live-finalize", "recover", "confirm", "status", "foreign-trigger", "own-trigger", "installer-update", "installer-codecs", "installer-finalize"])
+    parser.add_argument("action", choices=["prepare", "prepare-codecs", "refresh-pending", "schedule", "reboot", "cancel", "retry", "execute", "finalize", "execute-live", "live-finalize", "recover", "confirm", "confirm-stopped", "offline-stopped", "status", "foreign-trigger", "own-trigger", "installer-update", "installer-codecs", "installer-finalize"])
+    parser.add_argument("--early-upgrade-complete", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error("This worker must run as root.")
@@ -40,7 +41,25 @@ def main():
     if args.action == "status":
         print(json.dumps(read_status()))
         return 0
+    if args.action in {"confirm-stopped", "offline-stopped"}:
+        # systemd sets these for ExecStopPost, even if the main worker could
+        # not run its exception handler. This hook must never block recovery
+        # with a second failure or change the saved installation state.
+        try:
+            record_service_failure(read_state(), "confirm" if args.action == "confirm-stopped" else "execute",
+                                   os.environ.get("SERVICE_RESULT", ""), os.environ.get("EXIT_CODE", ""),
+                                   os.environ.get("EXIT_STATUS", ""))
+        except Exception:
+            logging.exception("Could not inspect stopped update service.")
+        return 0
     try:
+        if args.action in {"prepare", "prepare-codecs", "installer-update", "installer-codecs"} and not args.early_upgrade_complete:
+            backend.upgrade_early(installer=args.action.startswith("installer-"))
+            # Run the newly installed worker and modules before planning or
+            # freezing an engine. The service remains the owner of this PID.
+            os.execv("/usr/bin/python3", ["/usr/bin/python3", "-I", "/usr/libexec/nobara-update-worker",
+                                         args.action, "--early-upgrade-complete"])
+            return 0
         if args.action in {"finalize", "recover", "confirm"}:
             try:
                 attach_log(read_state())
@@ -75,7 +94,7 @@ def main():
             state = read_state()
             # A rejected concurrent request must not report another job as a
             # failure; prepare records FAILED while holding the update lock.
-            if state.get("status") == "failed" and not state.get("started") and state.get("error") == str(error):
+            if state.get("status") == "failed" and (not state.get("started") or state.get("early_upgrade")) and state.get("error") == str(error):
                 record_failure(state, "prepare", error)
         # Never replace another service's state on an ordinary client error
         # (for example scheduling while preparation still holds the lock).

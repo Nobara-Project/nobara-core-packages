@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -16,7 +17,7 @@ import libdnf5.rpm as rpm_api
 import libdnf5.transaction as trans
 
 from .update_migrations import BGRT_FILES, add_codec_migration, add_plymouth_migration, machine_product, plan_migrations
-from .update_boot import changes_kernel, check_selection_support, boot_space_requirements
+from .update_boot import changes_kernel, check_selection_support, boot_space_requirements, installed_boot_kernels
 from .update_policy import execution_policy, format_restart_reasons
 from .update_origins import PackageOriginError, protect_local_packages, validate_local_packages, annotate_failure
 from .update_state import UpdateError, file_digest, os_release, rpm_fingerprint
@@ -58,6 +59,8 @@ def configure_base(job: Path, release: str | None = None, *, codecs: bool = Fals
         "metadata_expire": 0, "obsoletes": True, "best": True,
         "skip_broken": False, "skip_unavailable": False, "keepcache": True,
         "pkg_gpgcheck": True, "localpkg_gpgcheck": True,
+        # Keep fallback kernels until boot confirmation. update_retention
+        # applies the configured limit afterwards, outside this transaction.
         "installonly_limit": 0, "clean_requirements_on_remove": False,
         "tsflags": [],
     }.items():
@@ -97,19 +100,19 @@ def configure_base(job: Path, release: str | None = None, *, codecs: bool = Fals
             repo.get_config().get_pkg_gpgcheck_option().set(True)
             repo.expire()
     sack.load_repos()
-    # A newer locally installed updater must not be downgraded out from
-    # under its frozen worker and boot-confirmation protocol by distro-sync.
+    # Do not undo the early updater/initramfs-helper upgrade during distro-sync.
+    # A newer local build must also survive older repository metadata.
     installed = rpm_api.PackageQuery(base)
     installed.filter_installed()
-    installed.filter_name(["nobara-updater"])
+    installed.filter_name(["nobara-updater", "drm-awaiter"])
     for package in installed:
         older = rpm_api.PackageQuery(base)
         older.filter_available()
-        older.filter_name(["nobara-updater"])
+        older.filter_name([package.get_name()])
         older.filter_evr([package.get_evr()], common.QueryCmp_LT)
         if not older.empty():
             base.get_rpm_package_sack().add_user_excludes(older)
-            LOG.info("Keeping nobara-updater %s or newer; older repository builds are excluded from this transaction.", package.get_evr())
+            LOG.info("Keeping %s %s or newer; older repository builds are excluded from this transaction.", package.get_name(), package.get_evr())
     return base
 
 
@@ -378,7 +381,7 @@ def repair_plymouth_packages(goal, transaction, settings, repairs, origins):
 
 
 def add_kernel_development(base, goal, transaction, settings, hooks, origins):
-    """Request development providers for the kernels actually being installed.
+    """Request development providers and record legacy kernels left unchanged.
 
     LTO/LTS variants may use different package names. Installing an unqualified
     kernel-devel can select every retained version or the wrong kernel family.
@@ -387,30 +390,53 @@ def add_kernel_development(base, goal, transaction, settings, hooks, origins):
                trans.TransactionItemAction_DOWNGRADE, trans.TransactionItemAction_REINSTALL}
     items = list(transaction.get_transaction_packages())
     targets = set()
+    incoming_boot_kernels = set()
     rebuild = any(h.startswith("plymouth-") for h in hooks)
     for item in items:
+        rebuild |= any(part in item.get_package().get_name() for part in ("dkms", "akmod", "kmod", "dracut"))
         if item.get_action() not in inbound:
             continue
         package = item.get_package()
         targets.update(kernel_unames(package))
-        rebuild |= any(part in package.get_name() for part in ("dkms", "akmod", "kmod", "dracut"))
+        if package.get_name() in {"kernel", "kernel-core"}:
+            incoming_boot_kernels.update(kernel_unames(package))
+    # These must build successfully, including a reinstalled/updated module
+    # package for an existing kernel. Never excuse a missing new dependency.
+    required = set(targets)
+    preserved = []
     if rebuild:
+        root = Path(base.get_config().get_installroot_option().get_value())
+        retained = installed_boot_kernels(root)
         installed = rpm_api.PackageQuery(base)
         installed.filter_installed()
+        installed_versions = set()
         for package in installed:
-            targets.update(kernel_unames(package))
+            installed_versions.update(kernel_unames(package))
+        for kernel in sorted(installed_versions - retained - targets):
+            LOG.info("Skipping development files for leftover kernel %s: no installed boot image.", kernel)
+        targets.update(retained)
+        running = os.uname().release
+        if not incoming_boot_kernels:
+            # finalize() selects the running kernel when no new kernel is
+            # installed. In a chroot it may not be one of the target's kernels;
+            # keep all targets mandatory when we cannot identify the next boot.
+            required.update({running} if running in retained else retained)
     for kernel in sorted(targets):
         spec = "kernel-devel-uname-r = " + kernel
         providers = rpm_api.PackageQuery(base)
         providers.filter_provides([spec])
         if providers.empty():
+            if kernel not in required:
+                LOG.warning("Preserving existing modules and boot files for retained kernel %s: matching development files are unavailable. This kernel will not be selected for the updated system.", kernel)
+                preserved.append(kernel)
+                continue
             message = f"Matching kernel development files are unavailable: {spec}. Check the enabled kernel repository and its excludes."
             raise UpdateError(message)
         goal.add_install(spec, settings)
     if targets:
         transaction = goal.resolve()
         check_resolution(transaction, origins)
-    return transaction
+    return transaction, preserved
 
 
 def store_transaction(transaction, incoming: list, job: Path) -> None:
@@ -441,6 +467,63 @@ def store_transaction(transaction, incoming: list, job: Path) -> None:
             definitions[identifier].serialize(str(path))
             item["group_path" if kind == "groups" else "environment_path"] = relative
     (job / "transaction.json").write_text(json.dumps(serialized, indent=2) + "\n")
+
+
+def prepare_early_transaction(job: Path, names: tuple[str, ...]) -> dict:
+    """Resolve only the installed updater/helpers, preserving normal safeguards.
+
+    Do not run migrations, kernel retention, release synchronization, or boot
+    space estimates here: the updated helper must be present before those.
+    """
+    base = configure_base(job, os_release())
+    origins = []
+    try:
+        origins = protect_local_packages(base)
+        held = {p["name"] for p in origins if p["kind"] in {"local", "unknown"}}
+        installed = {p["name"] for p in installed_inventory(base)}
+        targets = [name for name in names if name in installed and name not in held]
+        if not targets:
+            return dict(empty=True, package_origins=origins)
+        settings = base_api.GoalJobSettings()
+        settings.set_best(True)
+        settings.set_skip_broken(False)
+        settings.set_skip_unavailable(False)
+        base.get_config().get_install_weak_deps_option().set(False)
+        goal = base_api.Goal(base)
+        for name in targets:
+            goal.add_upgrade(name, settings)
+        transaction = goal.resolve()
+        check_resolution(transaction, origins)
+        if transaction.empty():
+            return dict(empty=True, package_origins=origins)
+        records, incoming = [], []
+        for item in transaction.get_transaction_packages():
+            package = item.get_package()
+            action = trans.transaction_item_action_to_string(item.get_action())
+            records.append(dict(name=package.get_name(), arch=package.get_arch(),
+                                nevra=package.get_full_nevra(), action=action))
+            if action in {"Install", "Upgrade", "Reinstall"}:
+                incoming.append(package)
+            elif action not in {"Replaced", "Reason Change"}:
+                raise UpdateError("The early updater/helper upgrade would remove or downgrade "
+                                  + package.get_full_nevra() + ". Repair this dependency conflict before updating.")
+        validate_local_packages(records, origins)
+        validate_removals(records, set())
+        for record in records:
+            LOG.info("Early upgrade: %s %s", record["action"], record["nevra"])
+        (job / "packages").mkdir(exist_ok=True)
+        callback = DownloadProgress()
+        base.set_download_callbacks(repo_api.DownloadCallbacksUniquePtr(callback))
+        transaction.download()
+        if not transaction.check_gpg_signatures():
+            raise UpdateError("Early upgrade package signature verification failed:\n"
+                              + "\n".join(transaction.get_gpg_signature_problems()))
+        store_transaction(transaction, incoming, job)
+        return dict(empty=False, package_origins=origins)
+    except UpdateError as error:
+        raise annotate_failure(error, origins) from error
+    finally:
+        base.unlock_system_repo()
 
 
 def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = True) -> dict:
@@ -483,7 +566,7 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
             add_codec_migration(migrations, inventory)
             if not getattr(base, "nobara_enable_codecs", True):
                 migrations.hooks.remove("enable-codecs")
-        module_builders = any(p["name"] == "dkms" or p["name"].startswith(("dkms-", "akmod-")) for p in inventory)
+        module_builders = any(p["name"] in {"dkms", "akmods"} or p["name"].startswith(("dkms-", "akmod-")) for p in inventory)
         gaming = {p["name"] for p in inventory} & {"gamescope-htpc-common", "gamescope-session-common"}
         theme = None
         if gaming:
@@ -508,10 +591,9 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
         transaction = goal.resolve()
         check_resolution(transaction, origins)
         transaction = repair_plymouth_packages(goal, transaction, settings, plymouth_repairs, origins)
-        if module_builders or "dkms-nvidia" in migrations.install:
-            transaction = add_kernel_development(base, goal, transaction, settings, migrations.hooks, origins)
         transaction = resolve_obsolete_cleanup(base, goal, transaction, settings, origins, migrations)
-        requirements = health.repair_requirements(transaction)
+        _, projected = projected_packages(base, transaction)
+        requirements = health.repair_requirements(transaction, projected)
         if requirements:
             for requirement in sorted(requirements):
                 goal.add_provide_install(requirement, settings)
@@ -521,6 +603,16 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
             except UpdateError as error:
                 raise annotate_failure(UpdateError("Cannot repair missing dependencies of these installed packages:\n- "
                     + "\n- ".join(health.repair_packages) + "\n\n" + str(error)), origins) from error
+            transaction = resolve_obsolete_cleanup(base, goal, transaction, settings, origins, migrations)
+        # Inspect the resolved dependency repairs too: they can introduce a
+        # kernel or module builder which was not in the initial transaction.
+        module_builders |= any(item.get_package().get_name() in {"dkms", "akmods"}
+                               or item.get_package().get_name().startswith(("dkms-", "akmod-"))
+                               for item in transaction.get_transaction_packages())
+        preserved_kernels = []
+        if module_builders:
+            transaction, preserved_kernels = add_kernel_development(
+                base, goal, transaction, settings, migrations.hooks, origins)
             transaction = resolve_obsolete_cleanup(base, goal, transaction, settings, origins, migrations)
         allow_architecture_cleanup(base, transaction, migrations)
         actions = {
@@ -543,7 +635,7 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
                 incoming_footprints.append(footprints[-1])
         validate_local_packages(records, origins)
         validate_removals(records, migrations.remove)
-        if changes_kernel(records):
+        if changes_kernel(records) or preserved_kernels:
             check_selection_support()
         if release != current:
             replacement_versions = {p.get_name(): p.get_version() for p in incoming}
@@ -615,7 +707,7 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
         manifest = {str(p.relative_to(job)): file_digest(p) for directory in (job / "packages", job / "comps") for p in directory.rglob("*") if p.is_file()}
         manifest["transaction.json"] = file_digest(job / "transaction.json")
         return dict(empty=False, source_release=current, target_release=release, codecs=codecs, fingerprint=rpm_fingerprint(),
-                    execution=execution, boot_space=boot_space, package_origins=origins,
+                    execution=execution, boot_space=boot_space, package_origins=origins, preserved_kernels=preserved_kernels,
                     files=manifest, packages=records, migrations=migrations.as_dict())
     except UpdateError as error:
         raise annotate_failure(error, origins)

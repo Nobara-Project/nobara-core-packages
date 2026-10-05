@@ -7,7 +7,11 @@ ConditionPathExists=/var/lib/nobara-updater/state.json
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/nobara-update-worker confirm
-TimeoutStartSec=180s
+# Cold RPM reads and recovery cleanup can be slow on older disks. Keep a
+# finite deadline, but do not reject a healthy boot after only three minutes.
+TimeoutStartSec=15min
+ExecStopPost=-/usr/libexec/nobara-update-worker confirm-stopped
+TimeoutStopSec=60s
 
 [Install]
 WantedBy=multi-user.target
