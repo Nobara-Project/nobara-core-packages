@@ -349,7 +349,7 @@ def prune_recovery(recovery: dict, confirmed_job: str, *, state_root=None) -> No
     current = json.loads(output(["findmnt", "--json", "--mountpoint", "/", "--output", "FSTYPE,UUID,FSROOT"]))["filesystems"][0]
     if current["fstype"] != "btrfs" or current["uuid"] != recovery["uuid"]:
         raise UpdateError("Cannot verify the confirmed Btrfs root for recovery cleanup.")
-    environment = grub_environment()
+    environment = grub_variables()
     if any(environment.get(key) for key in ("nobara_fallback", "nobara_trial", "next_entry")):
         raise UpdateError("Cannot remove recovery snapshots while a boot trial is armed.")
     selected = environment.get("saved_entry", "")
@@ -396,9 +396,8 @@ def prune_recovery(recovery: dict, confirmed_job: str, *, state_root=None) -> No
                     continue
                 key, value = fields
                 if key in {"linux", "initrd", "efi"}:
-                    if "$" in value:
-                        raise UpdateError("Cannot identify boot-image references for recovery cleanup.")
-                    images = {(BOOT / name.lstrip("/")).resolve() for name in shlex.split(value)}
+                    # Unknown variables still stop cleanup; it is retried later.
+                    images = {(BOOT / name.lstrip("/")).resolve() for name in expand_bls(key, value, environment)}
                     if entry.stem == selected and any(not image.is_file() for image in images):
                         raise UpdateError("The confirmed normal boot entry has missing boot images.")
                     referenced_images.update(images)
