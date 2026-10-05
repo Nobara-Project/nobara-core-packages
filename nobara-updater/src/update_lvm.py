@@ -97,7 +97,7 @@ def probe(root):
 
 
 def create(job, layout):
-    from .update_recovery import boot_payloads, grub_environment
+    from .update_recovery import boot_payloads, expand_bls, grub_variables
     job_id = job.name
     vg, lv = name(layout["vg"]), name(layout["lv"])
     origin_path = vg + "/" + lv
@@ -142,7 +142,7 @@ def create(job, layout):
     subprocess.run(["lsinitrd", str(image)], check=True, stdout=subprocess.DEVNULL)
     options = None
     lines = []
-    env = grub_environment()
+    env = grub_variables()
     for line in entry.read_text().splitlines():
         fields = line.split(None, 1)
         if len(fields) != 2:
@@ -152,9 +152,9 @@ def create(job, layout):
         if key == "title":
             line = "title Nobara — previous system (" + job_id[:8] + ")"
         elif key in {"linux", "initrd"}:
-            line = key + " " + " ".join("/" + str((destination / Path(p).name).relative_to("/boot")) for p in value.split())
+            line = key + " " + " ".join("/" + str((destination / Path(p).name).relative_to("/boot")) for p in expand_bls(key, value, env))
         elif key == "options":
-            options = shlex.split(value.replace("$kernelopts", env.get("kernelopts", "")))
+            options = shlex.split(" ".join(expand_bls(key, value, env)))
             options = [p for p in options if not p.startswith(("nobara.rollback=", "rd.lvm.lv=", "root=", "resume="))]
             options += ["root=/dev/" + origin_path, "rd.lvm.lv=" + origin_path]
             line = "options " + " ".join(options)
