@@ -4,6 +4,7 @@ TuneD's kernel-install hook appends these variables to every entry. GRUB
 fills them in at boot from TuneD's grub.cfg block or grubenv, and an unset
 variable expands to nothing.
 """
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -139,6 +140,14 @@ class TunedBootEntryTests(unittest.TestCase):
         self.assertNotIn("$", fields["linux"] + fields["initrd"] + fields["options"])
         self.assertEqual(fields["grub_users"], "$grub_users")
         self.assertEqual(fields["title"], "Nobara — previous system (" + JOB[:8] + ")")
+        # A normal entry rebuilt from this one after a rollback restores $tuned_params.
+        record = json.loads((archive / "bls-source.json").read_text())
+        self.assertEqual(record, {"options": ENTRY.split("\noptions ")[1].split("\n")[0]})
+
+    def test_entries_without_tuned_params_write_no_options_record(self):
+        self.entry.write_text(ENTRY.replace(" $tuned_params", ""))
+        recovery.recovery_entry(self.entry, JOB, ".nobara-updater/" + JOB + "/root")
+        self.assertFalse((self.boot / "nobara-updater" / JOB / "bls-source.json").exists())
 
 
 if __name__ == "__main__":

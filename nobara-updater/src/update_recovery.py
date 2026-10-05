@@ -199,6 +199,10 @@ def recovery_entry(entry: Path, job_id: str, subvolume: str) -> str:
                 paths.append("/" + str(target.relative_to(BOOT)))
             line = key + " " + " ".join(paths)
         elif key == "options":
+            if "$tuned_params" in value.split():
+                # A normal entry rebuilt from this one after a rollback must not
+                # pin TuneD's current values; synchronize_boot_root() restores this.
+                atomic_json(destination / "bls-source.json", {"options": value})
             line = "options " + replace_subvolume(" ".join(expand_bls(key, value, variables)), subvolume)
         entry_lines.append(line)
     return "\n".join(entry_lines) + "\n"
