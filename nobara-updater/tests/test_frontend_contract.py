@@ -35,6 +35,64 @@ def functions_from_file(filename, names, class_name=None):
 
 @unittest.skipUnless((ROOT / "appcenter/privileged_helper.py").is_file(), "dnf-app-center checkout unavailable")
 class FrontendContractTests(unittest.TestCase):
+    def test_catalog_reload_does_not_reconfirm_updates_or_retained_results(self):
+        ns = functions_from_file("ui.py", {"_load_succeeded"}, "MainWindow")
+        ns["GLib"] = Mock()
+        for action in ("system-update", "update", "install", "remove"):
+            for status in ("queued", "running", "done", "failed"):
+                with self.subTest(action=action, status=status):
+                    ns["GLib"].reset_mock()
+                    item = types.SimpleNamespace(action=action, status=status)
+                    window = Mock(queue_items=[item], queue_worker_running=False)
+                    ns["_load_succeeded"](window, Mock(), Mock(), [], [], "")
+                    ns["GLib"].idle_add.assert_not_called()
+                    self.assertEqual(window.queue_items, [item])
+
+    def test_confirmation_ignores_already_authorized_actions_and_finished_rpm_installs(self):
+        ns = functions_from_file("ui.py", {"_prompt_install"}, "MainWindow")
+        ns.update(Adw=Mock(), _=lambda text: text)
+        for action in ("system-update", "update", "install", "remove", "install-rpms"):
+            statuses = ("running", "done", "failed") if action == "install-rpms" else ("queued", "running", "done", "failed")
+            for status in statuses:
+                with self.subTest(action=action, status=status):
+                    window = Mock(queue_items=[types.SimpleNamespace(action=action, status=status)], queue_worker_running=False)
+                    self.assertFalse(ns["_prompt_install"](window))
+                    window._start_queue_worker.assert_not_called()
+        ns["Adw"].MessageDialog.assert_not_called()
+
+    def test_catalog_reload_only_prompts_for_waiting_local_rpm_files(self):
+        ns = functions_from_file("ui.py", {"_load_succeeded"}, "MainWindow")
+        ns["GLib"] = Mock()
+        item = types.SimpleNamespace(action="install-rpms", status="queued")
+        window = Mock(queue_items=[item], queue_worker_running=False)
+        ns["_load_succeeded"](window, Mock(), Mock(), [], [], "")
+        ns["GLib"].idle_add.assert_called_once_with(window._prompt_install)
+        ns["GLib"].reset_mock()
+        window.queue_worker_running = True
+        ns["_load_succeeded"](window, Mock(), Mock(), [], [], "")
+        ns["GLib"].idle_add.assert_not_called()
+
+    def test_local_rpm_confirmation_counts_files_and_cancel_preserves_update_results(self):
+        ns = functions_from_file("ui.py", {"_prompt_install"}, "MainWindow")
+        ns.update(Adw=Mock(), _=lambda text: text)
+        completed = types.SimpleNamespace(action="system-update", status="done")
+        pending = types.SimpleNamespace(action="install-rpms", status="queued", file_paths=["one.rpm", "two.rpm"])
+        window = Mock(queue_items=[completed, pending], queue_worker_running=False)
+        ns["_prompt_install"](window)
+        dialog = ns["Adw"].MessageDialog.return_value
+        self.assertEqual(ns["Adw"].MessageDialog.call_args.kwargs["body"],
+                         "You have 2 RPM file(s) ready. Do you want to install them?")
+        dialog.present.assert_called_once()
+        # Cancel only the files covered by this dialog, preserving both the
+        # update result and anything queued while the dialog was open.
+        newer = types.SimpleNamespace(action="install-rpms", status="queued", file_paths=["later.rpm"])
+        window.queue_items.append(newer)
+        response = dialog.connect.call_args.args[1]
+        response(dialog, "cancel")
+        self.assertEqual(window.queue_items, [completed, newer])
+        window._start_queue_worker.assert_not_called()
+        window._refresh_queue_page.assert_called_once()
+
     def test_privileged_helper_reports_staging_instead_of_completed_installation(self):
         ns = functions_from_file("privileged_helper.py", {"_nobara_update_result", "_run_system_update"})
         self.assertIn("_nobara_update_result", ns, "Apply the dnf-app-center integration patch")
