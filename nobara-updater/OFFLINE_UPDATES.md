@@ -20,7 +20,7 @@ incorrect EFI initramfs destination on split-boot installations. This cannot
 create free space on a genuinely full filesystem.
 
 The early transaction uses fresh private metadata, repository priorities and
-excludes, local-RPM protection, signature verification, and native RPM replay
+excludes, signature verification, and native RPM replay
 testing. It does not install an absent helper, downgrade packages, perform
 release migrations, or erase packages to force dependency resolution. No
 rollback snapshot is created for this preliminary live transaction. A partial
@@ -97,7 +97,7 @@ The planner verifies that a matching replacement survives every subsequent
 solve. It never uses obsolete metadata from a replacement that is being removed
 or whose new version no longer carries that Obsoletes declaration. Replacement
 chains are reevaluated after each solve; ambiguous cycles stop preparation with
-package names. Existing local-RPM, essential-package, install-only, exclusion,
+package names. Existing essential-package, install-only, exclusion,
 and unexpected-removal safeguards remain in effect. Merely disappearing from
 the repositories does not make a package a cleanup target.
 
@@ -108,27 +108,29 @@ the user typed a command or the RPM's installation reason is `User`. A normal
 `dnf install package-name` from a configured repository remains eligible for
 updates. See [DNF5's package-origin API](https://dnf5.readthedocs.io/en/stable/api/python/libdnf5_rpm.html#libdnf5.rpm.Package.get_from_repo_id).
 
-The updater preserves RPMs recorded as `@commandline`/`commandline`, and
-conservatively preserves packages whose origin is missing, `<unknown>`, or
-`@System` (including direct `rpm` installs), unless the installed RPM's full
-signature key ID matches a local Fedora/Nobara distribution public key.
-This recovers distribution provenance lost by older package managers without
-assuming a package is official based on its name, vendor, or version. Explicit
-`@commandline`/`commandline` installs are still preserved even if signed.
-It excludes repository replacements
-before solving and rejects any resolved migration that would remove, replace,
-or reinstall a protected local RPM. Different-name replacements through RPM
-Obsoletes are excluded too. Unrelated updates proceed when dependencies allow.
-These holds are computed for each updater transaction; they do not create
-permanent DNF versionlocks or prevent a deliberate manual package change.
-To resume repository updates, explicitly install/reinstall the chosen repository
-build using DNF. Source installs outside the RPM database cannot be identified
-or protected by this policy; neither can unrecorded edits to packaged files.
+The updater does not hold packages based on their installation origin.
+RPMs recorded as `@commandline`/`commandline`, or with missing, `<unknown>`, or
+`@System` origins (including direct `rpm` installs), follow normal repository
+selection. Distro-sync may upgrade, downgrade, or replace them through RPM
+Obsoletes. Fixups can reinstall them or remove them through the same validated
+migration/obsolete-cleanup rules used for repository-installed packages.
+The preliminary `nobara-updater`/`drm-awaiter` upgrade also includes locally
+installed builds and their dependencies. Its existing upgrade-only policy and
+the helpers' anti-downgrade safeguard still apply regardless of package origin.
 
-RPM Fusion's free/nonfree repository release packages, including their tainted
-and rawhide variants, are exempt from local RPM protection. Nobara no longer
-ships these packages, and the updater has no RPM Fusion-specific fixups.
-Available updates and declared Obsoletes follow the normal transaction policy.
+This removes origin-based solver exclusions and transaction vetoes. Repository
+priorities, explicit user exclusions/versionlocks, codec protections, essential
+package checks, and unexpected-removal safeguards still apply. A local-only RPM
+is not removed merely because there is no repository counterpart. A custom RPM
+with the same EVR as the repository is not automatically reinstalled by
+`distro-sync`. Source installations outside the RPM database are not managed or
+automatically updated by DNF; unrecorded edits to packaged files are not tracked.
+
+The policy applies to fresh preparations, including selected updates and major
+release upgrades. Cancel and prepare an already staged update again to resolve
+it under the new policy; saved transactions are not silently rewritten.
+RPM Fusion's free/nonfree repository release packages follow these same rules;
+Nobara no longer ships them and has no RPM Fusion-specific fixups.
 
 The Nobara repository IDs are `nobara`, `nobara-updates`,
 `nobara-kernel-mainline`, `nobara-kernel-lts`, `nobara-pikaos-additional`,
@@ -473,7 +475,7 @@ after the replacement system has booted successfully. Old module remnants with
 neither an installed core RPM nor a kernel image are removed too, including
 generated `kmod-<driver>-<kernel-version>` RPMs. These version-specific kernel
 and kmod packages can be removed even if their origin is unknown or
-`@commandline`; other local packages keep their protection. An orphan version
+`@commandline`. An orphan version
 must be older than the running kernel, and standalone development packages are
 not classified as orphans. These targeted repairs apply even below the retention
 limit or with unlimited retention. Kernel headers, generic kmod tools and driver
@@ -524,15 +526,15 @@ It links to the companion recovery guide; update behavior is unchanged.
 
 Release `2.0.1-52` bundles [user recovery instructions](RECOVERY.md). Failure
 reports and their offline tarballs explain the repair/retry/boot sequence,
-local RPM preservation, and third-party repository handling. Instructions
+package-origin reporting, and third-party repository handling. Instructions
 distinguish a restored system, a preparation failure before RPM writes, and
 a partial installation without rollback; the latter never suggests blindly
 rerunning the updater.
 
-Release `2.0.1-51` protects locally installed RPMs from distro-sync replacements
-and identifies implicated local/third-party packages in preparation and recovery
-reports. Rebuild/install `nobara-updater`; DNF App Center and the codec/installer
-callers use the existing CLI/report interfaces. Already prepared transactions
+Release `2.0.1-51` introduced local-RPM preservation and reports identifying
+implicated local/third-party packages. The origin-based preservation is now
+removed; the diagnostics remain. Rebuild/install `nobara-updater`; DNF App Center
+and the codec/installer callers use the existing CLI/report interfaces. Already prepared transactions
 must be cancelled and prepared again to use the new policy.
 
 Release `2.0.1-50` retires Btrfs rollback snapshots and their GRUB entries after

@@ -57,7 +57,7 @@ class CodecFixupTests(unittest.TestCase):
                 option = repo.get_config.return_value.get_enabled_option.return_value
                 option.get_value.return_value = enabled
                 with patch.object(planner.base_api, "Base", return_value=base), \
-                     patch.object(planner, "protect_local_packages", return_value=[]), \
+                     patch.object(planner, "collect_package_origins", return_value=[]), \
                      patch.object(planner.rpm_api, "PackageQuery", return_value=MagicMock()), \
                      patch.object(planner.repo_api, "RepoQuery", return_value=[repo]), \
                      patch.object(planner.subprocess, "run", return_value=Mock(stdout="\n".join(names))):

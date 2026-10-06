@@ -71,15 +71,15 @@ Before preparing a fresh system update, Nobara first upgrades the installed
 `nobara-updater` and `drm-awaiter` packages and their required dependencies.
 This small preliminary update happens immediately, so preparation and later
 boot-image generation use their latest available fixes. Repository priorities,
-exclusions, and local-package protection still apply. Already prepared updates
-are left intact. This preliminary step has no rollback snapshot; if it fails,
+exclusions, and normal transaction safety checks still apply. Already prepared
+updates are left intact. This preliminary step has no rollback snapshot; if it fails,
 follow [RECOVERY.md](RECOVERY.md) before retrying.
 
 The updater refreshes repositories and prepares one dependency-resolved
 transaction. It uses DNF's `distro-sync` behavior, which can upgrade or
 downgrade packages according to repository priorities and available versions.
-The local RPM protection rules described in the [recovery guide](RECOVERY.md#how-packages-are-handled)
-also apply.
+Locally installed/custom RPMs are eligible for repository replacements too;
+see [package handling in the recovery guide](RECOVERY.md#how-packages-are-handled).
 
 The Plasma Login migration removes SDDM's `kde-settings-sddm` settings package
 alongside SDDM, so its dependency cannot block the replacement login manager.
@@ -89,7 +89,7 @@ the DNF build available from the rolling repositories. If that optional plugin
 has no available replacement and requires a library version the repositories
 no longer offer, the updater can retire it while synchronizing the DNF packages
 in the same offline transaction. A matching repository build is used when
-available. Locally protected RPMs remain protected, and dependent applications
+available. This also applies to a locally installed plugin. Dependent applications
 cannot be removed automatically. Nobara Updater's services provide their own
 shutdown inhibition; this compatibility fixup does not remove the actions
 plugin used for codec protection or other DNF plugins.
@@ -134,9 +134,9 @@ planned package set, including replacements that change version or architecture.
 Cleanup occurs within the same prepared, tested transaction as the update.
 
 The log names each obsolete package being removed and the replacement that
-will remain installed. Locally installed RPMs, packages with unverified origins,
-essential packages, and install-only packages such as retained kernels remain
-protected. Being absent from a repository is not enough to remove a package.
+will remain installed. Essential packages and install-only packages such as
+retained kernels remain protected. Being absent from a repository is not enough
+to remove a package.
 
 If a replacement is also being removed or no longer declares the old package
 obsolete in its new version, that relationship cannot authorize cleanup.
@@ -437,9 +437,9 @@ start an update. Updating a single package from the Updates page uses the same
 Nobara updater as updating a selection.
 
 On Nobara, App Center sends the selection to `nobara-sync`; it does not install
-packages one at a time. Nobara's repository priorities, local-package protection,
-codec handling, fixups, transaction checks, and live/offline decisions still
-apply to one resolved transaction. Required dependencies and fixups can add
+packages one at a time. Nobara's repository priorities, codec handling, fixups,
+transaction checks, and live/offline decisions still apply to one resolved
+transaction. Required dependencies and fixups can add
 packages you did not select. Updater and `drm-awaiter` prerequisite upgrades still
 run first. A Nobara release upgrade requires a full system synchronization and
 includes all required release packages, even with a smaller selection.

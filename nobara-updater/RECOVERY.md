@@ -87,16 +87,15 @@ not a stale process lock, and bypassing it cannot make the old plan safe.
 - **The updater uses DNF's `distro-sync` behavior.** It can upgrade or
   downgrade packages according to repository priorities, versions, and
   dependencies.
-- **Locally installed RPMs are preserved.** This includes local RPM
-  installations and packages with no recorded repository origin, except when
-  their installed RPM signatures identify a Fedora/Nobara distribution build.
-  Missing history alone is not proof of a custom build. Explicit command-line
-  installations remain protected even when signed by the distribution. Installing
-  a repository package with `dnf install package-name` does not exempt it
-  from updates. These preservation rules apply to Nobara's updater, not
-  standalone DNF commands. RPM Fusion's free/nonfree repository release
-  packages (including tainted and rawhide variants) are exempt from this
-  protection; the updater no longer schedules fixups for them.
+- **Locally installed RPMs follow normal repository updates.** Packages
+  installed from local files or URLs, or directly with `rpm`, are not held
+  back because of their origin. This also applies when the installation
+  repository is unknown. `distro-sync` can upgrade or downgrade them to a
+  repository version, or replace them through RPM Obsoletes. A custom build
+  with the same version as the repository is not automatically reinstalled.
+  A local-only package is not removed merely because no repository provides it.
+  Repository priorities, explicit exclusions/versionlocks, codec protections,
+  and normal dependency/removal checks still apply.
 - **Third-party repository packages remain eligible for replacement.**
   Repository priorities and dependencies determine whether a Nobara build
   replaces them. A newer version alone does not override repository
@@ -107,8 +106,8 @@ not a stale process lock, and bypassing it cannot make the old plan safe.
   Nobara repository provides a counterpart, the report also names that
   repository. Unknown origin is reported as unverified; unrelated packages
   are not blamed merely because they are installed.
-- **Source installations outside RPM's package database** cannot be
-  protected by this mechanism.
+- **Source installations outside RPM's package database** are not managed
+  or automatically updated by DNF.
 
 ## Sharing logs
 

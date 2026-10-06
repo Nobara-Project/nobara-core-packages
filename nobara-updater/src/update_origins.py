@@ -1,4 +1,4 @@
-"""Keep local RPMs intact and attribute only packages named in a failure."""
+"""Record package provenance and attribute only packages named in a failure."""
 from __future__ import annotations
 
 import logging
@@ -16,13 +16,6 @@ NOBARA_REPOS = frozenset({
 })
 LOCAL_REPOS = {"@commandline", "commandline"}
 UNKNOWN_REPOS = {"", "<unknown>", "@System"}
-# These legacy repository configuration RPMs are no longer shipped by Nobara
-# and must not be held as local builds, even when installed from an RPM URL.
-LOCAL_PROTECTION_EXEMPTIONS = frozenset({
-    "rpmfusion-free-release", "rpmfusion-nonfree-release",
-    "rpmfusion-free-release-tainted", "rpmfusion-nonfree-release-tainted",
-    "rpmfusion-free-release-rawhide", "rpmfusion-nonfree-release-rawhide",
-})
 
 
 class PackageOriginError(UpdateError):
@@ -44,9 +37,9 @@ def format_origins(packages):
     for package in packages:
         lines.append("- " + package["nevra"])
         if package["kind"] == "local":
-            lines.append("  Manually installed RPM (@commandline), outside Nobara's repositories. The updater preserves this package.")
+            lines.append("  Manually installed RPM (@commandline). It is eligible for replacement by repository packages.")
         elif package["kind"] == "unknown":
-            lines.append("  No installation repository was recorded (for example, a direct rpm install). Nobara provenance is unverified; the updater preserves this package.")
+            lines.append("  No installation repository was recorded (for example, a direct rpm install). Nobara provenance is unverified; the package remains eligible for repository updates.")
         else:
             lines.append("  Installed from third-party repository '" + package["repo"] + "', not a Nobara-provided repository.")
         if package.get("nobara_repos"):
@@ -55,22 +48,20 @@ def format_origins(packages):
     return "\n".join(lines)
 
 
-def mentioned_packages(text, origins, *, replacements=False):
+def mentioned_packages(text, origins):
     """Match exact installed NEVRAs, not every local package or a name substring."""
     found = []
     for package in origins:
         aliases = list(package["aliases"])
-        if replacements and package["kind"] in {"local", "unknown"}:
-            aliases.extend(package.get("blocked_replacements", []))
         if any(re.search(r"(?<![A-Za-z0-9_.+~:-])" + re.escape(alias) + r"(?![A-Za-z0-9_.+~:-])", text) for alias in aliases):
             found.append(package)
     return found
 
 
-def annotate_failure(error, origins, *, replacements=False):
+def annotate_failure(error, origins):
     if isinstance(error, PackageOriginError):
         return error
-    packages = mentioned_packages(str(error), origins, replacements=replacements)
+    packages = mentioned_packages(str(error), origins)
     return PackageOriginError(str(error), packages) if packages else error
 
 
@@ -79,7 +70,7 @@ def distribution_signed_packages(base):
 
     Use installed RPM signature IDs and the distribution's local public keys.
     Package names, vendors and matching repository NEVRAs are not evidence of
-    provenance. Explicit command-line origins remain protected regardless.
+    provenance. This affects diagnostics only, never solver eligibility.
     """
     import libdnf5.rpm as rpm
 
@@ -114,7 +105,8 @@ def signed_package_inventory(text, trusted):
     return packages
 
 
-def protect_local_packages(base):
+def collect_package_origins(base):
+    """Collect diagnostics without excluding candidates or protecting local RPMs."""
     # Keep libdnf imports off the recovery/report path: a failed update may
     # have damaged that library in the installation being diagnosed.
     import libdnf5.rpm as rpm
@@ -128,14 +120,11 @@ def protect_local_packages(base):
     signed = (distribution_signed_packages(base)
               if any(p.get_from_repo_id() in UNKNOWN_REPOS for p in installed) else set())
     origins = []
-    excludes = rpm.PackageSet(base)
     for package in installed:
-        if package.get_name() in LOCAL_PROTECTION_EXEMPTIONS:
-            continue
         repo = package.get_from_repo_id()
         kind = origin_kind(repo)
         if kind == "unknown" and package.get_full_nevra() in signed:
-            LOG.debug("Allowing distribution-signed package with missing origin: %s", package.get_full_nevra())
+            LOG.debug("Omitting distribution-signed package from unverified-origin diagnostics: %s", package.get_full_nevra())
             continue
         if kind == "nobara":
             continue
@@ -147,29 +136,5 @@ def protect_local_packages(base):
         row = dict(name=package.get_name(), arch=package.get_arch(), nevra=package.get_full_nevra(),
                    aliases=sorted({package.get_full_nevra(), package.get_nevra()}), repo=repo, kind=kind,
                    nobara_repos=sorted({p.get_repo_id() for p in counterparts}))
-        if kind in {"local", "unknown"}:
-            candidates = rpm.PackageQuery(available)
-            candidates.filter_name([package.get_name()])
-            if package.get_arch() != "noarch":
-                candidates.filter_arch([package.get_arch(), "noarch"])
-            # A different package name can also replace a local RPM through
-            # Obsoletes. Exclude those candidates before the solver runs.
-            local = rpm.PackageSet(base)
-            local.add(package)
-            obsolete = rpm.PackageQuery(available)
-            obsolete.filter_obsoletes(local)
-            candidates.update(obsolete)
-            row["blocked_replacements"] = sorted({alias for p in candidates for alias in (p.get_full_nevra(), p.get_nevra())})
-            excludes.update(candidates)
-            LOG.info("Keeping locally installed package %s (origin: %s).", row["nevra"], repo or "not recorded")
         origins.append(row)
-    base.get_rpm_package_sack().add_user_excludes(excludes)
     return origins
-
-
-def validate_local_packages(records, origins):
-    """Explicit migrations/removals must not bypass the solver exclusions."""
-    outgoing = {p["nevra"] for p in records if p["action"] in {"Remove", "Replaced", "Reinstall"}}
-    changed = [p for p in origins if p["kind"] in {"local", "unknown"} and outgoing.intersection(p["aliases"])]
-    if changed:
-        raise PackageOriginError("This update would remove or replace a protected locally installed RPM. No packages were changed.", changed)

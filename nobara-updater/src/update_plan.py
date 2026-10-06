@@ -19,7 +19,7 @@ import libdnf5.transaction as trans
 from .update_migrations import BGRT_FILES, add_codec_migration, add_plymouth_migration, machine_product, plan_migrations
 from .update_boot import changes_kernel, check_selection_support, boot_space_requirements, installed_boot_kernels
 from .update_policy import execution_policy, format_restart_reasons
-from .update_origins import PackageOriginError, protect_local_packages, validate_local_packages, annotate_failure
+from .update_origins import PackageOriginError, collect_package_origins, annotate_failure
 from .update_state import UpdateError, atomic_json, file_digest, os_release, rpm_fingerprint
 from .update_health import PackageHealth
 from .update_progress import PackageProgress
@@ -184,7 +184,7 @@ def check_resolution(transaction, origins=()) -> None:
         details = [event.to_string() for event in transaction.get_resolve_logs()
                    if event.get_problem() != base_api.GoalProblem_ALREADY_INSTALLED]
         error = UpdateError("Package conflicts prevent this update:\n" + "\n".join(details))
-        raise annotate_failure(error, origins, replacements=True)
+        raise annotate_failure(error, origins)
     if transaction.get_conflicting_packages() or transaction.get_broken_dependency_packages():
         packages = list(transaction.get_conflicting_packages()) + list(transaction.get_broken_dependency_packages())
         error = UpdateError("DNF skipped conflicting or broken packages. The system update was not prepared.\n" +
@@ -226,7 +226,7 @@ def projected_packages(base, transaction):
     return retained, final
 
 
-def add_dnf_inhibitor_migration(base, migrations, origins):
+def add_dnf_inhibitor_migration(base, migrations):
     """Handle the optional plugin split missing from older mirrored DNF builds.
 
     This is a packaging transition, not a license to erase orphan packages.
@@ -235,13 +235,10 @@ def add_dnf_inhibitor_migration(base, migrations, origins):
     subject to the normal solver and removal checks.
     """
     name = "libdnf5-plugin-systemd-inhibit"
-    held = {p["nevra"] for p in origins if p["kind"] in {"local", "unknown"}}
     installed = rpm_api.PackageQuery(base)
     installed.filter_installed()
     installed.filter_name([name])
     for plugin in installed:
-        if plugin.get_full_nevra() in held:
-            continue
         available = rpm_api.PackageQuery(base)
         available.filter_available()
         available.filter_name([name])
@@ -309,7 +306,6 @@ def resolve_obsolete_cleanup(base, goal, transaction, settings, origins, migrati
     package is installed already, using its final version's metadata. Do not
     remove a replacement along with the package whose cleanup it authorizes.
     """
-    held = {p["nevra"] for p in origins if p["kind"] in {"local", "unknown"}}
     installonly = rpm_api.PackageQuery(base)
     installonly.filter_installed()
     installonly.filter_installonly()
@@ -338,7 +334,7 @@ def resolve_obsolete_cleanup(base, goal, transaction, settings, origins, migrati
             replacements = obsolete_replacements(base, package, final)
             if replacements.empty():
                 continue
-            protected = (nevra in held or name in ESSENTIAL or name == "kernel"
+            protected = (name in ESSENTIAL or name == "kernel"
                          or name.startswith("kernel-") or installonly.contains(package))
             if protected:
                 if nevra not in reported:
@@ -497,10 +493,9 @@ def prepare_early_transaction(job: Path, names: tuple[str, ...]) -> dict:
     base = configure_base(job, os_release())
     origins = []
     try:
-        origins = protect_local_packages(base)
-        held = {p["name"] for p in origins if p["kind"] in {"local", "unknown"}}
+        origins = collect_package_origins(base)
         installed = {p["name"] for p in installed_inventory(base)}
-        targets = [name for name in names if name in installed and name not in held]
+        targets = [name for name in names if name in installed]
         if not targets:
             return dict(empty=True, package_origins=origins)
         settings = base_api.GoalJobSettings()
@@ -526,7 +521,6 @@ def prepare_early_transaction(job: Path, names: tuple[str, ...]) -> dict:
             elif action not in {"Replaced", "Reason Change"}:
                 raise UpdateError("The early updater/helper upgrade would remove or downgrade "
                                   + package.get_full_nevra() + ". Repair this dependency conflict before updating.")
-        validate_local_packages(records, origins)
         validate_removals(records, set())
         for record in records:
             LOG.info("Early upgrade: %s %s", record["action"], record["nevra"])
@@ -560,7 +554,7 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
             raise UpdateError("The repository release changed during preparation. Try again.")
     origins = []
     try:
-        origins = protect_local_packages(base)
+        origins = collect_package_origins(base)
         health = PackageHealth(base)
         inventory = installed_inventory(base)
         try:
@@ -568,7 +562,7 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
         except OSError:
             nvidia_closed = False
         migrations = plan_migrations(inventory, product=machine_product(), nvidia_closed=nvidia_closed)
-        add_dnf_inhibitor_migration(base, migrations, origins)
+        add_dnf_inhibitor_migration(base, migrations)
         if getattr(base, "nobara_migrate_media", False):
             migrations.hooks.append("migrate-media-repository")
         # Retire only known old ROCm packages whose exact names disappeared.
@@ -661,7 +655,6 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
             if action in {"Install", "Upgrade", "Downgrade", "Reinstall"}:
                 incoming.append(package)
                 incoming_footprints.append(footprints[-1])
-        validate_local_packages(records, origins)
         validate_removals(records, migrations.remove)
         if changes_kernel(records) or preserved_kernels:
             check_selection_support()
@@ -672,8 +665,8 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
                 if name == "nobara-release-common" or name.startswith("nobara-release-identity-"):
                     if replacement_versions.get(name, installed["version"]) != release:
                         message = f"The release identity package {name} is not ready for Nobara {release}."
-                        held = [p for p in origins if p["name"] == name and p["kind"] in {"local", "unknown"}]
-                        raise PackageOriginError(message, held) if held else UpdateError(message)
+                        implicated = [p for p in origins if p["name"] == name]
+                        raise PackageOriginError(message, implicated) if implicated else UpdateError(message)
         for record in records:
             LOG.info("%s %s", record["action"], record["nevra"])
         if transaction.empty() and not migrations.hooks:

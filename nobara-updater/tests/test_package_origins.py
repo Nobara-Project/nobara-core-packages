@@ -39,6 +39,7 @@ class PackageOriginTests(unittest.TestCase):
         error = origins.annotate_failure(UpdateError('package labwc-5-1.x86_64 conflicts with a system dependency'), records)
         self.assertEqual([p['name'] for p in error.package_conflicts], ['labwc'])
         self.assertIn('Manually installed RPM', str(error))
+        self.assertNotIn('preserves this package', str(error))
         self.assertNotIn('unrelated', str(error))
         self.assertNotIn('aliases', error.package_conflicts[0])
 
@@ -47,11 +48,13 @@ class PackageOriginTests(unittest.TestCase):
             error = UpdateError(text)
             self.assertIs(origins.annotate_failure(error, [local()]), error)
 
-    def test_excluded_candidate_can_identify_its_local_hold_in_solver_failure(self):
+    def test_repository_candidate_failure_does_not_blame_a_former_local_hold(self):
         package = dict(local(), blocked_replacements=['labwc-6-1.x86_64'])
         error = UpdateError('labwc-6-1.x86_64 is excluded by filtering')
         self.assertIs(origins.annotate_failure(error, [package]), error)
-        annotated = origins.annotate_failure(error, [package], replacements=True)
+        # Old saved plans may still contain blocked_replacements. A failed
+        # repository candidate is no longer evidence against the local RPM.
+        annotated = origins.annotate_failure(UpdateError('labwc-5-1.x86_64 conflicts'), [package])
         self.assertEqual(annotated.package_conflicts[0]['name'], 'labwc')
         self.assertIs(origins.annotate_failure(annotated, [package]), annotated)
 
@@ -59,6 +62,7 @@ class PackageOriginTests(unittest.TestCase):
         text = str(origins.PackageOriginError('Conflict', [local(kind='unknown', repo='<unknown>')]))
         self.assertIn('provenance is unverified', text)
         self.assertNotIn('Installed from third-party', text)
+        self.assertNotIn('preserves this package', text)
 
     def test_third_party_conflict_lists_original_and_nobara_repositories(self):
         error = origins.annotate_failure(UpdateError('labwc-0:5-1.x86_64 requires missing-abi'),

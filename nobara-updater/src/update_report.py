@@ -24,19 +24,15 @@ PACKAGE_GUIDANCE = """How packages are handled
 The updater uses DNF distro-sync, which can upgrade or downgrade packages
 according to repository priorities, available versions, and dependencies.
 
-Locally installed RPMs are preserved, including RPMs installed from local
-files and packages with no recorded repository origin unless their installed
-RPM signatures identify a Fedora/Nobara distribution build. Missing history
-alone does not make a distribution-signed package a custom build. Explicit
-command-line installations remain protected. A normal repository
-installation using dnf install package-name remains eligible for updates.
-These preservation rules apply to Nobara's updater, not standalone DNF
-commands. Source installations outside the RPM database cannot be protected
-by this mechanism.
-
-RPM Fusion's free/nonfree repository release packages (including tainted and
-rawhide variants) are exempt from local RPM protection and no longer have
-updater fixups.
+Locally installed RPMs follow normal repository updates, including RPMs
+installed from local files or URLs and packages with no recorded repository
+origin. Distro-sync can upgrade, downgrade, or replace them through RPM
+Obsoletes. A custom build with the same version as a repository package is
+not automatically reinstalled. A local-only package is not removed merely
+because no repository provides it. Repository priorities, explicit exclusions
+and versionlocks, codec protections, and dependency/removal checks still apply.
+Source installations outside the RPM database are not managed or automatically
+updated by DNF.
 
 Third-party repository packages remain eligible for replacement by a Nobara
 build. Repository priorities and dependencies still apply; a newer version

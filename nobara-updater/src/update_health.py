@@ -43,7 +43,7 @@ class PackageHealth:
         ts = rpm.TransactionSet(self.root)
         try:
             iterator = ts.dbMatch()
-            # Include excluded and locally protected RPMs too. They remain
+            # Include excluded RPMs too. They remain
             # installed and must participate in dependency validation.
             self.installed = {iterator.instance(): header for header in iterator if header["arch"]}
         finally:

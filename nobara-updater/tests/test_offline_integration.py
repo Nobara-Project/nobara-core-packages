@@ -566,11 +566,12 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         with self.assertRaisesRegex(UpdateError, "missing required Plymouth file"):
             self.prepare()
 
-    def test_bgrt_repair_does_not_overwrite_a_protected_local_theme_package(self):
+    def test_bgrt_repair_can_reinstall_a_locally_installed_theme_package(self):
         self.plymouth_fixture()
         self.set_origin("plymouth-theme-spinner", "@commandline")
-        with self.assertRaisesRegex(UpdateError, "plymouth-theme-spinner"):
-            self.prepare()
+        result = self.prepare()
+        self.assertTrue(any(p["name"] == "plymouth-theme-spinner" and p["action"] == "Reinstall"
+                            for p in result["packages"]))
 
     def test_obsoleted_packagekit_plugin_passes_preflight_and_is_removed_in_saved_transaction(self):
         self.packagekit_leftover_fixture()
@@ -596,12 +597,11 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         result = self.prepare()
         self.assertFalse(any(p["name"] == "dnf4-plugin-notify-PackageKit" for p in result["packages"]))
 
-    def test_packagekit_cleanup_does_not_bypass_local_package_protection(self):
+    def test_packagekit_cleanup_includes_locally_installed_obsolete_plugin(self):
         self.packagekit_leftover_fixture(origin="@commandline")
-        with self.assertLogs(planner.LOG, level="WARNING") as messages:
-            result = self.prepare()
-        self.assertFalse(any(p["name"] == "dnf4-plugin-notify-PackageKit" for p in result["packages"]))
-        self.assertIn("Keeping protected obsolete package", "\n".join(messages.output))
+        result = self.prepare()
+        self.assertTrue(any(p["name"] == "dnf4-plugin-notify-PackageKit" and p["action"] == "Remove"
+                            for p in result["packages"]))
 
     def add_obsolete_repo_package(self, name, version, *, headers="", arch="noarch", payload=None):
         if not getattr(self, "_obsolete_repo", False):
@@ -649,12 +649,12 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertEqual({p["action"] for p in result["packages"] if p["name"] == "libdnf5-plugin-systemd-inhibit"},
                          {"Downgrade", "Replaced"})
 
-    def test_dnf_inhibitor_cleanup_preserves_locally_installed_plugin(self):
+    def test_dnf_inhibitor_cleanup_includes_locally_installed_plugin(self):
         self.dnf_plugin_fixture()
         self.set_origin("libdnf5-plugin-systemd-inhibit", "@commandline")
-        with self.assertRaisesRegex(origins.PackageOriginError, "libdnf5-plugin-systemd-inhibit"):
-            self.prepare()
-        self.assertFalse((self.job / "transaction.json").exists())
+        result = self.prepare()
+        self.assertTrue(any(p["name"] == "libdnf5-plugin-systemd-inhibit" and p["action"] == "Remove"
+                            for p in result["packages"]))
 
     def test_dnf_inhibitor_cleanup_cannot_remove_dependent_application(self):
         self.dnf_plugin_fixture()
@@ -735,12 +735,13 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         planner.allow_architecture_cleanup(base, transaction, migrations)
         self.assertEqual(migrations.remove, set())
 
-    def test_redundant_local_noarch_copy_stays_protected(self):
+    def test_redundant_local_noarch_copy_is_retired(self):
         self.install_health_fixture("emacs-filesystem", arch="noarch", origin="@commandline")
         self.install_health_fixture("emacs-filesystem", arch="x86_64")
         self.add_obsolete_repo_package("emacs-filesystem", "1", arch="x86_64")
         result = self.prepare()
-        self.assertFalse(any(p["name"] == "emacs-filesystem" for p in result["packages"]))
+        self.assertEqual([(p["arch"], p["action"]) for p in result["packages"] if p["name"] == "emacs-filesystem"],
+                         [("noarch", "Remove")])
 
     def test_missing_multilib_dependency_is_restored_in_offline_plan_and_replay(self):
         self.install_health_fixture("libchromaprint", arch="i686",
@@ -768,13 +769,13 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertEqual(caught.exception.package_conflicts[0]["name"], "libchromaprint")
         download.assert_not_called()
 
-    def test_dependency_repair_preserves_locally_installed_consumer(self):
+    def test_repo_upgrade_replaces_local_consumer_without_pulling_its_old_dependencies(self):
         self.install_health_fixture("labwc", headers="Requires: custom-runtime", origin="@commandline")
         self.add_obsolete_repo_package("custom-runtime", "1")
         self.add_obsolete_repo_package("labwc", "2")
         result = self.prepare()
-        self.assertFalse(any(p["name"] == "labwc" for p in result["packages"]))
-        self.assertTrue(any(p["name"] == "custom-runtime" and p["action"] == "Install" for p in result["packages"]))
+        self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Upgrade" for p in result["packages"]))
+        self.assertFalse(any(p["name"] == "custom-runtime" for p in result["packages"]))
 
     def competing_dependency_providers(self, *, selection="migration", rich=False):
         requirement = "(shared-codec-abi and retained-helper)" if rich else "shared-codec-abi"
@@ -942,12 +943,13 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         changed = {p["action"] for p in result["packages"] if p["name"] == "legacy-tool"}
         self.assertEqual(changed, {"Upgrade", "Replaced"})
 
-    def test_generic_obsoletes_preserves_locals_and_unknown_origin_packages(self):
+    def test_generic_obsoletes_retires_local_and_unknown_origin_packages(self):
         for name, origin in (("local-tool", "@commandline"), ("unknown-tool", "")):
             self.install_health_fixture(name, origin=origin)
         self.install_health_fixture("replacement-tool", headers="Obsoletes: local-tool\nObsoletes: unknown-tool")
         result = self.prepare()
-        self.assertFalse(any(p["name"] in {"local-tool", "unknown-tool"} for p in result["packages"]))
+        self.assertEqual({p["name"] for p in result["packages"] if p["action"] == "Remove"},
+                         {"local-tool", "unknown-tool"})
 
     def test_generic_obsoletes_preserves_essential_and_installonly_packages(self):
         self.install_health_fixture("bash")
@@ -995,17 +997,17 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
     def test_generic_obsoletes_respects_installed_package_excludes(self):
         self.install_health_fixture("old-tool")
         self.install_health_fixture("replacement-tool", headers="Obsoletes: old-tool")
-        native_protect = planner.protect_local_packages
+        native_collect = planner.collect_package_origins
 
         def exclude(base):
-            result = native_protect(base)
+            result = native_collect(base)
             packages = planner.rpm_api.PackageQuery(base)
             packages.filter_installed()
             packages.filter_name(["old-tool"])
             base.get_rpm_package_sack().add_user_excludes(packages)
             return result
 
-        with patch.object(planner, "protect_local_packages", side_effect=exclude):
+        with patch.object(planner, "collect_package_origins", side_effect=exclude):
             result = self.prepare()
         self.assertFalse(any(p["name"] == "old-tool" for p in result["packages"]))
 
@@ -1090,12 +1092,17 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertTrue(self.prepare_early()["empty"])
         self.assertFalse((self.job / "transaction.json").exists())
 
-    def test_early_upgrade_keeps_local_updater_build(self):
+    def test_early_upgrade_updates_locally_installed_helpers(self):
         self.updater_fixture("3")
         self.set_origin("nobara-updater", "@commandline")
-        self.assertTrue(self.prepare_early()["empty"])
+        self.install_health_fixture("drm-awaiter", "1", origin="@commandline")
+        self.add_obsolete_repo_package("drm-awaiter", "2")
+        self.assertFalse(self.prepare_early()["empty"])
+        saved = json.loads((self.job / "transaction.json").read_text())
+        payloads = {Path(p["package_path"]).name for p in saved["rpms"] if "package_path" in p}
+        self.assertEqual(payloads, {"nobara-updater-3-1.noarch.rpm", "drm-awaiter-2-1.noarch.rpm"})
 
-    def test_early_upgrade_cannot_replace_a_local_dependency(self):
+    def test_early_upgrade_can_replace_a_local_dependency(self):
         self.install_health_fixture("drm-awaiter", "1")
         self.install_health_fixture("labwc", "1", origin="@commandline")
         private_repo = Path(self.case.name) / "early-repo"
@@ -1105,9 +1112,10 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
             shutil.copy2(package, private_repo)
         subprocess.run(["createrepo_c", str(private_repo)], check=True, capture_output=True)
         self.repo = private_repo
-        with self.assertRaisesRegex(UpdateError, "labwc"), patch.object(b.Transaction, "download") as download:
-            self.prepare_early()
-        download.assert_not_called()
+        self.assertFalse(self.prepare_early()["empty"])
+        saved = json.loads((self.job / "transaction.json").read_text())
+        payloads = {Path(p["package_path"]).name for p in saved["rpms"] if "package_path" in p}
+        self.assertEqual(payloads, {"drm-awaiter-2-1.noarch.rpm", "labwc-2-1.noarch.rpm"})
 
     def test_higher_priority_repo_wins_over_newer_fedora_candidate(self):
         upstream = Path(self.case.name) / "upstream"
@@ -1328,18 +1336,49 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         subprocess.run(["createrepo_c", str(private)], check=True, capture_output=True)
         self.repo, self.repo_id = private, "nobara"
 
-    def test_local_rpm_is_held_while_unrelated_repository_package_updates(self):
+    def test_local_rpm_is_upgraded_by_repository_and_replay(self):
         self.local_desktop_fixture()
         result = self.prepare()
-        self.assertFalse(any(p["name"] == "labwc" for p in result["packages"]))
-        self.assertTrue(any(p["action"] == "Upgrade" for p in result["packages"]))
-        self.assertEqual(result["package_origins"][0]["repo"], "@commandline")
+        self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Upgrade" for p in result["packages"]))
+        self.assertEqual(next(p for p in result["package_origins"] if p["name"] == "labwc")["repo"], "@commandline")
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        installed = subprocess.run(["rpm", "--root", str(self.root), "-q", "labwc", "--qf", "%{VERSION}"],
+                                   check=True, capture_output=True, text=True)
+        self.assertEqual(installed.stdout, "6")
 
-    def test_local_rpm_is_not_downgraded_by_repository(self):
+    def test_local_rpm_still_obeys_explicit_repository_excludes(self):
+        self.local_desktop_fixture()
+        native_base = self.base
+        def excluding_base(*args, **kwargs):
+            base = native_base(*args, **kwargs)
+            packages = rpm_api.PackageQuery(base)
+            packages.filter_available()
+            packages.filter_name(["labwc"])
+            base.get_rpm_package_sack().add_user_excludes(packages)
+            return base
+        with patch.object(self, "base", side_effect=excluding_base):
+            self.assertFalse(any(p["name"] == "labwc" for p in self.prepare()["packages"]))
+
+    def test_unavailable_local_rpm_is_not_removed_merely_for_being_local(self):
+        self.install_health_fixture("custom-tool", origin="@commandline")
+        self.assertFalse(any(p["name"] == "custom-tool" for p in self.prepare()["packages"]))
+
+    def test_local_rpm_is_downgraded_to_repository_version(self):
         self.local_desktop_fixture(available_version="4")
+        self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Downgrade" for p in self.prepare()["packages"]))
+
+    def test_equal_version_local_rpm_is_not_forcibly_reinstalled(self):
+        self.local_desktop_fixture(available_version="5")
         self.assertFalse(any(p["name"] == "labwc" for p in self.prepare()["packages"]))
 
-    def test_rpmfusion_repo_rpms_can_update_while_local_desktop_stays_protected(self):
+    def test_selected_update_includes_commandline_origin_without_at_prefix(self):
+        self.local_desktop_fixture(origin="commandline")
+        result = self.prepare(packages=["labwc"])
+        self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Upgrade" for p in result["packages"]))
+        self.assertFalse(any(p["name"] == "nobara-offline-fixture" for p in result["packages"]))
+
+    def test_rpmfusion_repo_rpms_and_local_desktop_follow_normal_updates(self):
         self.local_desktop_fixture()
         names = ("rpmfusion-free-release", "rpmfusion-nonfree-release")
         for name, origin in zip(names, ("@commandline", "<unknown>")):
@@ -1351,14 +1390,12 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
         result = self.prepare()
         upgraded = {p["name"] for p in result["packages"] if p["action"] == "Upgrade"}
-        self.assertTrue(set(names) <= upgraded)
-        self.assertFalse(any(p["name"] == "labwc" for p in result["packages"]))
-        self.assertFalse(any(p["name"] in names for p in result["package_origins"]))
+        self.assertTrue(set(names) | {"labwc"} <= upgraded)
 
-    def test_unknown_origin_direct_rpm_install_is_also_preserved(self):
+    def test_unknown_origin_direct_rpm_install_is_also_upgraded(self):
         self.local_desktop_fixture(origin="<unknown>")
         result = self.prepare()
-        self.assertFalse(any(p["name"] == "labwc" for p in result["packages"]))
+        self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Upgrade" for p in result["packages"]))
         self.assertEqual(next(p for p in result["package_origins"] if p["name"] == "labwc")["kind"], "unknown")
 
     def test_missing_history_for_distribution_signed_rpm_does_not_hold_upgrade(self):
@@ -1367,10 +1404,10 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
             result = self.prepare()
         self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Upgrade" for p in result["packages"]))
 
-    def test_explicit_local_origin_is_preserved_even_with_distribution_signature(self):
+    def test_explicit_local_origin_is_upgraded_with_distribution_signature(self):
         self.local_desktop_fixture(origin="@commandline")
         with patch.object(origins, "distribution_signed_packages", return_value={"labwc-0:5-1.noarch"}):
-            self.assertFalse(any(p["name"] == "labwc" for p in self.prepare()["packages"]))
+            self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Upgrade" for p in self.prepare()["packages"]))
 
     def kernel_development_fixture(self, *, matching=True):
         self.local_desktop_fixture()
@@ -1486,35 +1523,28 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertEqual(result["preserved_kernels"], [])
         self.assertEqual(len([p for p in result["packages"] if p["name"] == "kernel-lto-devel"]), 2)
 
-    def test_obsoletes_cannot_replace_local_package_under_a_different_name(self):
+    def test_obsoletes_can_replace_local_package_under_a_different_name(self):
         self.local_desktop_fixture()
         replacement = self.build_rpm("replacement-desktop", "1", headers="Obsoletes: labwc < 99\nProvides: labwc = 6")
         shutil.copy2(replacement, self.repo)
         subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
         result = self.prepare()
-        self.assertFalse(any(p["name"] in {"labwc", "replacement-desktop"} for p in result["packages"]))
+        self.assertTrue(any(p["name"] == "replacement-desktop" and p["action"] == "Install" for p in result["packages"]))
+        self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Replaced" for p in result["packages"]))
 
-    def test_migration_cannot_remove_local_package_even_when_explicitly_allowed(self):
+    def test_migration_can_remove_local_package_when_explicitly_allowed(self):
         self.local_desktop_fixture()
-        self.migrations = MigrationPlan()
-        self.migrations.remove.add("labwc")
-        with self.assertRaises(UpdateError) as caught:
-            self.prepare()
-        self.assertEqual(caught.exception.package_conflicts[0]["name"], "labwc")
-        self.assertIn("Manually installed RPM", str(caught.exception))
-        self.assertFalse((self.job / "transaction.json").exists())
+        self.migrations = MigrationPlan(remove={"labwc"})
+        result = self.prepare()
+        self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Remove" for p in result["packages"]))
 
-    def test_local_dependency_conflict_names_held_package_and_nobara_counterpart(self):
+    def test_local_dependency_conflict_is_resolved_by_repository_upgrade(self):
         self.local_desktop_fixture()
         requiring = self.build_rpm("nobara-offline-fixture", "2", headers="Requires: labwc >= 6")
         shutil.copy2(requiring, self.repo)
         subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
-        with self.assertRaises(UpdateError) as caught:
-            self.prepare()
-        self.assertIn("Manually installed RPM", str(caught.exception))
-        self.assertEqual(caught.exception.package_conflicts[0]["name"], "labwc")
-        self.assertEqual(caught.exception.package_conflicts[0]["nobara_repos"], ["nobara"])
-        self.assertFalse((self.job / "transaction.json").exists())
+        result = self.prepare()
+        self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Upgrade" for p in result["packages"]))
 
     def test_third_party_repo_conflict_is_identified_without_holding_repo_packages(self):
         self.local_desktop_fixture(origin="copr:test:desktop", dependency="Requires: nobara-offline-fixture = 1")
@@ -1534,8 +1564,11 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.local_desktop_fixture(origin="copr:test:desktop")
         self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Upgrade" for p in self.prepare()["packages"]))
 
-    def test_native_file_conflict_identifies_preserved_local_package(self):
+    def test_native_file_conflict_identifies_remaining_local_package(self):
         self.local_desktop_fixture()
+        # Without a repository replacement the local RPM remains installed;
+        # its file conflict still needs provenance diagnostics.
+        (self.repo / "labwc-6-1.noarch.rpm").unlink()
         conflicting = self.build_rpm("nobara-offline-fixture", "2", payload="/usr/share/labwc/version")
         shutil.copy2(conflicting, self.repo)
         subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
@@ -1545,16 +1578,15 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertEqual(error.package_conflicts[0]["name"], "labwc")
         self.assertIn("Manually installed RPM", str(error))
 
-    def test_major_release_reports_a_manually_installed_release_identity(self):
+    def test_major_release_can_replace_a_manually_installed_release_identity(self):
         old_release = self.build_rpm("nobara-release-common", "43")
         subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts", "--noplugins",
                         "--ignoresize", "-i", str(old_release)], check=True, capture_output=True)
         self.set_origin("nobara-release-common", "@commandline")
         self.current_release = "43"
-        with self.assertRaises(UpdateError) as caught:
-            self.prepare()
-        self.assertEqual(caught.exception.package_conflicts[0]["name"], "nobara-release-common")
-        self.assertIn("Manually installed RPM", str(caught.exception))
+        result = self.prepare()
+        self.assertEqual(result["target_release"], "44")
+        self.assertTrue(any(p["name"] == "nobara-release-common" and p["action"] == "Upgrade" for p in result["packages"]))
 
     def test_replay_under_private_worker_umask_keeps_dnf_system_state_readable(self):
         self.prepare()
