@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import libdnf5.base as base_api
@@ -29,11 +30,46 @@ ESSENTIAL = {"glibc", "rpm", "dnf5", "libdnf5", "systemd", "bash", "coreutils", 
 
 
 class DownloadProgress(repo_api.DownloadCallbacks):
+    # libdnf5 announces every package before librepo starts. Report the
+    # running total at this interval (seconds) and once all are complete.
+    INTERVAL = 5
+
+    def __init__(self):
+        super().__init__()
+        self.sizes, self.received = [], []
+        self.total = self.downloaded = self.finished = 0
+        self.reported = time.monotonic()
+
     def add_new_download(self, user_data, description, total_to_download):
         LOG.info("Downloading %s (%s bytes)", description, int(total_to_download))
-        return user_data
+        self.sizes.append(max(0, int(total_to_download)))
+        self.received.append(0)
+        self.total += self.sizes[-1]
+        # Package downloads all carry the same (null) user_data. Return our
+        # own 1-based index; libdnf5 passes it back to the other callbacks.
+        return len(self.sizes)
+
+    def _index(self, user_cb_data):
+        return user_cb_data - 1 if isinstance(user_cb_data, int) and 0 < user_cb_data <= len(self.sizes) else None
+
+    def _update(self, index, received):
+        # A retry on another mirror restarts the count; never exceed the size.
+        received = min(max(0, int(received)), self.sizes[index])
+        self.downloaded += received - self.received[index]
+        self.received[index] = received
+
+    def report(self):
+        self.reported = time.monotonic()
+        percent = 100 * self.downloaded // self.total if self.total else 100
+        LOG.info("Downloaded %.1f of %.1f MiB (%d%%), %d of %d packages", self.downloaded / 1024**2,
+                 self.total / 1024**2, percent, self.finished, len(self.sizes))
 
     def progress(self, user_cb_data, total_to_download, downloaded):
+        index = self._index(user_cb_data)
+        if index is not None:
+            self._update(index, downloaded)
+            if time.monotonic() - self.reported >= self.INTERVAL:
+                self.report()
         return self.OK
 
     def mirror_failure(self, user_cb_data, msg, url, metadata):
@@ -43,6 +79,14 @@ class DownloadProgress(repo_api.DownloadCallbacks):
     def end(self, user_cb_data, status, msg):
         if status == self.TransferStatus_ERROR:
             LOG.error("Download failed: %s", msg)
+            return self.OK
+        index = self._index(user_cb_data)
+        if index is not None:
+            # A package that is already present reports no progress.
+            self._update(index, self.sizes[index])
+            self.finished += 1
+            if self.finished == len(self.sizes):
+                self.report()
         return self.OK
 
     def fastest_mirror(self, user_cb_data, stage, ptr):

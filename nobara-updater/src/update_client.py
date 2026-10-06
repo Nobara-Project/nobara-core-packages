@@ -1,9 +1,11 @@
 """CLI client; systemd owns preparation and installation lifetimes."""
+import contextlib
 import logging
+import os
 import subprocess
 import time
 
-from .update_state import STATE_DIR, read_state, status_message
+from .update_state import PROXY_FILE, STATE_DIR, atomic_json, proxy_settings, read_state, status_message
 
 
 def prepare_update(logger: logging.Logger, *, codecs: bool = False) -> bool:
@@ -18,11 +20,29 @@ def prepare_update(logger: logging.Logger, *, codecs: bool = False) -> bool:
             return False
         return True
     service = "nobara-updater-prepare-codecs.service" if codecs else "nobara-updater-prepare.service"
-    return run_service(service, logger, {"ready", "scheduled", "unchanged"})
+    with proxy_handover(logger):
+        return run_service(service, logger, {"ready", "scheduled", "unchanged"})
 
 
 def install_live_update(logger: logging.Logger) -> bool:
     return run_service("nobara-updater-live.service", logger, {"live-complete"})
+
+
+@contextlib.contextmanager
+def proxy_handover(logger: logging.Logger):
+    """The service gets systemd's environment, not ours. Hand over the proxy
+    settings for its downloads, and never leave old ones for a later run."""
+    proxies, refused = proxy_settings(os.environ)
+    for name in refused:
+        logger.warning("Ignoring %s: it is not a valid proxy setting.", name)
+    try:
+        if proxies:
+            atomic_json(PROXY_FILE, proxies)
+        else:
+            PROXY_FILE.unlink(missing_ok=True)
+        yield
+    finally:
+        PROXY_FILE.unlink(missing_ok=True)
 
 
 def run_service(service: str, logger: logging.Logger, success_states: set[str]) -> bool:

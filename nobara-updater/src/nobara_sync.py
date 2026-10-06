@@ -14,7 +14,7 @@ import subprocess
 import sys
 
 from nobara_updater.update_client import install_live_update, prepare_update, worker_action
-from nobara_updater.update_state import STATE_DIR, UpdateError, in_installer_root, read_state, read_status, status_message
+from nobara_updater.update_state import STATE_DIR, UpdateError, in_installer_root, proxy_settings, read_state, read_status, status_message
 
 LOG = logging.getLogger("nobara-sync")
 RESULT_PREFIX = "NOBARA_UPDATE_RESULT "
@@ -79,7 +79,12 @@ def elevate():
     if os.geteuid() == 0:
         return
     # The app center already authenticates its helper; terminal users use sudo.
-    os.execvp("sudo", ["sudo", "--", str(Path(__file__).resolve()), *sys.argv[1:]])
+    # sudo's env_reset drops proxy settings; keep only valid ones by name.
+    proxies, refused = proxy_settings(os.environ)
+    for name in refused:
+        print(f"Ignoring {name}: it is not a valid proxy setting.", file=sys.stderr)
+    keep = ["--preserve-env=" + ",".join(proxies)] if proxies else []
+    os.execvp("sudo", ["sudo", *keep, "--", str(Path(__file__).resolve()), *sys.argv[1:]])
 
 
 def initialize_logging():
