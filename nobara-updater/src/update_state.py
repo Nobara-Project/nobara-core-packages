@@ -10,15 +10,50 @@ import re
 import subprocess
 import tempfile
 import time
+import urllib.parse
 from pathlib import Path
 
 STATE_DIR = Path("/var/lib/nobara-updater")
 TRIGGER = Path("/system-update")
 ACTIVE = {"preparing", "ready", "scheduled", "installing", "validating", "installing-live", "validating-live", "awaiting-boot", "recovering"}
+# The variables curl reads when dnf.conf sets no proxy=. curl ignores
+# upper-case HTTP_PROXY on purpose, so it is not passed on either.
+PROXY_VARIABLES = ("http_proxy", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY")
+PROXY_SCHEMES = {"http", "https", "socks4", "socks4a", "socks5", "socks5h"}
 
 
 class UpdateError(RuntimeError):
     pass
+
+
+def valid_proxy_setting(name: str, value: str) -> bool:
+    """Accept a proxy URL or a no_proxy host list; refuse anything else."""
+    if not isinstance(value, str) or not 0 < len(value) <= 2048:
+        return False
+    if name.lower() == "no_proxy":
+        return re.fullmatch(r"[A-Za-z0-9.:*/%_\[\], -]+", value) is not None
+    if not re.fullmatch(r"[!-~]+", value):
+        return False
+    try:
+        # Like curl, read a proxy without a scheme as http://.
+        url = urllib.parse.urlsplit(value if "://" in value else "http://" + value)
+        port = url.port
+    except ValueError:
+        return False
+    return (url.scheme in PROXY_SCHEMES and re.fullmatch(r"[A-Za-z0-9._:%-]+", url.hostname or "") is not None
+            and port != 0 and url.path in {"", "/"} and not url.query and not url.fragment)
+
+
+def proxy_settings(environ) -> tuple[dict[str, str], list[str]]:
+    """Return the valid proxy variables in environ, and the names refused."""
+    settings, refused = {}, []
+    for name in PROXY_VARIABLES:
+        value = environ.get(name)
+        if value and valid_proxy_setting(name, value):
+            settings[name] = value
+        elif value:
+            refused.append(name)
+    return settings, refused
 
 
 def in_installer_root() -> bool:
