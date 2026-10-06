@@ -402,6 +402,14 @@ and to its replacements afterward, including required dependencies and
 every transaction, so no manual refresh or reboot is needed to protect the
 new packages.
 
+Mesa Vulkan driver selection remains available through **Nobara Driver
+Manager**. The `mesa-vulkan-drivers`, `mesa-vulkan-drivers-freeworld`,
+`mesa-vulkan-drivers-git`, and `mesa-vulkan-drivers-git-freeworld` packages are
+excluded from codec protection, including their 32-bit variants and dependencies
+used only by those drivers. Shared dependencies required by protected media
+packages remain protected, as do Mesa's VA-API and Gallium codec packages.
+The Codec Wizard can still select its usual freeworld Vulkan variants.
+
 Use the **Codec Wizard** or `nobara-sync install-codecs` to change the codec
 family. System updates through `nobara-sync cli` can also perform Nobara's
 managed replacements. A blocked manual transaction lists the affected
@@ -420,3 +428,46 @@ performed inside the installer also use a separate installation workflow.
 For failure reports, offline log bundles, and support instructions, see
 [Recovering from a failed Nobara update](RECOVERY.md). Technical and
 administrator details are in [Nobara system updates](OFFLINE_UPDATES.md).
+
+## Selecting updates in DNF App Center
+
+Use **Select All** to check the available packages, deselect any you want to
+leave for later, then choose **Update Selected**. Selecting packages does not
+start an update. Updating a single package from the Updates page uses the same
+Nobara updater as updating a selection.
+
+On Nobara, App Center sends the selection to `nobara-sync`; it does not install
+packages one at a time. Nobara's repository priorities, local-package protection,
+codec handling, fixups, transaction checks, and live/offline decisions still
+apply to one resolved transaction. Required dependencies and fixups can add
+packages you did not select. Updater and `drm-awaiter` prerequisite upgrades still
+run first. A Nobara release upgrade requires a full system synchronization and
+includes all required release packages, even with a smaller selection.
+
+One overall progress bar is mirrored at the bottom of the window and on the
+Queue page, for example **0/25 processed items**, **12/25 processed items**, then
+**25/25 processed items**. Both copies show the same count and progress. The total
+includes required dependencies and fixups added to the resolved transaction.
+Package details appear in the transaction log.
+
+The status beside the bar identifies the current phase. Download progress comes
+from DNF5 download callbacks; live installation progress comes from native DNF5
+transaction output. The same bar resets for installation after downloading.
+**Validating downloads** means validation is still underway. **Prepared for
+restart** means the packages have been staged, not installed. Offline installation
+runs after restarting, with progress on the boot splash. **Finished** is shown
+after successful completion; if validation fails, the queue shows the failure.
+The system update result remains visible until the next system update.
+
+Selecting every available update performs the same full distro-sync as
+`nobara-sync cli`. For a selection in a terminal, use, for example:
+
+```sh
+sudo nobara-sync cli --package=editor --package=library.i686
+```
+
+`--all` still means also update Flatpaks. `--progress` enables the structured
+frontend progress stream; it is unnecessary for ordinary terminal use. If a
+prepared update has a different selection, finish it or cancel it with
+`sudo nobara-sync cancel-update` before preparing a new selection. See
+[RECOVERY.md](RECOVERY.md) for failures and repair instructions.

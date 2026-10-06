@@ -40,6 +40,29 @@ class CodecProtectionTests(unittest.TestCase):
             validate_codec_changes([record("ffmpeg-free", "I")], set())
         validate_codec_changes([record("text-editor", "I")], set())
 
+    def test_vulkan_driver_variants_allow_install_and_swap_for_both_architectures(self):
+        names = ("mesa-vulkan-drivers", "mesa-vulkan-drivers-freeworld",
+                 "mesa-vulkan-drivers-git", "mesa-vulkan-drivers-git-freeworld")
+        for source in names:
+            for target in names:
+                if source == target:
+                    continue
+                with self.subTest(source=source, target=target):
+                    packages = [p for arch in ("x86_64", "i686") for p in
+                                (record(source, "E", arch), record(target, "I", arch))]
+                    validate_codec_changes(packages, {("libavcodec-free", "x86_64"), ("libavcodec-free", "i686")})
+
+    def test_vulkan_swap_does_not_authorize_codec_or_shared_dependency_changes(self):
+        drivers = [record("mesa-vulkan-drivers", "E"), record("mesa-vulkan-drivers-freeworld", "I")]
+        for name in ("mesa-va-drivers", "mesa-va-drivers-freeworld", "mesa-libgallium",
+                     "mesa-libgallium-freeworld", "ffmpeg-free", "shared-media-library"):
+            for arch in ("x86_64", "i686"):
+                with self.subTest(name=name, arch=arch), self.assertRaisesRegex(UpdateError, name):
+                    validate_codec_changes(drivers + [record(name, "E", arch)], {(name, arch)})
+        for name in ("mesa-va-drivers-freeworld", "mesa-libgallium-freeworld", "ffmpeg-free"):
+            with self.subTest(install=name), self.assertRaisesRegex(UpdateError, name):
+                validate_codec_changes(drivers + [record(name, "I")], set())
+
 
 PLUGIN_DIR = Path(os.environ.get("NOBARA_ACTIONS_PLUGIN_DIR", "/usr/lib64/libdnf5/plugins"))
 import test_offline_integration as fixtures
@@ -92,6 +115,72 @@ class CodecGuardIntegrationTests(unittest.TestCase):
 
     def run_dnf(self, *args, plugins=True):
         return subprocess.run(self.command(*args, plugins=plugins), capture_output=True, text=True)
+
+    def install_vulkan_fixture(self):
+        cls = type(self)
+        if not hasattr(cls, "vulkan_rpms"):
+            names = ("mesa-vulkan-drivers", "mesa-vulkan-drivers-freeworld",
+                     "mesa-vulkan-drivers-git", "mesa-vulkan-drivers-git-freeworld")
+            cls.vulkan_rpms = {}
+            for name in names:
+                headers = "Provides: fixture-vulkan-driver\nRequires: driver-private\nRequires: shared-media-support\n"
+                headers += "\n".join("Conflicts: " + other for other in names if other != name)
+                for arch in ("x86_64", "i686"):
+                    cls.vulkan_rpms[name, arch] = cls.build_rpm(name, "1", headers=headers, arch=arch)
+            for name, headers in (("driver-private", ""), ("shared-media-support", ""),
+                                  ("libheif", "Requires: fixture-vulkan-driver\nRequires: shared-media-support")):
+                cls.vulkan_rpms[name, "noarch"] = cls.build_rpm(name, "1", headers=headers)
+        for (name, arch), package in cls.vulkan_rpms.items():
+            shutil.copy2(package, self.repo)
+            if name == "mesa-vulkan-drivers" or arch == "noarch":
+                subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts", "--noplugins",
+                                "--ignoresize", "-i", str(package)], check=True, capture_output=True)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+
+    def test_vulkan_dependency_boundary_preserves_actual_codec_dependencies(self):
+        self.install_vulkan_fixture()
+        base = fixtures.configure_fixture_base(self.root, self.repos, self.job)
+        self.addCleanup(base.unlock_system_repo)
+        protected = installed_codec_dependencies(base)
+        for arch in ("x86_64", "i686"):
+            self.assertNotIn(("mesa-vulkan-drivers", arch), protected)
+        self.assertNotIn(("driver-private", "noarch"), protected)
+        self.assertIn(("shared-media-support", "noarch"), protected)
+        self.assertIn(("libheif", "noarch"), protected)
+        base.unlock_system_repo()
+        result = self.run_dnf("remove", "shared-media-support")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Nobara manages", result.stdout + result.stderr)
+
+    def test_dnf_swaps_all_vulkan_variants_with_multilib_and_protection_enabled(self):
+        self.install_vulkan_fixture()
+        for target in ("mesa-vulkan-drivers-freeworld", "mesa-vulkan-drivers-git-freeworld",
+                       "mesa-vulkan-drivers-git", "mesa-vulkan-drivers"):
+            with self.subTest(target=target):
+                result = self.run_dnf("install", target + ".x86_64", target + ".i686", "--allowerasing")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                installed = subprocess.check_output(["rpm", "--root", str(self.root), "-q", "--whatprovides",
+                                                     "fixture-vulkan-driver", "--qf", "%{NAME}.%{ARCH}\n"], text=True)
+                self.assertEqual(set(installed.splitlines()), {target + ".x86_64", target + ".i686"})
+        # A Vulkan replacement must not act as a bypass for another package.
+        result = self.run_dnf("swap", "ffmpeg", "mesa-vulkan-drivers-freeworld", "--allowerasing")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Nobara manages", result.stdout + result.stderr)
+        self.assertIn("ffmpeg", result.stdout + result.stderr)
+
+    def test_driver_manager_can_install_after_its_separate_rpm_removal(self):
+        self.install_vulkan_fixture()
+        for source, target in (("mesa-vulkan-drivers", "mesa-vulkan-drivers-freeworld"),
+                               ("mesa-vulkan-drivers-freeworld", "mesa-vulkan-drivers-git-freeworld"),
+                               ("mesa-vulkan-drivers-git-freeworld", "mesa-vulkan-drivers-git"),
+                               ("mesa-vulkan-drivers-git", "mesa-vulkan-drivers")):
+            with self.subTest(source=source, target=target):
+                # Match cfhdb's existing remove-first profile, only inside the
+                # disposable RPMDB. The subsequent DNF call keeps plugins on.
+                subprocess.run(["rpm", "--root", str(self.root), "-e", "--nodeps",
+                                source + ".x86_64", source + ".i686"], check=True, capture_output=True)
+                result = self.run_dnf("install", target + ".x86_64", target + ".i686")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_dependency_inventory_covers_version_file_and_rich_requirements(self):
         base = fixtures.configure_fixture_base(self.root, self.repos, self.job)

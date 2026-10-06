@@ -21,6 +21,26 @@ class UpdateError(RuntimeError):
     pass
 
 
+def package_selection(packages) -> list[str] | None:
+    """Only literal RPM names/name.arch, never globs, paths or CLI switches."""
+    if packages is None:
+        return None
+    if not isinstance(packages, list) or not packages or len(packages) > 20000:
+        raise UpdateError("Select at least one package, or request a complete system update.")
+    if any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]{0,254}", name) for name in packages):
+        raise UpdateError("Invalid selected package name. Use literal RPM names or name.arch.")
+    return sorted(set(packages))
+
+
+def read_request(identifier: str, root: Path = STATE_DIR) -> list[str]:
+    if not re.fullmatch(r"[a-f0-9]{32}", identifier):
+        raise UpdateError("Invalid update request identifier.")
+    selection = package_selection(json.loads((root / "requests" / (identifier + ".json")).read_text())["packages"])
+    if selection is None:
+        raise UpdateError("The selected update request has no packages.")
+    return selection
+
+
 def in_installer_root() -> bool:
     """Recognize an actual chroot, never infer one from a missing system bus."""
     result = subprocess.run(["systemd-detect-virt", "--chroot"], capture_output=True, text=True)

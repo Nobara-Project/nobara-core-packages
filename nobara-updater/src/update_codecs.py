@@ -23,7 +23,14 @@ CODEC_MULTILIB = {
     "libavcodec-freeworld", "libheif-freeworld", "libheif",
 }
 CODEC_NATIVE = {"ffmpeg-free", "mozilla-openh264", "pipewire-codec-aptx"}
-CODEC_PACKAGES = frozenset(CODEC_REPLACEMENTS) | frozenset(CODEC_REPLACEMENTS.values()) | CODEC_MULTILIB | CODEC_NATIVE
+# The wizard can select freeworld Vulkan drivers, but users also switch these
+# providers through Driver Manager. Keep that choice outside codec protection.
+VULKAN_DRIVER_PACKAGES = frozenset({
+    "mesa-vulkan-drivers", "mesa-vulkan-drivers-freeworld",
+    "mesa-vulkan-drivers-git", "mesa-vulkan-drivers-git-freeworld",
+})
+CODEC_PACKAGES = (frozenset(CODEC_REPLACEMENTS) | frozenset(CODEC_REPLACEMENTS.values())
+                  | CODEC_MULTILIB | CODEC_NATIVE) - VULKAN_DRIVER_PACKAGES
 
 
 def installed_codec_dependencies(base) -> set[tuple[str, str]]:
@@ -37,6 +44,12 @@ def installed_codec_dependencies(base) -> set[tuple[str, str]]:
 
     installed = rpm.PackageQuery(base)
     installed.filter_installed()
+    # Do not re-protect a switchable Vulkan driver through a codec's dependency
+    # on its virtual provides, or traverse dependencies belonging only to that
+    # driver. Shared dependencies reached from actual codecs stay protected.
+    drivers = rpm.PackageQuery(installed)
+    drivers.filter_name(sorted(VULKAN_DRIVER_PACKAGES))
+    installed.difference(drivers)
     pending = rpm.PackageQuery(installed)
     pending.filter_name(sorted(CODEC_PACKAGES))
     seen = rpm.PackageSet(base)

@@ -20,8 +20,9 @@ from .update_migrations import BGRT_FILES, add_codec_migration, add_plymouth_mig
 from .update_boot import changes_kernel, check_selection_support, boot_space_requirements, installed_boot_kernels
 from .update_policy import execution_policy, format_restart_reasons
 from .update_origins import PackageOriginError, protect_local_packages, validate_local_packages, annotate_failure
-from .update_state import UpdateError, file_digest, os_release, rpm_fingerprint
+from .update_state import UpdateError, atomic_json, file_digest, os_release, rpm_fingerprint
 from .update_health import PackageHealth
+from .update_progress import PackageProgress
 from .update_repositories import migrated_media_urls
 
 LOG = logging.getLogger(__name__)
@@ -29,11 +30,27 @@ ESSENTIAL = {"glibc", "rpm", "dnf5", "libdnf5", "systemd", "bash", "coreutils", 
 
 
 class DownloadProgress(repo_api.DownloadCallbacks):
+    def __init__(self, progress):
+        super().__init__()
+        self.reporter = progress
+        self.downloads = []
+        self.percentages = {}
+
     def add_new_download(self, user_data, description, total_to_download):
         LOG.info("Downloading %s (%s bytes)", description, int(total_to_download))
-        return user_data
+        record = self.reporter.match(description)
+        self.downloads.append(record)
+        self.reporter.package(record, "downloading")
+        # libdnf5's Python binding uses integer callback tokens (not pointers).
+        return len(self.downloads) - 1
 
     def progress(self, user_cb_data, total_to_download, downloaded):
+        if total_to_download > 0:
+            percent = max(0, min(100, int(100 * downloaded / total_to_download)))
+            # Limit IPC and GTK work to percentage changes, not every byte callback.
+            if self.percentages.get(user_cb_data) != percent:
+                self.percentages[user_cb_data] = percent
+                self.reporter.package(self.downloads[user_cb_data], "downloading", percent / 100)
         return self.OK
 
     def mirror_failure(self, user_cb_data, msg, url, metadata):
@@ -43,6 +60,8 @@ class DownloadProgress(repo_api.DownloadCallbacks):
     def end(self, user_cb_data, status, msg):
         if status == self.TransferStatus_ERROR:
             LOG.error("Download failed: %s", msg)
+        self.reporter.package(self.downloads[user_cb_data],
+                              "download-failed" if status == self.TransferStatus_ERROR else "downloaded", 1)
         return self.OK
 
     def fastest_mirror(self, user_cb_data, stage, ptr):
@@ -512,13 +531,16 @@ def prepare_early_transaction(job: Path, names: tuple[str, ...]) -> dict:
         for record in records:
             LOG.info("Early upgrade: %s %s", record["action"], record["nevra"])
         (job / "packages").mkdir(exist_ok=True)
-        callback = DownloadProgress()
+        progress = PackageProgress(job.name, records, stage="early")
+        progress.plan()
+        callback = DownloadProgress(progress)
         base.set_download_callbacks(repo_api.DownloadCallbacksUniquePtr(callback))
         transaction.download()
         if not transaction.check_gpg_signatures():
             raise UpdateError("Early upgrade package signature verification failed:\n"
                               + "\n".join(transaction.get_gpg_signature_problems()))
         store_transaction(transaction, incoming, job)
+        atomic_json(job / "progress.json", dict(packages=records, stage="early"))
         return dict(empty=False, package_origins=origins)
     except UpdateError as error:
         raise annotate_failure(error, origins) from error
@@ -526,7 +548,7 @@ def prepare_early_transaction(job: Path, names: tuple[str, ...]) -> dict:
         base.unlock_system_repo()
 
 
-def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = True) -> dict:
+def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = True, packages: list[str] | None = None) -> dict:
     current = os_release()
     base = configure_base(job, current, codecs=codecs)
     release = target_release(base, current)
@@ -579,7 +601,13 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
         settings.set_skip_unavailable(False)
         settings.set_clean_requirements_on_remove(False)
         goal = base_api.Goal(base)
-        goal.add_rpm_distro_sync(settings)
+        if packages and release == current:
+            for name in packages:
+                goal.add_rpm_distro_sync(name, settings)
+        else:
+            if packages:
+                LOG.info("Upgrading Nobara %s to %s requires a complete system update; including all required release packages.", current, release)
+            goal.add_rpm_distro_sync(settings)
         for spec in sorted(migrations.remove):
             goal.add_remove(spec, settings)
         for spec in sorted(migrations.install):
@@ -649,6 +677,7 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
         for record in records:
             LOG.info("%s %s", record["action"], record["nevra"])
         if transaction.empty() and not migrations.hooks:
+            PackageProgress(job.name, []).plan()
             health.validate(transaction, [])
             return {"empty": True, "source_release": current, "target_release": release, "codecs": codecs,
                     "package_origins": origins}
@@ -659,7 +688,9 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
         require_space(job, download_size + 512 * 1024**2)
         require_space(Path("/"), install_size + 512 * 1024**2 + (download_size if job.stat().st_dev == Path("/").stat().st_dev else 0))
         (job / "packages").mkdir(exist_ok=True)
-        callback = DownloadProgress()
+        progress = PackageProgress(job.name, records)
+        progress.plan()
+        callback = DownloadProgress(progress)
         callback_ptr = repo_api.DownloadCallbacksUniquePtr(callback)
         base.set_download_callbacks(callback_ptr)
         LOG.info("Downloading the complete transaction before changing installed packages…")
@@ -698,6 +729,7 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
             raise UpdateError("Transaction validation failed:\n" + "\n".join(details))
         (job / "comps").mkdir(exist_ok=True)
         store_transaction(transaction, incoming, job)
+        atomic_json(job / "progress.json", dict(packages=records, stage="main"))
         # Serialize only after testing; every inbound package must actually
         # exist in the durable destination, outside the evictable DNF cache.
         serialized = json.loads((job / "transaction.json").read_text())

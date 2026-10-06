@@ -77,6 +77,14 @@ def original_root(state_root, state, source, uuid):
             raise UpdateError("The original Btrfs root path is not recorded; leaving the recovered root in place.")
     if current.startswith(".nobara-updater/"):
         raise UpdateError("The original root path is inside updater recovery storage.")
+    if current == "timeshift-btrfs" or current.startswith("timeshift-btrfs/"):
+        # An update may have started while a Timeshift snapshot was booted.
+        # Its path is ancestry, not permission to replace a managed backup
+        # with the live OS and retire the original snapshot during cleanup.
+        raise UpdateError(
+            "The recorded Btrfs root is inside Timeshift snapshot storage: /" + current + ". "
+            "Leaving the current system and Timeshift snapshots in place. "
+            "The normal root layout needs repair before automatic root-layout cleanup can continue.")
     return current
 
 

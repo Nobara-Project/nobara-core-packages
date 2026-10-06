@@ -1,9 +1,62 @@
-"""Best-effort Plymouth output for the offline worker, never desktop updates."""
+"""Package progress events and best-effort Plymouth output for offline updates."""
 from __future__ import annotations
 
+import json
+import logging
 import re
 import shutil
 import subprocess
+
+EVENT_PREFIX = "NOBARA_UPDATE_PROGRESS "
+
+
+def emit_progress(event: str, **fields) -> None:
+    """Versioned service-to-client events; human CLI output filters these."""
+    logging.getLogger(__name__).info("%s%s", EVENT_PREFIX,
+                                     json.dumps(dict(version=1, event=event, **fields), separators=(",", ":")))
+
+
+class PackageProgress:
+    def __init__(self, transaction: str, records: list[dict], *, stage: str = "main"):
+        self.transaction = transaction
+        self.records = [dict(p, id=p["action"] + ":" + p["nevra"]) for p in records
+                        if p["action"] not in {"Replaced", "Reason Change"}]
+        self.stage = stage
+
+    def plan(self):
+        emit_progress("plan", transaction=self.transaction, stage=self.stage, packages=self.records)
+
+    def package(self, record, phase, fraction=0):
+        if record:
+            emit_progress("package", transaction=self.transaction, id=record["id"],
+                          phase=phase, fraction=max(0, min(1, fraction)))
+
+    def match(self, description, *, action=None):
+        description = description.removesuffix(".rpm")
+        matches = []
+        for record in self.records:
+            if action and record["action"] != action:
+                continue
+            variants = {record["nevra"], record["nevra"].replace("-0:", "-"),
+                        record["name"] + "." + record["arch"]}
+            if description in variants or ((description.endswith("...") or description.endswith("…"))
+                    and any(v.startswith(description.rstrip(".…")) for v in variants)):
+                matches.append(record)
+        # Never guess which architecture/version an ambiguous truncated line describes.
+        return matches[0] if len(matches) == 1 else None
+
+    def transaction_line(self, line):
+        line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line)
+        match = re.match(r"^\s*\[\s*(\d{1,9})/\s*(\d{1,9})\]\s+(\w+)\s+(.+?)\s+(?:\|\s*)?(\d{1,3})%\s*\|", line)
+        if not match:
+            return
+        completed, total, verb, description, percent = match.groups()
+        if not 0 < int(completed) <= int(total) or int(percent) > 100:
+            return
+        action = {"Installing": "Install", "Upgrading": "Upgrade", "Downgrading": "Downgrade",
+                  "Reinstalling": "Reinstall", "Erasing": "Remove", "Removing": "Remove"}.get(verb)
+        if action:
+            self.package(self.match(description, action=action), "applying", int(percent) / 100)
 
 
 class OfflineProgress:
@@ -65,7 +118,7 @@ class OfflineProgress:
         # own percentage or an incomplete item as overall completion. If this
         # presentation changes, stage messages/progress still work.
         line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line)
-        match = re.match(r"^\s*\[\s*(\d{1,9})/\s*(\d{1,9})\]\s+[^|]+\|\s*100%\s*\|", line)
+        match = re.match(r"^\s*\[\s*(\d{1,9})/\s*(\d{1,9})\]\s+.+?\s+(?:\|\s*)?100%\s*\|", line)
         if match:
             completed, total = map(int, match.groups())
             if 0 < completed <= total:

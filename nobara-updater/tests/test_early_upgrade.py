@@ -161,6 +161,34 @@ class WorkerOrderingTests(unittest.TestCase):
                 prepare.assert_not_called()
                 install.assert_not_called()
 
+    def test_selection_survives_early_upgrade_reexec_and_reaches_preparation(self):
+        for early_done in (False, True):
+            arguments = ["worker", "prepare", "--request", "a" * 32]
+            if early_done:
+                arguments.append("--early-upgrade-complete")
+            with patch.object(self.worker.sys, "argv", arguments), \
+                 patch.object(self.worker, "read_request", return_value=["editor"]) as request, \
+                 patch.object(backend, "upgrade_early") as upgrade, patch.object(backend, "prepare") as prepare, \
+                 patch.object(self.worker.os, "execv") as restart:
+                self.assertEqual(self.worker.main(), 0)
+                request.assert_called_once_with("a" * 32)
+                if early_done:
+                    prepare.assert_called_once_with(packages=["editor"])
+                    upgrade.assert_not_called()
+                else:
+                    self.assertEqual(restart.call_args.args[1][-2:], ["--request", "a" * 32])
+                    prepare.assert_not_called()
+
+    def test_worker_cleans_selection_after_frontend_disconnect(self):
+        request = self.worker.STATE_DIR / "requests" / ("b" * 32 + ".json")
+        request.parent.mkdir()
+        request.write_text('{"packages":["editor"]}')
+        with patch.object(self.worker.sys, "argv", ["worker", "prepare", "--request", "b" * 32, "--early-upgrade-complete"]), \
+             patch.object(self.worker, "read_request", return_value=["editor"]), \
+             patch.object(backend, "prepare"):
+            self.assertEqual(self.worker.main(), 0)
+        self.assertFalse(request.exists())
+
     def test_fresh_interpreter_proceeds_without_upgrade_loop(self):
         with patch.object(self.worker.sys, "argv", ["worker", "prepare", "--early-upgrade-complete"]), \
              patch.object(backend, "upgrade_early") as upgrade, patch.object(backend, "prepare") as prepare:

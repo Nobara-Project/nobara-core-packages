@@ -17,9 +17,9 @@ from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchr
 from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment, check_recovery_space
 from .update_report import arm_report, publish_recovery, publish_failure, resolve_notice
 from .update_origins import annotate_failure
-from .update_progress import OfflineProgress
+from .update_progress import OfflineProgress, PackageProgress
 from .update_state import (ACTIVE, STATE_DIR, TRIGGER, UpdateError, atomic_json, file_digest,
-                           in_installer_root, os_release, read_state, rpm_fingerprint, status_message, update_lock,
+                           in_installer_root, os_release, package_selection, read_state, rpm_fingerprint, status_message, update_lock,
                            verify_files, write_state)
 
 LOG = logging.getLogger(__name__)
@@ -35,21 +35,41 @@ def announce(message: str, *, percent: int | None = None) -> None:
 
 def run(command: list[str]) -> None:
     LOG.info("Running: %s", " ".join(command))
+    replaying = Path(command[0]).name == "dnf5" and "replay" in command
+    progress = None
+    if replaying and "--setopt=tsflags=test" not in command:
+        path = Path(command[-1]) / "progress.json"
+        if path.is_file():
+            try:
+                saved = json.loads(path.read_text())
+                progress = PackageProgress(path.parent.name, saved["packages"], stage=saved["stage"])
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                # Presentation metadata is optional; never fail a validated
+                # RPM transaction because its progress description was lost.
+                LOG.warning("Package progress details are unavailable: %s", error)
+            if progress:
+                progress.plan()
+                for record in progress.records:
+                    progress.package(record, "waiting-install")
+    columns = str(max([120, *[len(record["nevra"]) + 90 for record in progress.records]])) if progress else "120"
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, encoding="utf-8", errors="replace", bufsize=1,
                                # Our job state is private (umask 077), but DNF
                                # writes public system-state TOMLs and runs RPM
                                # scriptlets. Use normal package-manager modes.
                                umask=0o022 if Path(command[0]).name == "dnf5" else -1,
-                               env=dict(os.environ, LC_ALL="C.UTF-8"))
+                               # Preserve complete NEVRAs in native DNF5 progress lines. Its
+                               # default non-TTY width otherwise silently truncates them.
+                               env=dict(os.environ, LC_ALL="C.UTF-8", FORCE_COLUMNS=columns, DNF5_FORCE_COLUMNS=columns))
     assert process.stdout is not None
     rpm_errors = deque(maxlen=20)
     last_lines = deque(maxlen=5)
-    replaying = Path(command[0]).name == "dnf5" and "replay" in command
     for line in process.stdout:
         LOG.info("%s", line.rstrip())
         if replaying:
             SPLASH.transaction_line(line)
+            if progress:
+                progress.transaction_line(line)
         if line.strip():
             last_lines.append(line.strip()[-1000:])
         # Native DNF5 can exit 0 after nonfatal RPM scriptlet failures. Its
@@ -62,6 +82,9 @@ def run(command: list[str]) -> None:
         raise UpdateError(f"{command[0]} failed with exit code {process.returncode}:\n" + "\n".join(details))
     if rpm_errors:
         raise UpdateError("RPM reported installation errors:\n" + "\n".join(rpm_errors))
+    if progress:
+        for record in progress.records:
+            progress.package(record, "applied", 1)
 
 
 def job_directory(state: dict, root: Path = STATE_DIR) -> Path:
@@ -184,8 +207,9 @@ def upgrade_early(root: Path = STATE_DIR, *, installer: bool = False) -> None:
         write_state(root, previous, previous["status"])
 
 
-def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = False) -> None:
+def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = False, packages: list[str] | None = None) -> None:
     from .update_plan import prepare_transaction
+    packages = package_selection(packages)
     with update_lock(root):
         previous = preparation_state(root, installer=installer)
         if not installer:
@@ -197,7 +221,7 @@ def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = F
         settings = policy()
         prune_payloads(root)
         for attempt in range(1, settings["prepare_attempts"] + 1):
-            state = {"job": uuid.uuid4().hex, "started": False, "attempt": attempt, "installer": installer}
+            state = {"job": uuid.uuid4().hex, "started": False, "attempt": attempt, "installer": installer, "selection": packages}
             if installer and previous.get("status") == "installer-complete" and previous.get("boot_selection"):
                 # Calamares may run updates followed by a separate codec job.
                 # Preserve the first job's kernel expectation across both.
@@ -207,7 +231,8 @@ def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = F
             write_state(root, state, "preparing")
             try:
                 check_installed_system(preparing=True)
-                result = prepare_transaction(job, codecs=codecs,
+                selection = {"packages": packages} if packages else {}
+                result = prepare_transaction(job, codecs=codecs, **selection,
                                              allow_live=settings["live_updates"] and not settings["require_recovery"])
                 state["package_origins"] = result.get("package_origins", [])
                 shutil.rmtree(job / "cache", ignore_errors=True)

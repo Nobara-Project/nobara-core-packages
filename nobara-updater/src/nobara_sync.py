@@ -28,6 +28,8 @@ def parse_args(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     cli = commands.add_parser("cli", help="Install application updates now, or schedule core updates for restart.")
     cli.add_argument("username", nargs="?", help="User whose Flatpaks should be updated with --all.")
+    cli.add_argument("--package", dest="packages", action="append", help="Request this RPM package (repeatable); include required dependencies and Nobara fixups automatically.")
+    cli.add_argument("--progress", action="store_true", help="Emit structured package progress for frontends.")
     cli.add_argument("--all", action="store_true", help="Also update system and user Flatpaks now.")
     for name, help_text in {
         "prepare-update": "Download and validate an update without scheduling it.",
@@ -146,6 +148,8 @@ def dispatch(args):
         action = {"schedule-update": "schedule", "cancel-update": "cancel", "reboot": "reboot"}[args.command]
         return worker_action(action, LOG)
     if in_installer_root():
+        if getattr(args, "packages", None):
+            raise UpdateError("Selected updates are unavailable in the installer target; use a complete update.")
         if args.command == "prepare-update":
             raise UpdateError("Use cli or install-codecs to finish installation inside the target root.")
         if args.command == "cli" and args.all:
@@ -156,13 +160,18 @@ def dispatch(args):
         print(RESULT_PREFIX + json.dumps(result_message(read_state())), flush=True)
         return True
     user = original_user(getattr(args, "username", None))
-    if not prepare_update(LOG, codecs=args.command == "install-codecs"):
+    options = {}
+    if getattr(args, "packages", None):
+        options["packages"] = args.packages
+    if getattr(args, "progress", False):
+        options["progress"] = True
+    if not prepare_update(LOG, codecs=args.command == "install-codecs", **options):
         return False
     if args.command != "prepare-update":
         state = read_state()
         if state.get("status") in {"ready", "scheduled"}:
             if state["status"] == "ready" and state.get("execution", {}).get("mode") == "live":
-                if not install_live_update(LOG):
+                if not install_live_update(LOG, **({"progress": True} if getattr(args, "progress", False) else {})):
                     return False
             elif not worker_action("schedule", LOG):
                 return False

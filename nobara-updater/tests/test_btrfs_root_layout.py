@@ -214,6 +214,28 @@ class RootLayoutTests(unittest.TestCase):
         self.restore()
         self.assert_restored()
 
+    def test_recorded_timeshift_snapshot_is_never_replaced_by_the_live_root(self):
+        relative = "timeshift-btrfs/snapshots/2026-10-04_04-00-00/@"
+        snapshot = self.top / relative
+        snapshot.parent.mkdir(parents=True)
+        self.original.replace(snapshot)
+        before = {path: path.read_text() for path in (
+            self.normal, self.recovery, self.active / "etc/fstab", self.active / "etc/kernel/cmdline")}
+        for chained in (False, True):
+            with self.subTest(chained=chained):
+                older = "c" * 32
+                self.plan(JOB, "/.nobara-updater/" + older + "/root" if chained else "/" + relative)
+                if chained:
+                    self.plan(older, "/" + relative)
+                with self.assertRaisesRegex(UpdateError, "inside Timeshift snapshot storage"):
+                    self.restore()
+                self.assertEqual(self.active.resolve(), self.source)
+                self.assertEqual((snapshot / "id").read_text(), "256")
+                self.assertEqual((snapshot / "labwc").read_text(), "abandoned system")
+                self.assertEqual({path: path.read_text() for path in before}, before)
+                self.assertFalse((self.source.parent / "displaced").exists())
+                self.assertFalse((self.state_root / layout.JOURNAL).exists())
+
     def test_root_path_can_be_recovered_from_saved_marker_when_old_plan_is_missing(self):
         (self.state_root / "jobs" / JOB / "plan.json").unlink()
         self.state["recovery_boot"] = dict(job=JOB, original_subvolume="/@")

@@ -209,13 +209,13 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
             repo.get_config().get_pkg_gpgcheck_option().set(required)
         return base
 
-    def prepare(self):
+    def prepare(self, **options):
         with patch.object(planner, "configure_base", side_effect=self.base), \
              patch.object(planner, "os_release", return_value=getattr(self, "current_release", "44")), \
              patch.object(planner, "plan_migrations", return_value=getattr(self, "migrations", MigrationPlan())), \
              patch.object(planner, "rpm_fingerprint", return_value="fixture"), \
              patch.object(planner, "require_space"):
-            return planner.prepare_transaction(self.job)
+            return planner.prepare_transaction(self.job, **options)
 
     def test_real_upgrade_is_saved_with_local_payload_and_no_installed_changes(self):
         result = self.prepare()
@@ -224,6 +224,66 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         verify_files(self.job, result["files"])
         installed = subprocess.run(["rpm", "--root", str(self.root), "-q", "nobara-offline-fixture", "--qf", "%{VERSION}"], check=True, capture_output=True, text=True)
         self.assertEqual(installed.stdout, "1")
+
+    def selection_fixture(self):
+        private = Path(self.case.name) / "selection-repo"
+        shutil.copytree(self.repo, private)
+        self.repo = private
+        for name in ("selected-app", "required-library", "unselected-app"):
+            self.install_health_fixture(name, origin="fixture")
+            headers = "Requires: required-library >= 2" if name == "selected-app" else ""
+            shutil.copy2(self.build_rpm(name, "2", headers=headers), private)
+        shutil.copy2(self.build_rpm("mandatory-fixup", "1"), private)
+        subprocess.run(["createrepo_c", str(private)], check=True, capture_output=True)
+
+    def test_selected_update_keeps_unrelated_packages_but_includes_dependencies_and_fixups(self):
+        self.selection_fixture()
+        self.migrations = MigrationPlan(install={"mandatory-fixup"})
+        result = self.prepare(packages=["selected-app"])
+        changed = {p["name"] for p in result["packages"]}
+        self.assertEqual(changed, {"selected-app", "required-library", "mandatory-fixup"})
+        verify_files(self.job, result["files"])
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        self.check_fixture_health()
+        version = subprocess.run(["rpm", "--root", str(self.root), "-q", "unselected-app", "--qf", "%{VERSION}"], check=True, capture_output=True, text=True)
+        self.assertEqual(version.stdout, "1")
+
+    def test_selected_library_also_updates_required_consumers(self):
+        private = Path(self.case.name) / "consumer-repo"
+        shutil.copytree(self.repo, private)
+        self.repo = private
+        self.install_health_fixture("abi-library", origin="fixture")
+        self.install_health_fixture("abi-client", headers="Requires: abi-library = 1-1", origin="fixture")
+        shutil.copy2(self.build_rpm("abi-library", "2"), private)
+        shutil.copy2(self.build_rpm("abi-client", "2", headers="Requires: abi-library = 2-1"), private)
+        subprocess.run(["createrepo_c", str(private)], check=True, capture_output=True)
+        result = self.prepare(packages=["abi-library"])
+        self.assertEqual({p["name"] for p in result["packages"]}, {"abi-library", "abi-client"})
+
+    def test_selected_release_upgrade_expands_to_full_sync(self):
+        self.selection_fixture()
+        self.current_release = "43"
+        with self.assertLogs(planner.LOG, level="INFO") as logs:
+            result = self.prepare(packages=["selected-app"])
+        self.assertIn("unselected-app", {p["name"] for p in result["packages"]})
+        self.assertEqual(result["execution"]["mode"], "offline")
+        self.assertTrue(any("requires a complete system update" in line for line in logs.output))
+
+    def test_real_download_callbacks_and_replay_emit_package_identity(self):
+        from nobara_updater import update_progress as progress
+        events = []
+        with patch.object(progress, "emit_progress", side_effect=lambda event, **fields: events.append(dict(event=event, **fields))):
+            result = self.prepare()
+            self.assertTrue(any(e.get("phase") == "downloaded" for e in events), events)
+            with self.assertLogs(backend.LOG, level="INFO") as logs:
+                backend.run(self.replay_command(test=False))
+        # Must report this package from the real DNF line, BEFORE replay's
+        # final successful return marks the complete transaction as applied.
+        self.assertTrue(any(e.get("phase") == "applying" and e["fraction"] == 1 for e in events), logs.output)
+        self.assertTrue(any(e.get("phase") == "applied" for e in events))
+        self.assertEqual({e["id"] for e in events if e.get("phase") == "downloaded"},
+                         {p["action"] + ":" + p["nevra"] for p in result["packages"] if p["action"] == "Upgrade"})
 
     def test_repository_endpoint_migration_is_saved_for_offline_finalization(self):
         fixture_base = self.base

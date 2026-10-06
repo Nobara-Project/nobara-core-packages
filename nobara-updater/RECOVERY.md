@@ -43,6 +43,13 @@ on a confirmed boot or before the next fresh update. Do not delete that subvolum
 manually while it is your active root. If layout repair is interrupted, boot
 references retain the subvolume's stable ID and the updater resumes the repair.
 
+If the recorded pre-update root was inside `timeshift-btrfs/snapshots/`, the
+updater leaves the recovered system in place and reports that its normal root
+layout needs repair. It does not replace a Timeshift snapshot with the running
+system or assume an existing `@` contains your latest changes. This can occur
+after updating from a booted Timeshift snapshot. Share the updater report and
+`sudo btrfs subvolume list -p -u /` with support to identify a suitable repair.
+
 ## If preparation stopped before installation
 
 Some conflicts are detected before packages change. No reboot or rollback
