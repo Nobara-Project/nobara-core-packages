@@ -11,7 +11,7 @@ from pathlib import Path
 if (Path(__file__).parent / "nobara_updater").is_dir():
     sys.path.insert(0, str(Path(__file__).parent))
 
-from nobara_updater.update_state import STATE_DIR, TRIGGER, UpdateError, read_state, read_status, status_message, write_state
+from nobara_updater.update_state import STATE_DIR, TRIGGER, UpdateError, load_proxy_settings, read_state, read_status, status_message, write_state
 from nobara_updater import update_backend as backend
 from nobara_updater.update_report import attach_log, record_failure, record_service_failure
 
@@ -53,6 +53,12 @@ def main():
             logging.exception("Could not inspect stopped update service.")
         return 0
     try:
+        if args.action in {"prepare", "prepare-codecs"} and not args.early_upgrade_complete:
+            # systemd does not pass nobara-sync's environment to the service.
+            # The fresh interpreter below inherits these from os.environ.
+            proxies = load_proxy_settings()
+            if proxies:
+                logging.info("Using proxy settings from nobara-sync: %s", ", ".join(proxies))
         if args.action in {"prepare", "prepare-codecs", "installer-update", "installer-codecs"} and not args.early_upgrade_complete:
             backend.upgrade_early(installer=args.action.startswith("installer-"))
             # Run the newly installed worker and modules before planning or

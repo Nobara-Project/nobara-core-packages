@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import tempfile
 import time
@@ -20,6 +21,8 @@ ACTIVE = {"preparing", "ready", "scheduled", "installing", "validating", "instal
 # upper-case HTTP_PROXY on purpose, so it is not passed on either.
 PROXY_VARIABLES = ("http_proxy", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY")
 PROXY_SCHEMES = {"http", "https", "socks4", "socks4a", "socks5", "socks5h"}
+# Proxy URLs can hold credentials: keep the handover on tmpfs, root-only.
+PROXY_FILE = Path("/run/nobara-updater-proxy.json")
 
 
 class UpdateError(RuntimeError):
@@ -54,6 +57,35 @@ def proxy_settings(environ) -> tuple[dict[str, str], list[str]]:
         elif value:
             refused.append(name)
     return settings, refused
+
+
+def load_proxy_settings(path: Path = PROXY_FILE) -> list[str]:
+    """Apply the proxy settings nobara-sync handed over; return their names.
+
+    systemd starts the preparation services with the manager's environment,
+    not the caller's. Only a regular file this user owns and nobody else
+    can write is read, and only valid settings from PROXY_VARIABLES are used.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return []
+    except OSError as error:
+        raise UpdateError(f"Refusing proxy settings in {path}: {error.strerror}.") from error
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        os.close(fd)
+        raise UpdateError(f"Refusing proxy settings in {path}: not a private regular file.")
+    with os.fdopen(fd) as stream:
+        try:
+            data = json.load(stream)
+        except ValueError as error:
+            raise UpdateError(f"Refusing proxy settings in {path}: {error}") from error
+    if not isinstance(data, dict):
+        raise UpdateError(f"Refusing proxy settings in {path}: unexpected format.")
+    settings, _ = proxy_settings(data)
+    os.environ.update(settings)
+    return sorted(settings)
 
 
 def in_installer_root() -> bool:
