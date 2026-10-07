@@ -29,8 +29,11 @@ VULKAN_DRIVER_PACKAGES = frozenset({
     "mesa-vulkan-drivers", "mesa-vulkan-drivers-freeworld",
     "mesa-vulkan-drivers-git", "mesa-vulkan-drivers-git-freeworld",
 })
+# Helium advertises bundled EGL/GLES/Vulkan libraries as RPM provides. Matching
+# those provides must not turn an optional browser into a protected codec.
+CODEC_PROTECTION_EXEMPTIONS = VULKAN_DRIVER_PACKAGES | {"helium-bin"}
 CODEC_PACKAGES = (frozenset(CODEC_REPLACEMENTS) | frozenset(CODEC_REPLACEMENTS.values())
-                  | CODEC_MULTILIB | CODEC_NATIVE) - VULKAN_DRIVER_PACKAGES
+                  | CODEC_MULTILIB | CODEC_NATIVE) - CODEC_PROTECTION_EXEMPTIONS
 
 
 def installed_codec_dependencies(base) -> set[tuple[str, str]]:
@@ -44,12 +47,12 @@ def installed_codec_dependencies(base) -> set[tuple[str, str]]:
 
     installed = rpm.PackageQuery(base)
     installed.filter_installed()
-    # Do not re-protect a switchable Vulkan driver through a codec's dependency
-    # on its virtual provides, or traverse dependencies belonging only to that
-    # driver. Shared dependencies reached from actual codecs stay protected.
-    drivers = rpm.PackageQuery(installed)
-    drivers.filter_name(sorted(VULKAN_DRIVER_PACKAGES))
-    installed.difference(drivers)
+    # Exclude optional providers before walking dependencies, so neither their
+    # virtual provides nor their private dependencies re-enter protection.
+    # Shared dependencies reached from actual codecs stay protected.
+    exempt = rpm.PackageQuery(installed)
+    exempt.filter_name(sorted(CODEC_PROTECTION_EXEMPTIONS))
+    installed.difference(exempt)
     pending = rpm.PackageQuery(installed)
     pending.filter_name(sorted(CODEC_PACKAGES))
     seen = rpm.PackageSet(base)

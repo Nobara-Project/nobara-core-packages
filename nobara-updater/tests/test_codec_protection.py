@@ -152,6 +152,37 @@ class CodecGuardIntegrationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Nobara manages", result.stdout + result.stderr)
 
+    def test_helium_bundled_libraries_do_not_prevent_browser_removal(self):
+        graphics = "Provides: libEGL.so()(64bit)\nProvides: libvulkan.so.1()(64bit)"
+        specs = (
+            ("helium-bin", graphics + "\nRequires: helium-private\nRequires: shared-media-support", "x86_64"),
+            ("helium-private", "", "noarch"),
+            ("system-graphics", graphics + "\nRequires: shared-media-support", "x86_64"),
+            ("shared-media-support", "", "noarch"),
+            ("libheif", "Requires: libEGL.so()(64bit)\nRequires: libvulkan.so.1()(64bit)", "x86_64"),
+        )
+        for name, headers, arch in specs:
+            package = self.build_rpm(name, "1", headers=headers, arch=arch)
+            subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts", "--noplugins",
+                            "--ignoresize", "-i", str(package)], check=True, capture_output=True)
+        base = fixtures.configure_fixture_base(self.root, self.repos, self.job)
+        self.addCleanup(base.unlock_system_repo)
+        protected = installed_codec_dependencies(base)
+        self.assertNotIn(("helium-bin", "x86_64"), protected)
+        self.assertNotIn(("helium-private", "noarch"), protected)
+        for identity in (("libheif", "x86_64"), ("system-graphics", "x86_64"), ("shared-media-support", "noarch")):
+            self.assertIn(identity, protected)
+        base.unlock_system_repo()
+
+        # Exercise the actual DNF5 pre-transaction guard, not just its inventory.
+        result = self.run_dnf("remove", "helium-bin")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = subprocess.run(["rpm", "--root", str(self.root), "-q", "helium-bin"], capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        result = self.run_dnf("remove", "shared-media-support")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Nobara manages", result.stdout + result.stderr)
+
     def test_dnf_swaps_all_vulkan_variants_with_multilib_and_protection_enabled(self):
         self.install_vulkan_fixture()
         for target in ("mesa-vulkan-drivers-freeworld", "mesa-vulkan-drivers-git-freeworld",

@@ -417,6 +417,11 @@ used only by those drivers. Shared dependencies required by protected media
 packages remain protected, as do Mesa's VA-API and Gallium codec packages.
 The Codec Wizard can still select its usual freeworld Vulkan variants.
 
+The optional `helium-bin` browser and its browser-only dependencies are also
+excluded. Its bundled graphics libraries do not make it a protected codec;
+users can remove the browser normally. Shared system codec dependencies
+remain protected.
+
 Use the **Codec Wizard** or `nobara-sync install-codecs` to change the codec
 family. System updates through `nobara-sync cli` can also perform Nobara's
 managed replacements. A blocked manual transaction lists the affected
