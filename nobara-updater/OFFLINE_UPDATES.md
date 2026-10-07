@@ -65,6 +65,25 @@ No repository publication changes or custom upstream metadata are required.
 Each preparation attempt uses its own DNF5 metadata cache under the job directory
 and expires enabled repositories before loading them. The shared command-line
 DNF cache and DNF4's cache are not used to prepare the update.
+
+Repository loading also has bounded recovery for `Failed to download metadata
+... for repository "<id>": Usable URL not found`, including the Terra metalink
+failure. It uses DNF5's native cache API to remove only that enabled repository's
+metadata, cached metalink/mirror list, and solver cache, then loads repositories
+through a fresh Base. Downloaded RPMs, other repositories' caches, repository
+URLs, priorities, exclusions, and signature requirements are preserved.
+Each failing repository gets one such retry per load, with at most three
+repository cleanups. A repeated failure propagates normally; repositories are
+not disabled to force the update through.
+
+The same loader serves early helper upgrades, main preparation, CLI update and
+repository checks, and DNF App Center's queries and privileged package helper.
+An unprivileged retry bypasses copying the system cache into the user's cache,
+so the failed cache cannot immediately be copied back. No DNF4 command or
+unconditional `clean all` is used. This recovers cache-related failures; it
+cannot repair an unavailable server or a metalink that still has no usable URL.
+App Center uses this shared recovery when the updated Nobara Updater is installed.
+
 The standard release provide is used where present; Nobara's
 `nobara-release-common` RPM Version is the fallback because current Nobara
 release packages do not advertise `system-release(releasever)`. A different
@@ -73,9 +92,8 @@ packages are updated in the same transaction as the rest of the OS.
 
 Repository priorities and package excludes remain in effect. The updater does
 not downgrade its own package or `drm-awaiter`, preserving its boot/recovery
-protocol and the early helper fixes. Locally
-installed RPMs are held at their installed build, including the updater itself.
-Repository-installed updater builds remain eligible for normal upgrades. The updater does
+protocol and the early helper fixes. Locally installed RPMs, including these
+helpers, remain eligible for repository upgrades. The updater does
 not automatically upgrade group/environment definitions: Nobara copies Fedora
 comps unchanged, and newly added Fedora defaults can conflict with Nobara's
 desktop replacements (for example, plasma-setup requiring Fedora's appearance

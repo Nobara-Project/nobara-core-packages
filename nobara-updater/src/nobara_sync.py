@@ -134,7 +134,8 @@ def dispatch(args):
         if not worker_action("retry", LOG):
             return False
     if args.command == "check-repos":
-        run(["dnf5", "--refresh", "--setopt=skip_if_unavailable=False", "makecache"])
+        from nobara_updater.dnf import refresh_repositories
+        refresh_repositories()
         return True
     if args.command == "check-updates":
         from nobara_updater.dnf import updatechecker

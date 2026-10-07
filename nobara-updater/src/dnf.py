@@ -12,6 +12,7 @@ import os
 import contextlib
 import uuid
 from dataclasses import dataclass
+from .update_repositories import load_repositories
 
 
 
@@ -65,6 +66,30 @@ def mute_loggers(names: list[str], level: int = logging.WARNING):
             lg.propagate = old_propagate
             lg.handlers = old_handlers
 
+def _query_base(refresh_metadata=False):
+    base = dnf5_base.Base()
+    base.load_config()
+    config = base.get_config()
+    if refresh_metadata:
+        config.get_metadata_expire_option().set(0)
+        config.get_obsoletes_option().set(True)
+        config.get_skip_if_unavailable_option().set(False)
+    base.setup()
+    base.get_repo_sack().create_repos_from_system_configuration()
+    if refresh_metadata:
+        for repo in dnf5_repo.RepoQuery(base):
+            if repo.get_config().get_enabled_option().get_value():
+                repo.get_config().get_skip_if_unavailable_option().set(False)
+                repo.expire()
+    return base
+
+
+def refresh_repositories():
+    """Refresh/validate enabled repositories, including cache recovery."""
+    base = load_repositories(lambda: _query_base(refresh_metadata=True))
+    del base
+
+
 def repoindex(retries: int = 3, delay: int = 5) -> list[AttributeDict]:
     def get_safe_value(option):
         try:
@@ -74,15 +99,10 @@ def repoindex(retries: int = 3, delay: int = 5) -> list[AttributeDict]:
 
     attempt = 0
     while attempt < retries:
-        base = dnf5_base.Base()
+        base = None
         try:
-            base.load_config()
-            base.setup()
+            base = load_repositories(_query_base)
 
-            sack = base.get_repo_sack()
-            sack.create_repos_from_system_configuration()
-            sack.load_repos()
-            
             enabled_repos = []
             query = dnf5_repo.RepoQuery(base)
 
@@ -155,22 +175,10 @@ def _expire_enabled_repositories(
 def updatechecker(retries: int = 3, delay: int = 5) -> list[str]:
     attempt = 0
     while attempt < retries:
-        base = dnf5_base.Base()
+        base = None
         try:
-            base.load_config()
+            base = load_repositories(lambda: _query_base(refresh_metadata=True))
             config = base.get_config()
-            config.get_metadata_expire_option().set(0)
-            config.get_obsoletes_option().set(True)
-            config.get_skip_if_unavailable_option().set(False)
-            base.setup()
-
-            sack = base.get_repo_sack()
-            sack.create_repos_from_system_configuration()
-            for repo in dnf5_repo.RepoQuery(base):
-                if repo.get_config().get_enabled_option().get_value():
-                    repo.get_config().get_skip_if_unavailable_option().set(False)
-                    repo.expire()
-            sack.load_repos()
 
             goal = dnf5_base.Goal(base)
             goal.add_rpm_distro_sync()
@@ -478,23 +486,24 @@ def _find_history_transaction_id(
 def _prepare_transaction_base(
     tx_logger: logging.Logger, *, refresh_metadata: bool
 ) -> dnf5_base.Base:
-    base = dnf5_base.Base()
-    config = base.get_config()
-    if refresh_metadata:
-        config.get_metadata_expire_option().set(0)
-    config.get_obsoletes_option().set(True)
-    # Exact history records are the rollback boundary for each package group.
-    # Force recording even if the local dnf.conf disables it.
-    config.get_history_record_option().set(True)
+    def create_base():
+        base = dnf5_base.Base()
+        config = base.get_config()
+        if refresh_metadata:
+            config.get_metadata_expire_option().set(0)
+        config.get_obsoletes_option().set(True)
+        # Exact history records are the rollback boundary for each package group.
+        # Force recording even if the local dnf.conf disables it.
+        config.get_history_record_option().set(True)
 
-    base.load_config()
-    base.setup()
-    sack = base.get_repo_sack()
-    sack.create_repos_from_system_configuration()
-    if refresh_metadata:
-        _expire_enabled_repositories(base, tx_logger)
-    sack.load_repos()
-    return base
+        base.load_config()
+        base.setup()
+        sack = base.get_repo_sack()
+        sack.create_repos_from_system_configuration()
+        if refresh_metadata:
+            _expire_enabled_repositories(base, tx_logger)
+        return base
+    return load_repositories(create_base)
 
 
 def _resolve_failure_reason(

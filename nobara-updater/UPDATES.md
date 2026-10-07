@@ -81,6 +81,13 @@ downgrade packages according to repository priorities and available versions.
 Locally installed/custom RPMs are eligible for repository replacements too;
 see [package handling in the recovery guide](RECOVERY.md#how-packages-are-handled).
 
+If a repository reports **Usable URL not found** while downloading metadata,
+the updater clears that repository's cached metadata and mirror information
+and retries with a fresh DNF5 instance. DNF App Center uses the same recovery
+when checking for updates. Downloaded packages and repository settings are
+preserved. If the retry still fails, the error is reported; an unavailable
+repository is not silently disabled.
+
 The Plasma Login migration removes SDDM's `kde-settings-sddm` settings package
 alongside SDDM, so its dependency cannot block the replacement login manager.
 

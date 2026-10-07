@@ -23,7 +23,7 @@ from .update_origins import PackageOriginError, collect_package_origins, annotat
 from .update_state import UpdateError, atomic_json, file_digest, os_release, rpm_fingerprint
 from .update_health import PackageHealth
 from .update_progress import PackageProgress
-from .update_repositories import migrated_media_urls
+from .update_repositories import migrated_media_urls, load_repositories
 
 LOG = logging.getLogger(__name__)
 ESSENTIAL = {"glibc", "rpm", "dnf5", "libdnf5", "systemd", "bash", "coreutils", "python3", "nobara-updater"}
@@ -68,7 +68,7 @@ class DownloadProgress(repo_api.DownloadCallbacks):
         return self.OK
 
 
-def configure_base(job: Path, release: str | None = None, *, codecs: bool = False):
+def _configure_base(job: Path, release: str | None = None, *, codecs: bool = False):
     base = base_api.Base()
     base.load_config()
     config = base.get_config()
@@ -118,7 +118,11 @@ def configure_base(job: Path, release: str | None = None, *, codecs: bool = Fals
             repo.get_config().get_skip_if_unavailable_option().set(False)
             repo.get_config().get_pkg_gpgcheck_option().set(True)
             repo.expire()
-    sack.load_repos()
+    return base
+
+
+def configure_base(job: Path, release: str | None = None, *, codecs: bool = False):
+    base = load_repositories(lambda: _configure_base(job, release, codecs=codecs))
     # Do not undo the early updater/initramfs-helper upgrade during distro-sync.
     # A newer local build must also survive older repository metadata.
     installed = rpm_api.PackageQuery(base)
