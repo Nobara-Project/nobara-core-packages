@@ -1365,8 +1365,15 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertFalse(any(p["name"] == "custom-tool" for p in self.prepare()["packages"]))
 
     def test_local_rpm_is_downgraded_to_repository_version(self):
+        self.install_current_release()
         self.local_desktop_fixture(available_version="4")
-        self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Downgrade" for p in self.prepare()["packages"]))
+        result = self.prepare()
+        self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Downgrade" for p in result["packages"]))
+        self.assertEqual(result["execution"], {"mode": "live", "reasons": []})
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        installed = subprocess.check_output(["rpm", "--root", str(self.root), "-q", "labwc", "--qf", "%{VERSION}"], text=True)
+        self.assertEqual(installed, "4")
 
     def test_equal_version_local_rpm_is_not_forcibly_reinstalled(self):
         self.local_desktop_fixture(available_version="5")
@@ -1533,10 +1540,15 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Replaced" for p in result["packages"]))
 
     def test_migration_can_remove_local_package_when_explicitly_allowed(self):
+        self.install_current_release()
         self.local_desktop_fixture()
         self.migrations = MigrationPlan(remove={"labwc"})
         result = self.prepare()
         self.assertTrue(any(p["name"] == "labwc" and p["action"] == "Remove" for p in result["packages"]))
+        self.assertEqual(result["execution"], {"mode": "live", "reasons": []})
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        self.assertNotEqual(subprocess.run(["rpm", "--root", str(self.root), "-q", "labwc"], capture_output=True).returncode, 0)
 
     def test_local_dependency_conflict_is_resolved_by_repository_upgrade(self):
         self.local_desktop_fixture()
@@ -1636,6 +1648,44 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         boot.assert_not_called()
         self.assertEqual(read_state(state_root)["status"], "live-complete")
         self.assertEqual((self.root / "usr/share/nobara-offline-fixture/version").read_text().strip(), "2")
+
+    def test_python_module_and_desktop_documentation_use_signed_payloads_for_live_policy(self):
+        self.install_current_release()
+        private = Path(self.case.name) / "policy-repo"
+        shutil.copytree(self.repo, private)
+        self.repo = private
+        for name, payload in (("python3-example", "/usr/lib/python3.14/site-packages/example/__init__.py"),
+                              ("plasma-desktop-doc", "/usr/share/doc/HTML/plasma/index.docbook")):
+            # These one-file RPM fixtures have no Python runtime or generated
+            # bytecode. Dependency/byte-compilation macros are not under test.
+            headers = "%global __brp_python_bytecompile %{nil}\nAutoReqProv: no" if name.startswith("python") else ""
+            self.install_health_fixture(name, headers=headers, payload=payload)
+            shutil.copy2(self.build_rpm(name, "2", headers=headers, payload=payload), self.repo)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+        # Repository filelists do not decide whether incoming packages are safe.
+        original_files = planner.rpm_api.Package.get_files
+        def metadata_files(package):
+            return original_files(package) if package.is_installed() else ["/boot/misleading-metadata"]
+        with patch.object(planner.rpm_api.Package, "get_files", metadata_files):
+            result = self.prepare()
+        self.assertEqual(result["execution"], {"mode": "live", "reasons": []})
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        installed = subprocess.check_output(["rpm", "--root", str(self.root), "-q", "python3-example", "plasma-desktop-doc",
+                                             "--qf", "%{VERSION}\n"], text=True)
+        self.assertEqual(installed.splitlines(), ["2", "2"])
+
+    def test_documentation_name_cannot_hide_critical_outgoing_payload(self):
+        self.install_current_release()
+        self.install_health_fixture("plasma-desktop-doc", payload="/usr/lib/systemd/system/example.service")
+        private = Path(self.case.name) / "policy-repo"
+        shutil.copytree(self.repo, private)
+        self.repo = private
+        shutil.copy2(self.build_rpm("plasma-desktop-doc", "2", payload="/usr/share/doc/HTML/plasma/index.docbook"), self.repo)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+        result = self.prepare()
+        self.assertEqual(result["execution"]["mode"], "offline")
+        self.assertIn("System files: plasma-desktop-doc", result["execution"]["reasons"])
 
     def test_payload_library_forces_offline_even_if_metadata_omits_its_path(self):
         self.install_current_release()

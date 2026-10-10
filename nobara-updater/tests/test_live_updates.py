@@ -27,6 +27,112 @@ class ClassificationTests(unittest.TestCase):
         result = self.classify([package(files=["/usr/bin/editor", "/usr/lib64/editor/plugin.so", "/usr/share/editor/data"])])
         self.assertEqual(result, dict(mode="live", reasons=[]))
 
+    def test_python_modules_and_package_name_lookalikes_are_not_core(self):
+        for name, files in (
+            ("python3-requests", ["/usr/lib/python3.14/site-packages/requests/__init__.py"]),
+            ("python3-numpy", ["/usr/lib64/python3.14/site-packages/numpy/_core/_multiarray_umath.so"]),
+            ("python3-pip", ["/usr/bin/pip3", "/usr/lib/python3.14/site-packages/pip/__init__.py"]),
+            ("python3-streamlink", ["/usr/bin/streamlink"]),
+            ("bash-completion", ["/etc/profile.d/bash_completion.sh", "/usr/share/bash-completion/bash_completion"]),
+            ("bash-color-prompt", ["/etc/profile.d/bash-color-prompt.sh"]),
+            ("rpmlint", ["/usr/bin/rpmlint"]), ("rpmdevtools", ["/usr/bin/rpmdev-newspec"]),
+            ("dnf-app-center", ["/usr/bin/dnf-app-center"]), ("kernelshark", ["/usr/bin/kernelshark"]),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(self.classify([package(name=name, files=files)]), dict(mode="live", reasons=[]))
+
+    def test_python_runtimes_and_package_manager_bindings_remain_core(self):
+        for name in ("python", "python2", "python3", "python3-libs", "python3.14", "python3.14-libs",
+                     "python3-freethreading", "python-unversioned-command", "python3-rpm", "python3-dnf",
+                     "python3-dnf-plugins-core", "python3-libdnf", "python3-libdnf5", "python3-hawkey",
+                     "python3-librepo", "python3-libcomps", "rpm", "rpm-libs", "rpm-plugin-selinux",
+                     "dnf", "dnf5", "dnf5-plugins", "bash", "kernel", "kernel-core", "kernel-devel"):
+            with self.subTest(name=name):
+                self.assertIn("Core component: " + name, self.classify([package(name=name)])["reasons"])
+
+    def test_auxiliary_packages_need_a_complete_non_runtime_payload(self):
+        for name, files in (
+            ("plasma-desktop-doc", ["/usr/share/doc/HTML/index.docbook"]),
+            ("polkit-docs", ["/usr/share/gtk-doc/html/polkit-1/index.html"]),
+            ("kernel-headers", ["/usr/include/linux/version.h"]),
+            ("glibc-static", ["/usr/lib64/libc.a", "/usr/lib64/libm.a"]),
+            ("systemd-devel", ["/usr/include/systemd/sd-bus.h", "/usr/lib64/pkgconfig/libsystemd.pc"]),
+            ("kernel-debug-debuginfo", ["/usr/lib/debug/lib/modules/kernel/vmlinux"]),
+            ("plasma-workspace-wallpapers", ["/usr/share/wallpapers/example.png", "/usr/share/licenses/wallpaper/COPYING"]),
+            ("linux-firmware-whence", ["/usr/share/doc/linux-firmware/WHENCE"]),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(self.classify([package(name=name, files=files)]), dict(mode="live", reasons=[]))
+                for extra in ("/boot/new-image", "/usr/lib64/libexample.so.1", "/usr/bin/runtime-helper",
+                              "/usr/lib/systemd/system/example.service", "/usr/share/doc/../../bin/runtime-helper"):
+                    with self.subTest(extra=extra):
+                        self.assertEqual(self.classify([package(name=name, files=[*files, extra])])["mode"], "offline")
+                self.assertEqual(self.classify([package(name=name, files=[])])["mode"], "offline")
+        # The core runtime itself does not qualify for an auxiliary-name exception.
+        self.assertEqual(self.classify([package(name="glibc", files=["/usr/share/doc/glibc/README"])])["mode"], "offline")
+
+    def test_non_core_names_still_check_system_paths_and_shared_libraries(self):
+        for name in ("python3-requests", "bash-completion", "rpmdevtools", "dnf-app-center"):
+            for path in ("/usr/lib/systemd/system/example.service", "/boot/new-image", "/usr/lib64/libexample.so.1"):
+                with self.subTest(name=name, path=path):
+                    self.assertEqual(self.classify([package(name=name, files=[path])])["mode"], "offline")
+
+    def test_application_removals_and_downgrades_use_contents_not_action_alone(self):
+        for action in ("Remove", "Downgrade"):
+            with self.subTest(action=action):
+                self.assertEqual(self.classify([package(action=action)]), dict(mode="live", reasons=[]))
+                self.assertEqual(self.classify([package(name="glibc", action=action)])["mode"], "offline")
+                self.assertEqual(self.classify([package(action=action, files=["/usr/lib64/libexample.so.1"])])["mode"], "offline")
+                self.assertEqual(self.classify([package(action=action, files=[])])["mode"], "offline")
+        # A downgrade must still inspect the outgoing version, including files
+        # that disappear entirely from the incoming RPM.
+        self.assertEqual(self.classify([package(action="Downgrade"),
+                         package(action="Replaced", files=["/usr/lib/systemd/system/old.service"])])["mode"], "offline")
+
+    def test_labwc_and_session_upgrade_can_install_now(self):
+        packages = [package(name=name, action=action, files=files)
+                    for action in ("Upgrade", "Replaced")
+                    for name, files in (
+                        ("labwc", ["/usr/bin/labwc", "/usr/share/xdg-desktop-portal/labwc-portals.conf"]),
+                        ("labwc-session", ["/usr/lib/systemd/user/labwc-session.target",
+                                           "/usr/share/wayland-sessions/labwc.desktop"]))]
+        self.assertEqual(self.classify(packages), dict(mode="live", reasons=[]))
+
+    def test_user_unit_exception_is_generic_and_includes_drop_ins(self):
+        for directory in ("/usr/lib/systemd/user", "/etc/systemd/user"):
+            for action in ("Install", "Upgrade", "Replaced"):
+                with self.subTest(directory=directory, action=action):
+                    files = [directory, directory + "/editor.service", directory + "/editor.socket",
+                             directory + "/editor.service.d/settings.conf"]
+                    self.assertEqual(self.classify([package(action=action, files=files)]),
+                                     dict(mode="live", reasons=[]))
+
+    def test_user_units_do_not_hide_other_critical_files_or_outgoing_files(self):
+        unit = "/usr/lib/systemd/user/editor.service"
+        for critical in ("/usr/lib/systemd/system/editor.service", "/etc/systemd/system/editor.service",
+                         "/usr/lib/systemd/system-generators/editor", "/usr/lib/systemd/user-generators/editor",
+                         "/usr/lib/systemd/user-environment-generators/editor", "/etc/systemd/user.conf",
+                         "/etc/systemd/user.conf.d/settings.conf", "/usr/lib/systemd/user-preset/90-editor.preset",
+                         "/usr/lib64/libeditor.so.1", "/boot/editor-image",
+                         "/usr/lib/systemd/user/../system/editor.service", "relative/systemd/user/editor.service"):
+            for action in ("Upgrade", "Replaced"):
+                with self.subTest(critical=critical, action=action):
+                    self.assertEqual(self.classify([package(action=action, files=[unit, critical])])["mode"], "offline")
+
+    def test_user_units_do_not_override_other_offline_reasons(self):
+        unit = "/usr/lib/systemd/user/example.service"
+        for name in ("pipewire", "systemd", "plasma-workspace", "nobara-updater"):
+            with self.subTest(name=name):
+                self.assertIn("Core component: " + name,
+                              self.classify([package(name=name, files=[unit])])["reasons"])
+        for action in ("Remove", "Downgrade"):
+            with self.subTest(action=action):
+                self.assertEqual(self.classify([package(action=action, files=[unit])]), dict(mode="live", reasons=[]))
+        application = package(files=[unit])
+        self.assertEqual(self.classify([application], source="43")["mode"], "offline")
+        self.assertEqual(self.classify([application], hooks=["enable-codecs"])["mode"], "offline")
+        self.assertEqual(self.classify([application, package(name="kernel-core")])["mode"], "offline")
+
     def test_reason_changes_do_not_make_an_application_update_require_restart(self):
         reasons_only = [package(name="mesa-libgallium-freeworld", action="Reason Change", files=["/usr/lib64/libgallium.so"]),
                         package(name="nobara-release-kde", action="Reason Change", files=[])]
@@ -64,10 +170,8 @@ class ClassificationTests(unittest.TestCase):
                 old = package(name="unexpected-name", action="Replaced", files=[filename])
                 self.assertEqual(self.classify([package(), old])["mode"], "offline")
 
-    def test_release_upgrade_removal_downgrade_hooks_and_unknown_inventory_are_offline(self):
+    def test_release_upgrade_hooks_and_unknown_inventory_are_offline(self):
         cases = [([package()], "43", "44", []), ([package()], "44", "44", ["enable-codecs"]),
-                 ([package(action="Remove")], "44", "44", []),
-                 ([package(action="Downgrade")], "44", "44", []),
                  ([package(files=[])], "44", "44", []),
                  ([package(files=["relative/path"])], "44", "44", [])]
         for args in cases:

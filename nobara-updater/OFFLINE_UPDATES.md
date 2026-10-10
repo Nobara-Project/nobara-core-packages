@@ -223,9 +223,22 @@ short lines. A package is shown once even if multiple checks identify it;
 the saved plan retains all reasons. DNF's metadata-only `Reason Change`
 operations do not force an offline update because they replace no files.
 
+Application/session units under `/usr/lib/systemd/user` and `/etc/systemd/user`
+do not themselves require offline installation. This does not exempt systemd
+manager configuration, generators, system units or core packages shipping
+user units. Python runtime names and RPM/DNF bindings remain core; unrelated
+Python modules, shell completions and tools such as `rpmlint` do not inherit
+core status just from a name prefix.
+
+Auxiliary documentation/development/static/debug/wallpaper packages avoid the
+core-name rule only when every inventoried file is a non-runtime asset.
+Runtime libraries and service/boot files prevent that exception. Application
+removals and downgrades use the same content checks as upgrades; they still
+must pass the planner's removal authorization and dependency checks.
+
 Release transitions, core packages (kernel, drivers, system libraries,
-package manager, Python, updater, and desktop/session components), shared
-libraries, system services/configuration, removals, downgrades, and deferred
+package manager, Python runtime, updater, and desktop/session components), shared
+libraries, system services/configuration, and deferred
 fixups keep the entire transaction offline. A batch containing both ordinary
 applications and core changes therefore still requires a restart. The updater
 does not split a solved transaction into separately installed subsets.

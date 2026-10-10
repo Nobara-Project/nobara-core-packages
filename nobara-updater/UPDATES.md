@@ -23,9 +23,32 @@ current session. This includes ordinary application executables, application
 data, and libraries private to an application, provided the complete update
 does not change core components or shared system files.
 
+Ordinary Python applications and modules, shell completions, and RPM development
+tools are eligible too. Python interpreters, their runtime libraries, and the
+RPM/DNF Python bindings remain core components. Package name prefixes alone
+do not make tools such as `rpmlint` or `bash-completion` critical.
+
+Documentation, headers, static libraries, debug data, and wallpaper subpackages
+can install immediately when their complete file inventory contains only
+non-runtime assets. An auxiliary package name does not bypass checks for
+shared runtime libraries, system services, or boot files.
+
+Application and session unit files under `/usr/lib/systemd/user` or
+`/etc/systemd/user`, including their drop-ins, do not by themselves require
+offline installation. For example, an update containing only `labwc` and
+`labwc-session` can install immediately; log out and back in to use the new
+compositor. System services, systemd manager configuration and generators,
+and packages covered by the core-component policy still require offline
+installation, even when they also include user units.
+
 The updater still resolves dependencies, downloads and verifies the packages,
 and tests the transaction before installation. It checks the installed
 packages and dependencies afterward.
+
+An application downgrade or an already-authorized application removal does not
+by itself require a restart. The updater checks the contents of both outgoing
+and incoming packages. Dependency checks and safeguards against unexpected
+removals still apply.
 
 These updates do not schedule an offline installation or require a system
 restart through the updater. Close and reopen updated applications to use
@@ -43,13 +66,14 @@ any of the following:
 
 - A major Nobara version upgrade, such as 43 to 44.
 - Kernels, firmware, drivers, bootloader components, or boot images.
-- Core system components such as the package manager, updater, Python,
+- Core system components such as the package manager, updater, Python runtime,
   authentication, storage tools, networking, or system services.
 - Graphics, desktop/session, login-manager, or audio components covered by
   the updater's core-component policy.
 - Libraries shared across applications, or files used for system services
   and configuration.
-- Package removals, downgrades, or deferred system configuration fixes.
+- Removals or downgrades affecting critical components, or deferred system
+  configuration fixes.
 - Packages whose file changes cannot be identified reliably. The updater
   treats those conservatively and requests offline installation.
 
