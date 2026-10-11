@@ -11,7 +11,7 @@ from pathlib import Path
 if (Path(__file__).parent / "nobara_updater").is_dir():
     sys.path.insert(0, str(Path(__file__).parent))
 
-from nobara_updater.update_state import STATE_DIR, TRIGGER, UpdateError, read_state, read_status, status_message, write_state, read_request
+from nobara_updater.update_state import PROXY_DIR, load_proxy_settings, STATE_DIR, TRIGGER, UpdateError, read_state, read_status, status_message, write_state, read_request
 from nobara_updater import update_backend as backend
 from nobara_updater.update_report import attach_log, record_failure, record_service_failure
 
@@ -22,7 +22,7 @@ def main():
     parser.add_argument("--early-upgrade-complete", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--request", help=argparse.SUPPRESS)
     args = parser.parse_args()
-    if args.request and args.action != "prepare":
+    if args.request and args.action not in {"prepare", "prepare-codecs"}:
         parser.error("Package selection is only supported for preparation.")
     if os.geteuid() != 0:
         parser.error("This worker must run as root.")
@@ -56,8 +56,16 @@ def main():
             logging.exception("Could not inspect stopped update service.")
         return 0
     packages = None
+    request_loaded = False
     try:
         packages = read_request(args.request) if args.request else None
+        request_loaded = bool(args.request)
+        if args.request and not args.early_upgrade_complete:
+            # Each service consumes its own credentials before self-upgrade;
+            # the replacement interpreter inherits the environment.
+            proxies = load_proxy_settings(PROXY_DIR / (args.request + ".json"))
+            if proxies:
+                logging.info("Using proxy settings from nobara-sync: %s", ", ".join(proxies))
         if args.action in {"prepare", "prepare-codecs", "installer-update", "installer-codecs"} and not args.early_upgrade_complete:
             backend.upgrade_early(installer=args.action.startswith("installer-"))
             # Run the newly installed worker and modules before planning or
@@ -120,9 +128,10 @@ def main():
         # A successful execv replaces this interpreter without running this
         # block, preserving input for the fresh worker. That worker removes
         # it on completion even if its frontend has disconnected.
-        if args.request and packages is not None:
+        if request_loaded:
             try:
                 (STATE_DIR / "requests" / (args.request + ".json")).unlink(missing_ok=True)
+                (PROXY_DIR / (args.request + ".json")).unlink(missing_ok=True)
             except OSError:
                 logging.warning("Could not remove completed update request %s.", args.request)
 

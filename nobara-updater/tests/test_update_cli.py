@@ -27,6 +27,12 @@ class CliTests(unittest.TestCase):
         detector = patch.object(cli, "in_installer_root", return_value=False)
         detector.start()
         self.addCleanup(detector.stop)
+        # Never write the real proxy handover if the test runner uses a proxy.
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        handover = patch.object(client, "PROXY_DIR", Path(temp.name) / "proxies")
+        handover.start()
+        self.addCleanup(handover.stop)
 
     def test_app_center_invocations_and_legacy_username_are_supported(self):
         self.assertEqual(cli.parse_args([]).command, "cli")

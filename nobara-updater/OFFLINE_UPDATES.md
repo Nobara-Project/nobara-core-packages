@@ -376,6 +376,36 @@ missed scheduled updates. A job whose RPM installation started is never retried
 by this mechanism. A failed Flatpak update returns failure but does not discard an
 already scheduled system update; status identifies that situation.
 
+## Proxies and download progress
+
+The CLI preserves valid `http_proxy`, `https_proxy`, `HTTPS_PROXY`, `all_proxy`,
+`ALL_PROXY`, `no_proxy` and `NO_PROXY` settings when it elevates itself. Start
+`nobara-sync cli` from the configured shell, or preserve those variables yourself
+when invoking sudo explicitly. Uppercase `HTTP_PROXY` is intentionally ignored,
+matching curl. An explicit DNF repository proxy configuration takes precedence.
+
+App Center passes the same validated variables from its environment through the
+privileged helper's stdin connection. It receives authorization before loading
+metadata, and restores the helper's environment after every operation, including
+failures. Proxy passwords are not included in command arguments or progress
+messages. This supports environment proxy settings; it does not import desktop
+proxy settings or PAC files.
+
+Preparation uses an opaque request ID for full, selected-package and codec
+updates. Its credentials are stored separately from durable update state in
+`/run/nobara-updater/proxies/<request-id>.json`, with mode 0600 in a mode 0700
+directory. The worker consumes that file before the early updater upgrade and
+inherits the environment across its interpreter restart. A disconnected client
+does not delete pending worker input, and a concurrent request cannot replace
+another request's proxy. An abandoned handover for a service that never starts
+is private and disappears on reboot; it is never reused by another request.
+
+During RPM downloads, a human-readable aggregate reports downloaded MiB,
+percentage and completed package count at most every five seconds, plus a final
+completion message. The existing structured per-package events remain available
+with `--progress` for App Center's single overall progress bar. Cached RPMs count
+as complete; failed transfers do not.
+
 ## Calamares and other installer chroots
 
 The existing Calamares calls work unchanged: `nobara-sync cli`, followed by

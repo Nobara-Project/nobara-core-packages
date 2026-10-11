@@ -1,5 +1,5 @@
 [Unit]
-Description=Prepare selected Nobara package updates
+Description=Prepare Nobara package updates
 After=network-online.target
 Wants=network-online.target
 

@@ -5,7 +5,7 @@ import subprocess
 import time
 import uuid
 
-from .update_state import STATE_DIR, UpdateError, atomic_json, package_selection, read_state, status_message
+from .update_state import PROXY_DIR, proxy_settings, STATE_DIR, UpdateError, atomic_json, package_selection, read_state, status_message
 from .update_progress import EVENT_PREFIX, PackageProgress
 
 
@@ -35,18 +35,27 @@ def prepare_update(logger: logging.Logger, *, codecs: bool = False, packages=Non
         if progress:
             report_prepared(state)
         return True
-    if packages:
+    proxies, refused = proxy_settings(os.environ)
+    for name in refused:
+        logger.warning("Ignoring %s: it is not a valid proxy setting.", name)
+    if packages or proxies:
         request = uuid.uuid4().hex
         path = STATE_DIR / "requests" / (request + ".json")
         atomic_json(path, {"packages": packages})
+        proxy_path = PROXY_DIR / (request + ".json")
+        if proxies:
+            atomic_json(proxy_path, proxies)
         # The instance identifies immutable root-owned input, preserved across
         # the worker's early self-upgrade and interpreter replacement.
-        success = run_service("nobara-updater-prepare@" + request + ".service", logger,
+        service = "nobara-updater-prepare-codecs@" if codecs else "nobara-updater-prepare@"
+        success = run_service(service + request + ".service", logger,
                               {"ready", "scheduled", "unchanged"}, progress=progress)
         # Do not unlink on KeyboardInterrupt/disconnection: systemd still
         # owns preparation and may need the input after its early re-exec.
         if success:
             path.unlink(missing_ok=True)
+            if proxies:
+                proxy_path.unlink(missing_ok=True)
             if progress:
                 report_prepared(read_state())
         return success
