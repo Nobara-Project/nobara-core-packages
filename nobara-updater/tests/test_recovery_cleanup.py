@@ -51,6 +51,7 @@ class RecoveryCleanupTests(unittest.TestCase):
         parent = self.top / '.nobara-updater' / job
         parent.mkdir(parents=True)
         (parent / 'owner.json').write_text(json.dumps(dict(owner='nobara-updater', job=job)))
+        (parent / 'origin.json').write_text(json.dumps(dict(version=1, job=job, uuid=UUID, fsroot='/@')))
         for name in ('root', 'saved'):
             (parent / name).mkdir()
             (parent / name / 'system').write_text(job + name)
@@ -85,6 +86,7 @@ class RecoveryCleanupTests(unittest.TestCase):
         self.cleanup()
         self.assertEqual((self.parents[CURRENT] / 'root/system').read_text(), CURRENT + 'root')
         self.assertTrue((self.parents[CURRENT] / 'owner.json').is_file())
+        self.assertTrue((self.parents[CURRENT] / 'origin.json').is_file())
         self.assertFalse((self.parents[CURRENT] / 'saved').exists())
         for job in (LATEST, OLD):
             self.assertFalse(self.parents[job].exists())

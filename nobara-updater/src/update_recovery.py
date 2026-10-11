@@ -284,6 +284,9 @@ def check_recovery_space(layout: dict, boot_space: dict) -> None:
 def create_recovery(job: Path, layout: dict, *, boot_space: dict | None = None) -> dict:
     if not layout.get("available"):
         return layout
+    if layout.get("backend") != "lvm" and layout.get("fsroot", "").lstrip("/").startswith(".nobara-updater/"):
+        raise UpdateError("Restore the normal Btrfs root layout before creating another rollback snapshot. "
+                          "The current recovery system remains usable; inspect the updater log for the root-layout repair error.")
     job_id = job.name
     if not re.fullmatch(r"[a-f0-9]{32}", job_id):
         raise UpdateError("Invalid recovery job identifier.")
@@ -316,6 +319,10 @@ def create_recovery(job: Path, layout: dict, *, boot_space: dict | None = None) 
         parent = mountpoint / ".nobara-updater" / job_id
         parent.mkdir(parents=True, mode=0o700)
         atomic_json(parent / "owner.json", {"owner": "nobara-updater", "job": job_id})
+        # Keep ancestry outside either snapshot and state.json so a later
+        # restore or update cannot lose the route back to the normal root.
+        atomic_json(parent / "origin.json", dict(version=1, job=job_id,
+                                                 uuid=layout["uuid"], fsroot=layout["fsroot"]))
         saved = parent / "saved"
         restored = mountpoint / relative
         subprocess.run(["btrfs", "subvolume", "snapshot", "-r", "/", str(saved)], check=True)
@@ -473,7 +480,8 @@ def prune_recovery(recovery: dict, confirmed_job: str, *, state_root=None) -> No
                     shutil.rmtree(archive)
             # A promoted recovery root is the live OS, not a rollback copy.
             # Keep its ownership record so future cleanups can identify it.
-            if set(p.name for p in parent.iterdir()) <= {"owner.json", "root-layout.json"} and not archive.exists():
+            if set(p.name for p in parent.iterdir()) <= {"owner.json", "origin.json", "root-layout.json"} and not archive.exists():
+                (parent / "origin.json").unlink(missing_ok=True)
                 (parent / "root-layout.json").unlink(missing_ok=True)
                 (parent / "owner.json").unlink()
                 parent.rmdir()

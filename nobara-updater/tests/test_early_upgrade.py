@@ -90,6 +90,13 @@ class EarlyUpgradeTests(unittest.TestCase):
             backend.upgrade_early(self.root)
         backend.replay.assert_not_called()
 
+    def test_updater_self_upgrade_can_deliver_missing_ancestry_repairs(self):
+        backend.maintain_btrfs_root.return_value = False
+        backend.upgrade_early(self.root)
+        self.assertEqual(planner.prepare_early_transaction.call_args.args[1],
+                         ("nobara-updater", "drm-awaiter"))
+        self.assertEqual(read_state(self.root)["status"], "idle")
+
     def test_installer_preserves_previous_kernel_confirmation(self):
         previous = dict(job="a" * 32, started=True, installer=True,
                         boot_selection={"kernel": "new-kernel"})

@@ -56,6 +56,80 @@ def subvolume_id(path):
     return identifier
 
 
+def recovery_origin(state_root, state, source, uuid):
+    """Read ancestry from recorded evidence, including retained legacy roots.
+
+    The top-level record survives restoring a snapshot or replacing state.json.
+    Old installations may only retain the plan or marker inside a saved root.
+    Never infer the destination from the presence of an '@' subvolume.
+    """
+    job = MANAGED.fullmatch(source)[1]
+    parent = checked_path(source).parent
+    owner = parent / "owner.json"
+    owned = (owner.is_file() and not owner.is_symlink()
+             and json.loads(owner.read_text()) == dict(owner="nobara-updater", job=job))
+
+    def from_plan(path):
+        if not path.is_file():
+            return None
+        if path.is_symlink():
+            raise UpdateError("A saved Btrfs recovery plan is a symlink.")
+        recovery = json.loads(path.read_text())["recovery"]
+        if recovery.get("uuid") != uuid:
+            raise UpdateError("The saved recovery plan belongs to another filesystem.")
+        return safe_relative(recovery["fsroot"])
+
+    record = parent / "origin.json"
+    if owned and (record.exists() or record.is_symlink()):
+        if record.is_symlink():
+            raise UpdateError("The Btrfs recovery origin record is a symlink.")
+        origin = json.loads(record.read_text())
+        if origin.get("version") != 1 or origin.get("job") != job or origin.get("uuid") != uuid:
+            raise UpdateError("The Btrfs recovery origin record does not identify this job/filesystem.")
+        return safe_relative(origin["fsroot"])
+
+    original = from_plan(state_root / "jobs" / job / "plan.json")
+    if original is None and state.get("recovery_boot", {}).get("job") == job:
+        original = safe_relative(state["recovery_boot"]["original_subvolume"])
+    if original is None and owned:
+        # Inspect only this job's owned snapshots, never arbitrary backups or
+        # the abandoned normal root. A saved snapshot predates marker removal.
+        state_relative = state_root.relative_to(ROOT)
+        for name in ("saved", "root"):
+            snapshot = checked_path(str(parent.relative_to(TOP) / name))
+            if not snapshot.is_dir():
+                continue
+            plan = snapshot / state_relative / "jobs" / job / "plan.json"
+            checked_path(str(plan.relative_to(TOP)))
+            original = from_plan(plan)
+            if original is None:
+                marker = snapshot / "etc/nobara-updater-recovery.json"
+                checked_path(str(marker.relative_to(TOP)))
+                if marker.is_file():
+                    saved = json.loads(marker.read_text())
+                    if saved.get("job") == job:
+                        original = safe_relative(saved["original_subvolume"])
+            if original is None:
+                saved_state = snapshot / state_relative / "state.json"
+                checked_path(str(saved_state.relative_to(TOP)))
+                if saved_state.is_file():
+                    saved = json.loads(saved_state.read_text())
+                    recovery = saved.get("recovery", {})
+                    if saved.get("job") == job and recovery.get("uuid") == uuid and recovery.get("fsroot"):
+                        original = safe_relative(recovery["fsroot"])
+                    elif saved.get("recovery_boot", {}).get("job") == job:
+                        original = safe_relative(saved["recovery_boot"]["original_subvolume"])
+            if original is not None:
+                LOG.info("Recovered Btrfs ancestry for job %s from its retained %s snapshot.", job, name)
+                break
+    if original is None:
+        raise UpdateError(
+            "The original Btrfs root path is not recorded for recovery job " + job +
+            "; leaving the recovered root in place. Preserve the recovery subvolumes "
+            "and updater logs for Nobara support.")
+    return original
+
+
 def original_root(state_root, state, source, uuid):
     """Follow saved plans across repeated recoveries; never guess '@'."""
     seen = set()
@@ -65,16 +139,7 @@ def original_root(state_root, state, source, uuid):
         if job in seen:
             raise UpdateError("The saved Btrfs recovery ancestry contains a cycle.")
         seen.add(job)
-        plan = state_root / "jobs" / job / "plan.json"
-        if plan.is_file() and not plan.is_symlink():
-            recovery = json.loads(plan.read_text())["recovery"]
-            if recovery.get("uuid") != uuid:
-                raise UpdateError("The saved recovery plan belongs to another filesystem.")
-            current = safe_relative(recovery["fsroot"])
-        elif state.get("recovery_boot", {}).get("job") == job:
-            current = safe_relative(state["recovery_boot"]["original_subvolume"])
-        else:
-            raise UpdateError("The original Btrfs root path is not recorded; leaving the recovered root in place.")
+        current = recovery_origin(state_root, state, current, uuid)
     if current.startswith(".nobara-updater/"):
         raise UpdateError("The original root path is inside updater recovery storage.")
     if current == "timeshift-btrfs" or current.startswith("timeshift-btrfs/"):

@@ -173,6 +173,8 @@ def upgrade_early(root: Path = STATE_DIR, *, installer: bool = False) -> None:
             from .update_btrfs import JOURNAL
             if (root / JOURNAL).exists():
                 raise UpdateError("Finish the interrupted Btrfs root-layout repair before upgrading packages.")
+            # Permit the narrow updater/helper upgrade to deliver a repair.
+            # Main preparation must restore the layout before making a new job.
         prune_payloads(root)
         check_installed_system(preparing=True)
         before = rpm_fingerprint()
@@ -214,9 +216,12 @@ def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = F
         previous = preparation_state(root, installer=installer)
         if not installer:
             if not maintain_btrfs_root(root, previous):
-                from .update_btrfs import JOURNAL
-                if (root / JOURNAL).exists():
-                    raise UpdateError("An interrupted Btrfs root-layout repair must finish before preparing another update. Review the preceding root-layout error and retry.")
+                raise UpdateError(
+                    "Btrfs root-layout repair must finish before preparing another system update. "
+                    "The recovered system remains usable, but creating another rollback snapshot "
+                    "would extend its unresolved recovery chain. Review the preceding root-layout "
+                    "error and share the updater log with Nobara support; do not delete recovery "
+                    "subvolumes or switch to an old root manually.")
             cleanup_kernel_retention(previous)
         settings = policy()
         prune_payloads(root)

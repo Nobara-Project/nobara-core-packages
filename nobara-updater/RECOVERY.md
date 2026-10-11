@@ -43,6 +43,16 @@ on a confirmed boot or before the next fresh update. Do not delete that subvolum
 manually while it is your active root. If layout repair is interrupted, boot
 references retain the subvolume's stable ID and the updater resumes the repair.
 
+If the updater reports missing recovery ancestry, a new system update is blocked
+until the original root layout can be restored. This prevents repeated snapshots
+of an unresolved recovery root. The updater first checks retained records and
+its own saved snapshots for the missing information; the early updater/helper
+upgrade can still deliver fixes unless a root move is already in progress.
+If those records are gone, share `/var/lib/nobara-updater/update.log` and
+`sudo btrfs subvolume list -p -u /` with Nobara support. Preserve the recovery
+subvolumes and keep using the current system; an older `@` subvolume may contain
+an outdated or partially updated installation and must not be selected blindly.
+
 If the recorded pre-update root was inside `timeshift-btrfs/snapshots/`, the
 updater leaves the recovered system in place and reports that its normal root
 layout needs repair. It does not replace a Timeshift snapshot with the running

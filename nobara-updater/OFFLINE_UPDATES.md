@@ -611,7 +611,11 @@ root-only permissions by earlier workers.
 After a Btrfs rollback, the recovered subvolume becomes the active system.
 Confirmation first restores the booted recovery kernel/initramfs to normal paths,
 makes the normal entry boot that recovered root, and disarms the trial. Root-layout
-maintenance then follows saved recovery plans back to the original subvolume path.
+maintenance then follows recorded recovery ancestry back to the original
+subvolume path. New snapshots record their filesystem UUID and original root in
+`.nobara-updater/<job>/origin.json`, outside both snapshots, before snapshot
+creation. Legacy recovery chains can also use retained plans, markers, and state
+inside the matching owned snapshots when the live system's records are missing.
 It does not assume the name `@` or depend on Timeshift being installed.
 
 Before moving either subvolume, it journals the operation in
@@ -634,7 +638,12 @@ storage. The updater does not delete Timeshift snapshots.
 
 Existing installations still using `.nobara-updater/<job>/root` are repaired on
 a confirmed boot or before a fresh update, provided no update is armed or staged.
-An interrupted layout operation must finish before another transaction is prepared.
+Any layout repair failure blocks preparation of another full system update,
+including missing ancestry discovered before a repair journal could be created.
+Snapshot creation also rejects an unresolved updater recovery root. The narrow
+early updater/helper upgrade remains available to deliver repairs unless a
+journaled root move is in progress. Missing or conflicting evidence leaves the
+current root and its backups intact for support; see [RECOVERY.md](RECOVERY.md).
 Maintenance failures do not invalidate an already confirmed boot. Before later
 updates rebuild boot files, the updater still synchronizes normal entry root
 arguments and future kernel-install options. Even a transaction without a new

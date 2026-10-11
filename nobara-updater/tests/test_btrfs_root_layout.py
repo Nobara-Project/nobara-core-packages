@@ -242,6 +242,71 @@ class RootLayoutTests(unittest.TestCase):
         self.restore()
         self.assert_restored()
 
+    def test_external_origin_survives_replacing_state_and_losing_job_plan(self):
+        (self.state_root / "jobs" / JOB / "plan.json").unlink()
+        (self.source.parent / "origin.json").write_text(json.dumps(
+            dict(version=1, job=JOB, uuid=UUID, fsroot="/@")))
+        self.state["job"] = "d" * 32
+        self.restore()
+        self.assert_restored()
+
+    def test_missing_active_plan_can_be_recovered_from_read_only_saved_snapshot(self):
+        saved = self.source.parent / "saved/var/lib/nobara-updater/jobs" / JOB / "plan.json"
+        saved.parent.mkdir(parents=True)
+        plan = self.state_root / "jobs" / JOB / "plan.json"
+        saved.write_bytes(plan.read_bytes())
+        plan.unlink()
+        self.restore()
+        self.assert_restored()
+
+    def test_legacy_chain_can_recover_missing_ancestor_from_older_owned_root(self):
+        older = "c" * 32
+        self.plan(JOB, "/.nobara-updater/" + older + "/root")
+        parent = self.top / ".nobara-updater" / older
+        marker = parent / "root/etc/nobara-updater-recovery.json"
+        marker.parent.mkdir(parents=True)
+        marker.write_text(json.dumps(dict(job=older, original_subvolume="/@")))
+        (parent / "owner.json").write_text(json.dumps(dict(owner="nobara-updater", job=older)))
+        self.state["job"] = "d" * 32  # A subsequent successful update replaced state.json.
+        self.restore()
+        self.assert_restored()
+        self.assertTrue(marker.exists())
+
+    def test_legacy_saved_state_supplies_ancestry_only_for_its_own_job(self):
+        (self.state_root / "jobs" / JOB / "plan.json").unlink()
+        saved = self.source.parent / "saved/var/lib/nobara-updater/state.json"
+        saved.parent.mkdir(parents=True)
+        for job in ("c" * 32, JOB):
+            saved.write_text(json.dumps(dict(job=job, recovery=dict(uuid=UUID, fsroot="/@"))))
+            if job != JOB:
+                with self.assertRaisesRegex(UpdateError, "not recorded"):
+                    self.restore()
+                self.assertTrue(self.source.exists())
+            else:
+                self.restore()
+                self.assert_restored()
+
+    def test_external_ancestry_with_wrong_job_filesystem_or_cycle_is_refused(self):
+        record = self.source.parent / "origin.json"
+        for fields in (dict(job="c" * 32), dict(uuid="other"), dict(fsroot="/" + SOURCE_ROOT),
+                       dict(fsroot="/../@"), dict(version=2)):
+            origin = dict(version=1, job=JOB, uuid=UUID, fsroot="/@")
+            origin.update(fields)
+            record.write_text(json.dumps(origin))
+            with self.assertRaises(UpdateError):
+                self.restore()
+            self.assertTrue(self.source.exists())
+            self.assertFalse((self.state_root / layout.JOURNAL).exists())
+
+    def test_symlinked_legacy_metadata_cannot_select_a_root(self):
+        (self.state_root / "jobs" / JOB / "plan.json").unlink()
+        saved = self.source.parent / "saved/var/lib/nobara-updater"
+        saved.parent.mkdir(parents=True)
+        saved.symlink_to(self.state_root, target_is_directory=True)
+        with self.assertRaisesRegex(UpdateError, "symlink"):
+            self.restore()
+        self.assertTrue(self.source.exists())
+
     def test_missing_or_cyclic_or_foreign_ancestry_does_not_guess_root_path(self):
         for original, uuid in (("/../@", UUID), ("//etc", UUID), ("/" + SOURCE_ROOT, UUID), ("/@", "other")):
             with self.subTest(original=original, uuid=uuid):
@@ -420,6 +485,58 @@ class RootLayoutWorkflowTests(unittest.TestCase):
         self.backend.prune_recovery.assert_not_called()
         self.backend.prune_payloads.assert_not_called()
         self.assertEqual(self.state.read_state(self.root)["status"], "complete")
+
+    def test_missing_ancestry_without_a_journal_blocks_new_plan_and_preserves_state(self):
+        from nobara_updater import update_plan as planner
+        with patch.object(layout, "restore_root_layout", side_effect=UpdateError("ancestry not recorded")), \
+             patch.object(self.backend, "preparation_state", return_value=self.saved), \
+             patch.object(planner, "prepare_transaction") as plan, \
+             self.assertLogs(self.backend.LOG, level="ERROR"), \
+             self.assertRaisesRegex(UpdateError, "unresolved recovery chain"):
+            self.backend.prepare(self.root)
+        plan.assert_not_called()
+        self.backend.prune_payloads.assert_not_called()
+        self.backend.prune_recovery.assert_not_called()
+        self.assertEqual(self.state.read_state(self.root), self.saved)
+        self.assertFalse((self.root / layout.JOURNAL).exists())
+
+    def test_previously_prepared_managed_root_cannot_create_another_snapshot(self):
+        from nobara_updater import update_recovery as recovery
+        with patch.object(recovery, "probe_recovery") as probe, \
+             patch.object(recovery.subprocess, "run") as command, \
+             self.assertRaisesRegex(UpdateError, "normal Btrfs root layout"):
+            recovery.create_recovery(self.root / JOB, dict(available=True, uuid=UUID, fsroot="/" + SOURCE_ROOT))
+        probe.assert_not_called()
+        command.assert_not_called()
+
+    def test_snapshot_creation_saves_ancestry_outside_root_before_first_snapshot(self):
+        from nobara_updater import update_recovery as recovery
+        top = self.root / "top"
+        selected = dict(available=True, uuid=UUID, fsroot="/@", entry="/boot/normal.conf")
+        native_path = Path
+        def path(value):
+            if value == "/run/nobara-updater-btrfs":
+                return top
+            return native_path(value)
+        def run(command, **kwargs):
+            if command[:3] == ["btrfs", "subvolume", "snapshot"]:
+                # Simulate interruption at the first snapshot: the durable
+                # origin must already exist separately from saved/root.
+                record = top / ".nobara-updater" / JOB / "origin.json"
+                self.assertEqual(json.loads(record.read_text()),
+                                 dict(version=1, job=JOB, uuid=UUID, fsroot="/@"))
+                self.assertEqual(record.stat().st_mode & 0o777, 0o600)
+                raise OSError("snapshot interrupted")
+            self.assertIn(command[0], {"mount", "umount"})
+        with patch.object(recovery, "Path", side_effect=path), \
+             patch.object(Path, "is_mount", return_value=False), \
+             patch.object(recovery, "probe_recovery", return_value=selected), \
+             patch.object(recovery, "ensure_recovery_bootloader"), \
+             patch.object(recovery, "check_recovery_space"), \
+             patch.object(recovery.shutil, "disk_usage", return_value=types.SimpleNamespace(free=2**40)), \
+             patch.object(recovery.subprocess, "run", side_effect=run), \
+             self.assertRaisesRegex(OSError, "snapshot interrupted"):
+            recovery.create_recovery(self.root / JOB, selected)
 
     def test_root_layout_module_is_included_in_frozen_worker(self):
         self.assertIn("update_btrfs.py", self.backend.ENGINE_FILES)
