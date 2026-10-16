@@ -1,0 +1,58 @@
+#!/bin/bash
+# One automatic recovery restart per job. /boot survives root rollback.
+# The optional boot directory is used by isolated tests; the service uses /boot.
+set -euo pipefail
+umask 077
+boot=${1:-/boot}
+armed="$boot/nobara-updater/recovery-armed"
+[[ -f "$armed" && ! -L "$armed" ]] || exit 0
+entry=$(sed -nE 's/^[[:space:]]*"entry":[[:space:]]*"(nobara-recovery-[a-f0-9]{32})"[[:space:]]*,?[[:space:]]*$/\1/p' "$armed")
+[[ "$entry" =~ ^nobara-recovery-[a-f0-9]{32}$ ]] || { echo 'Invalid armed recovery entry; refusing to reboot.' >&2; exit 1; }
+job=${entry#nobara-recovery-}
+archive="$boot/nobara-updater/$job"
+[[ -d "$archive" && ! -L "$archive" && ! -L "$boot/nobara-updater" ]] || exit 1
+attempt="$archive/reboot-attempted"
+if [[ -e "$attempt" || -L "$attempt" ]]; then
+    echo 'Automatic recovery was already attempted. Stopping repeated restarts; review System Update Recovery.' >&2
+    exit 0
+fi
+# These copies were validated before recovery was armed. Never rebuild a
+# fallback from possibly updated normal images when Python is unavailable.
+saved="$archive/recovery-entry.conf"
+target="$boot/loader/entries/$entry.conf"
+[[ -f "$saved" && ! -L "$saved" && ! -L "$target" && -d "$boot/loader/entries" && ! -L "$boot/loader" && ! -L "$boot/loader/entries" ]] || {
+    echo 'The saved recovery boot entry is unavailable; refusing to reboot.' >&2
+    exit 1
+}
+temporary=$(mktemp "$boot/loader/entries/.nobara-recovery-XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+cp -- "$saved" "$temporary"
+chmod 644 "$temporary"
+mv -f -- "$temporary" "$target"
+if [[ -f "$archive/restored-entry.conf" ]]; then
+    [[ ! -L "$archive/restored-entry.conf" && ! -L "$boot/loader/entries/nobara-restored-$job.conf" ]] || exit 1
+    temporary=$(mktemp "$boot/loader/entries/.nobara-restored-XXXXXX")
+    cp -- "$archive/restored-entry.conf" "$temporary"
+    chmod 644 "$temporary"
+    mv -f -- "$temporary" "$boot/loader/entries/nobara-restored-$job.conf"
+fi
+# A failed trial must not be requested again by either GRUB selection path.
+grub2-set-default --boot-directory="$boot" "$entry"
+grub2-editenv "$boot/grub2/grubenv" set "nobara_fallback=$entry"
+grub2-editenv "$boot/grub2/grubenv" unset next_entry prev_saved_entry tmp_saved_entry nobara_trial
+environment=$(grub2-editenv "$boot/grub2/grubenv" list)
+grep -Fxq "saved_entry=$entry" <<< "$environment"
+grep -Fxq "nobara_fallback=$entry" <<< "$environment"
+if grep -Eq '^(next_entry|prev_saved_entry|tmp_saved_entry|nobara_trial)=.+' <<< "$environment"; then
+    echo 'The GRUB trial selection could not be cleared; refusing to reboot.' >&2
+    exit 1
+fi
+# mkdir also serializes concurrent restart requests. A crash after this point
+# may require manual recovery, but cannot turn into endless automatic reboots.
+if ! mkdir -- "$attempt"; then
+    [[ -d "$attempt" ]] && exit 0
+    exit 1
+fi
+sync -f "$boot"
+echo 'Restarting once into the saved Nobara recovery system.'
+systemctl --no-block reboot

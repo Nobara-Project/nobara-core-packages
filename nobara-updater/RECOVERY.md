@@ -67,6 +67,87 @@ is needed to address that failure. Review the error, resolve the conflict,
 and run the updater again. Restart only if the updater asks you to after
 preparing the new update.
 
+### If a swapfile blocks a Btrfs recovery snapshot
+
+The updater names swapfiles that are active or listed in `/etc/fstab` and belong
+to the root subvolume. It stops preparation or scheduling before requesting a
+restart and checks again during the update boot before creating the snapshot.
+An inactive configured swapfile is included because it could activate on reboot,
+and snapshotting it could prevent subsequent activation. The updater leaves swap
+and its configuration unchanged. Ordinary live application updates do not need
+this snapshot check.
+
+To repair the layout:
+
+1. Check the reported paths with `swapon --show` and `/etc/fstab`. Include any
+   custom systemd swap units and hibernation configuration in your review.
+2. Provide a separate Btrfs subvolume for swap, with a persistent mount in
+   `/etc/fstab`. Calamares uses the top-level `@swap` subvolume mounted at `/swap`,
+   alongside the root `@` subvolume. An ordinary `/swap` directory still belongs
+   to root and does not solve this problem. Preserve an existing swap subvolume
+   and its contents; do not format it or replace its mount blindly.
+3. Create a new swapfile on that mounted subvolume, using
+   `btrfs filesystem mkswapfile` with an appropriate size and an unused filename.
+   This creates a suitable file without copy-on-write or compression. Activate
+   and verify the replacement before retiring the old swapfile. Check RAM and
+   swap capacity first: disabling swap can fail or exhaust memory. Do not merely
+   disable the old file for snapshot creation and re-enable it afterwards.
+4. Update the swap entry in `/etc/fstab` and any custom swap unit to use the new
+   file. If using hibernation, update the resume device/offset and regenerate the
+   affected boot configuration/initramfs; the old file's offset is not valid for
+   its replacement. Disable the old swapfile only when capacity permits, then
+   remove the retired file and its old configuration once the replacement works.
+5. Run the updater again and restart only when it requests it. If relocation is
+   unclear, share the recovery report with Nobara support before changing storage.
+
+Swap partitions, zram, and swapfiles in a separate subvolume do not cause this
+root-snapshot restriction. See the [Btrfs swapfile documentation](https://btrfs.readthedocs.io/en/latest/Swapfile.html)
+for the filesystem and hibernation requirements.
+
+## If automatic recovery could not complete
+
+The updater allows one automatic recovery restart per update job. If that
+restart does not reach a confirmed recovered system, further automatic restarts
+stop. A bootable system shows a failure report; reaching the desktop does not
+mean the update or rollback succeeded. A new update remains blocked.
+
+Open **System Update Recovery** or run `nobara-sync recovery-report`. Save the
+report bundle or upload its logs with the report's sharing action. Preserve the
+snapshots, boot entries and updater state. To retry the saved recovery, run:
+
+```sh
+sudo nobara-sync retry-recovery
+```
+
+The command validates the existing snapshot and archived kernel/initramfs,
+repairs the recovery boot entry, and selects it in GRUB. It supports the saved
+Btrfs or ext4/XFS-on-LVM recovery for that update. It does not replay packages,
+create another snapshot, confirm the interrupted installation, or reboot
+immediately. If it succeeds, save your work and restart normally with the
+desktop restart action or `sudo reboot`. Do not use `nobara-sync reboot`, which
+is for scheduling prepared updates.
+
+If validation fails, keep the saved recovery and share the refreshed report
+with Nobara support. Missing, replaced, invalid or merging LVM snapshots, or
+missing/invalid boot images, need investigation rather than a forced retry.
+If the next boot still does not confirm recovery, the automatic restart limit
+remains in place and the report is refreshed. Once recovery is confirmed,
+follow the normal recovery workflow above. Do not delete the restart record
+or repeatedly rerun the interrupted transaction.
+
+Reports include selected kernel command-line fields, root and boot mount
+identities, GRUB selection variables, active and archived boot entries, and EFI
+boot-selection details. These are captured before and after a recovery retry
+and included in the same offline bundle/paste upload as the failure log.
+Arbitrary kernel arguments and private transaction state are omitted; review
+the report before sharing filesystem identifiers and local paths.
+
+Recovery boot entries are saved outside the normal boot-entry directory. Before
+selecting recovery, the updater restores and validates them if a package script
+rewrote their root options. Older entries can be repaired using the recorded
+snapshot or LVM identity and existing archived boot files; missing or ambiguous
+boot data requires support instead of guessing a replacement root.
+
 ## If installation failed without automatic rollback
 
 Reaching the desktop does not confirm that installation completed. Some

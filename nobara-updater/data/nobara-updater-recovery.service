@@ -8,7 +8,6 @@ Before=shutdown.target
 # If Python cannot run, the separate failure handler uses the armed fallback.
 OnFailure=emergency.target nobara-updater-fallback-reboot.service
 OnFailureJobMode=replace
-SuccessAction=reboot
 
 [Service]
 Type=oneshot

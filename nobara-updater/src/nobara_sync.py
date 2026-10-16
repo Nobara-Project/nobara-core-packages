@@ -20,7 +20,7 @@ LOG = logging.getLogger("nobara-sync")
 RESULT_PREFIX = "NOBARA_UPDATE_RESULT "
 COMMANDS = {"cli", "prepare-update", "install-updates", "install-fixups", "install-codecs",
             "repair", "check-updates", "check-repos", "update-status", "schedule-update",
-            "cancel-update", "reboot", "recovery-report", "retry-update"}
+            "cancel-update", "reboot", "recovery-report", "retry-update", "retry-recovery"}
 
 
 def parse_args(argv=None):
@@ -42,6 +42,7 @@ def parse_args(argv=None):
         "schedule-update": "Install the prepared update on the next restart.",
         "cancel-update": "Cancel an update that has not begun installation.",
         "retry-update": "After manual repairs without rollback, validate and prepare a fresh update.",
+        "retry-recovery": "Validate and select the saved recovery system for your next restart.",
         "reboot": "Restart now and install the prepared update.",
     }.items():
         commands.add_parser(name, help=help_text)
@@ -127,12 +128,19 @@ def update_flatpaks(user):
 def result_message(state):
     status = state.get("status", "idle")
     return dict(status=state.get("status", "idle"), message=status_message(state),
-                reboot_required=status in {"scheduled", "awaiting-boot"} or
+                reboot_required=bool(state.get("recovery_retry_ready")) or status in {"scheduled", "awaiting-boot"} or
                 (status == "ready" and state.get("execution", {}).get("mode") != "live"),
                 automatic_recovery=state.get("recovery", {}).get("available", False))
 
 
 def dispatch(args):
+    if args.command == "retry-recovery":
+        if in_installer_root():
+            raise UpdateError("Recovery retry is only available on an installed system.")
+        if not worker_action("retry-recovery", LOG):
+            return False
+        print(RESULT_PREFIX + json.dumps(result_message(read_state())), flush=True)
+        return True
     if args.command == "retry-update":
         if in_installer_root():
             raise UpdateError("Retry after repair is only available on an installed system.")

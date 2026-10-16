@@ -14,7 +14,7 @@ from collections import deque
 from pathlib import Path
 
 from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root, installed_boot_kernels
-from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment, check_recovery_space
+from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment, check_recovery_space, check_snapshot_swapfiles
 from .update_report import arm_report, publish_recovery, publish_failure, resolve_notice
 from .update_origins import annotate_failure
 from .update_progress import OfflineProgress, PackageProgress
@@ -261,6 +261,7 @@ def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = F
                     recovery = {"available": False, "reason": "Installer-owned target root." if installer else "Application update installed during this session."}
                 else:
                     recovery = probe_recovery()
+                    check_snapshot_swapfiles(recovery)
                 if not installer and (settings["require_recovery"] or (not live and settings["require_offline_recovery"])) and not recovery["available"]:
                     raise UpdateError(recovery["reason"])
                 if not installer and not live and not recovery["available"]:
@@ -321,6 +322,9 @@ def schedule(root: Path = STATE_DIR, *, reboot: bool = False) -> None:
         job = job_directory(state, root)
         try:
             verify_files(job, state["files"])
+            # Includes already prepared jobs and a second scheduling request:
+            # swap may have changed since preparation finished.
+            check_snapshot_swapfiles(state.get("recovery", {}))
         except UpdateError as error:
             if TRIGGER.is_symlink() and TRIGGER.resolve() == root.resolve():
                 TRIGGER.unlink()
@@ -393,7 +397,7 @@ def retry_failed(root: Path = STATE_DIR) -> None:
         if state.get("status") not in {"failed", "interrupted"} or not state.get("started"):
             raise UpdateError("There is no failed installation awaiting repair. Run nobara-sync cli normally.")
         if state.get("recovery", {}).get("created"):
-            raise UpdateError("Boot the previous-system recovery first, repair it, then run nobara-sync cli.")
+            raise UpdateError("Recover the previous system first: run sudo nobara-sync retry-recovery, then restart when requested. After recovery, repair it and run nobara-sync cli.")
         if TRIGGER.exists() or TRIGGER.is_symlink():
             raise UpdateError("An offline update trigger is still present. Do not retry while an update is scheduled.")
         check_installed_system()
@@ -402,6 +406,48 @@ def retry_failed(root: Path = STATE_DIR) -> None:
         write_state(root, {"previous_failed_job": state["job"], "repair_acknowledged": True,
                            "started": False}, "idle")
         LOG.info("RPM database and dependency checks passed. Preparing a fresh update is now allowed; the previous failure report is retained.")
+
+
+def retry_recovery(root: Path = STATE_DIR) -> None:
+    """Explicitly repair/reselect the saved system, never replay a failed RPM plan."""
+    from .update_recovery import validate_saved_recovery, reserve_manual_recovery_attempt
+    from .update_report import capture_boot_diagnostics
+    if in_installer_root():
+        raise UpdateError("Recovery retry is only available on an installed system.")
+    with update_lock(root):
+        state = read_state(root)
+        if (state.get("status") not in {"failed", "interrupted", "recovering"}
+                or not state.get("started") or not state.get("recovery", {}).get("created")):
+            raise UpdateError("There is no interrupted installation with a saved recovery system to retry.")
+        if any(path.exists() or path.is_symlink() for path in (TRIGGER, Path("/etc/system-update"))):
+            raise UpdateError("An offline update trigger is still present. Resolve it before retrying recovery; do not create or delete triggers manually.")
+        capture_boot_diagnostics(state, "recovery-retry-before")
+        try:
+            validate_saved_recovery(state["recovery"], state["job"])
+            # Preserve the original failure even if the operator repeats this
+            # command. The snapshot and failure journal remain untouched.
+            saved = job_directory(state, root) / "recovery-retry-state.json"
+            if not saved.exists():
+                atomic_json(saved, state)
+            reserve_manual_recovery_attempt(state["recovery"])
+            select_recovery(state["recovery"], verify_images=True)
+        except Exception as error:
+            if state.get("recovery_retry_ready"):
+                write_state(root, state, "interrupted", recovery_retry_ready=False)
+            capture_boot_diagnostics(state, "recovery-retry-after", note=f"Recovery retry refused: {error}")
+            try:
+                publish_failure(state)
+            except Exception:
+                LOG.exception("Could not refresh the recovery failure report.")
+            raise UpdateError(f"Cannot safely retry recovery: {error}. Preserve the saved recovery and share nobara-sync recovery-report with support.") from error
+        write_state(root, state, "interrupted", recovery_blocked=True, recovery_retry_ready=True,
+                    recovery_retry_boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip())
+        capture_boot_diagnostics(state, "recovery-retry-after")
+        try:
+            publish_failure(state)
+        except Exception:
+            LOG.exception("Recovery was selected, but its report could not be refreshed.")
+        LOG.info("%s", status_message(state))
 
 
 def replay(job: Path, *, test: bool = False) -> None:
@@ -575,7 +621,9 @@ def validate_boot(packages: list[dict], *, rebuild_all: bool = False, preserved_
     if preserved & required:
         raise UpdateError("Cannot skip module and boot validation for the selected or updated kernel: "
                           + ", ".join(sorted(preserved & required)) + ". Prepare the update again from the kernel you intend to use.")
-    modules_changed = any(any(part in item["name"] for part in ("dkms", "akmod", "kmod", "dracut")) for item in packages)
+    modules_changed = any(item["action"] in {"Install", "Upgrade", "Reinstall", "Downgrade"}
+                          and any(part in item["name"] for part in ("dkms", "akmod", "kmod", "dracut"))
+                          for item in packages)
     if modules_changed or rebuild_all:
         # A running kernel can differ from the selected/default kernel.
         # Rebuild installed bootable kernels, except legacy fallbacks whose
@@ -715,25 +763,53 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
             raise
 
 
-def recover(root: Path = STATE_DIR) -> None:
+def stop_recovery_loop(root: Path, state: dict) -> bool:
+    from .update_recovery import recovery_reboot_attempted
+    if not (state.get("started") and state.get("recovery", {}).get("created")):
+        return False
+    if not recovery_reboot_attempted(state["recovery"]):
+        return False
+    if (state.get("recovery_retry_ready") and state.get("recovery_retry_boot_id")
+            == Path("/proc/sys/kernel/random/boot_id").read_text().strip()):
+        # Re-running confirmation in this session must not lose the explicit
+        # restart request. On a later boot, only the recovery marker can confirm.
+        return True
+    message = ("Automatic recovery did not reach a confirmed recovered system. "
+               "Further automatic restarts have been stopped. The update is not confirmed; "
+               "preserve the recovery snapshots and boot entries, open System Update Recovery "
+               "or run nobara-sync recovery-report, and share the report with Nobara support.")
+    write_state(root, state, "interrupted", recovery_blocked=True, recovery_retry_ready=False, error=message)
+    LOG.error("%s", message)
+    try:
+        publish_failure(state)
+    except Exception:
+        LOG.exception("Could not publish the recovery failure report; automatic restarts remain stopped.")
+    return True
+
+
+def recover(root: Path = STATE_DIR) -> bool:
+    """Return True only when a guarded recovery restart is needed."""
     with update_lock(root):
         state = read_state(root)
         if state.get("status") in {"complete", "recovered", "live-complete"}:
             # A service timeout during optional cleanup must not roll back a
             # confirmed system, especially after its snapshot was retired.
             LOG.warning("Ignoring recovery request after successful confirmation; inspect the cleanup log instead.")
-            return
+            return False
         if not state.get("started"):
             if TRIGGER.is_symlink() and TRIGGER.resolve() == root.resolve():
                 TRIGGER.unlink()
             # A preparation/check failure leaves the original system usable.
-            return
+            return False
+        if stop_recovery_loop(root, state):
+            return False
         recovery = state.get("recovery", {})
         if recovery.get("created"):
             SPLASH.recovery()
             announce("The update failed. Restarting into the previous system.")
             write_state(root, state, "recovering")
             select_recovery(recovery)
+            return True
         else:
             write_state(root, state, "interrupted", error=state.get("error", "Offline installation failed."))
             raise UpdateError("Automatic rollback is unavailable. Boot recovery media and inspect /var/lib/nobara-updater/state.json.")
@@ -832,7 +908,7 @@ def confirm_boot(root: Path = STATE_DIR) -> None:
                 except Exception:
                     # Lack of report storage must not undo a successful recovery.
                     LOG.exception("System restored, but the recovery report could not be published.")
-                write_state(root, state, "recovered", started=False,
+                write_state(root, state, "recovered", started=False, recovery_blocked=False, recovery_retry_ready=False,
                             recovery_boot=recovery, normal_boot_entry=entry, error="The previous system was restored.",
                             # The snapshot captured state before create_recovery
                             # returned and recorded created=True in the origin.
@@ -859,6 +935,8 @@ def confirm_boot(root: Path = STATE_DIR) -> None:
                     cleanup_confirmed_update(root, state)
                 else:
                     cleanup_kernel_retention(state)
+            return
+        if stop_recovery_loop(root, state):
             return
         if state.get("status") in {"ready", "scheduled"} and not state.get("started"):
             reconcile_pending(root, state)

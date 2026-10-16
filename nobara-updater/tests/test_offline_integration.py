@@ -769,6 +769,106 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertEqual(caught.exception.package_conflicts[0]["name"], "libchromaprint")
         download.assert_not_called()
 
+    def orphaned_module_fixture(self, kernel, driver="wl", *, requirement=None, origin="@commandline"):
+        name = f"kmod-{driver}-{kernel}"
+        self.install_health_fixture(name, headers="Requires: " + (requirement or "kernel-uname-r = " + kernel),
+                                    origin=origin)
+        return name
+
+    def test_orphaned_kmods_after_family_switch_are_removed_in_plan_and_replay(self):
+        current = "7.2.10-1.noarch"
+        self.install_health_fixture("kernel-core", "7.2.10", headers=f"Provides: kernel-uname-r = {current}")
+        self.retained_kernel_fixture(current)
+        # The disabled LTS repository is deliberately absent, as after a switch.
+        old = ("6.18.52-201.lts.nobara.fc44.noarch", "7.2.4-201.nobara.fc44.noarch",
+               "7.2.4-202.nobara.fc44.noarch")
+        modules = {self.orphaned_module_fixture(kernel) for kernel in old}
+        modules.add(self.orphaned_module_fixture(old[0], "v4l2loopback", origin="<unknown>"))
+        for name in ("akmods", "akmod-wl", "broadcom-wl", "kmod-wl"):
+            self.install_health_fixture(name)
+        current_module = self.orphaned_module_fixture(current)
+        with patch.object(planner.os, "uname", return_value=Mock(release=current)):
+            result = self.prepare()
+        removed = {p["name"] for p in result["packages"] if p["action"] == "Remove"}
+        self.assertEqual(removed, modules)
+        self.assertNotIn(current_module, removed)
+        # Removing orphan modules alone must not demand new development files
+        # or rebuild drivers for the retained kernel.
+        self.assertFalse(any(p["name"].startswith("kernel") for p in result["packages"]))
+        with self.assertRaises(UpdateError):
+            self.check_fixture_health()  # Planning has not changed the RPM DB.
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        self.check_fixture_health()
+
+    def test_orphaned_kmod_for_higher_version_previous_family_is_also_repaired(self):
+        name = self.orphaned_module_fixture("7.2.4-1.noarch")
+        with patch.object(planner.os, "uname", return_value=Mock(release="6.18.52-1.noarch")):
+            result = self.prepare()
+        self.assertIn((name, "Remove"), {(p["name"], p["action"]) for p in result["packages"]})
+
+    def test_orphan_cleanup_keeps_running_kernel_modules_without_rpm_or_image(self):
+        kernel = "7.2.4-1.noarch"
+        self.orphaned_module_fixture(kernel)
+        with patch.object(planner.os, "uname", return_value=Mock(release=kernel)), \
+             patch.object(b.Transaction, "download") as download:
+            with self.assertRaisesRegex(UpdateError, "kernel-uname-r"):
+                self.prepare()
+        download.assert_not_called()
+
+    def test_orphan_cleanup_keeps_installed_kernel_modules_with_disabled_repo_and_missing_image(self):
+        kernel = "6.18.52-1.noarch"
+        self.install_health_fixture("kernel-core", "6.18.52", headers=f"Provides: kernel-uname-r = {kernel}")
+        name = self.orphaned_module_fixture(kernel)
+        result = self.prepare()
+        self.assertFalse(any(p["name"] == name for p in result["packages"]))
+
+    def test_orphan_cleanup_keeps_manual_boot_images_without_core_rpm(self):
+        for location in ("boot/vmlinuz-", "usr/lib/modules/"):
+            with self.subTest(location=location):
+                kernel = "6.18.52-1.noarch"
+                image = self.root / (location + kernel + ("/vmlinuz" if location.endswith("modules/") else ""))
+                image.parent.mkdir(parents=True, exist_ok=True)
+                image.write_text("manually retained kernel")
+                if location.startswith("boot"):
+                    self.orphaned_module_fixture(kernel)
+                with self.assertRaisesRegex(UpdateError, "kernel-uname-r"), \
+                     patch.object(b.Transaction, "download") as download:
+                    self.prepare()
+                download.assert_not_called()
+                image.unlink()
+
+    def test_orphan_cleanup_keeps_modules_for_incoming_kernel(self):
+        kernel = "7.2.20-1.noarch"
+        name = self.orphaned_module_fixture(kernel)
+        self.add_obsolete_repo_package("kernel-core", "7.2.20", headers=f"Provides: kernel-uname-r = {kernel}")
+        self.migrations = MigrationPlan(install={"kernel-core"})
+        with patch.object(planner, "check_selection_support"):
+            result = self.prepare()
+        self.assertFalse(any(p["name"] == name for p in result["packages"]))
+
+    def test_orphan_cleanup_requires_matching_per_kernel_name_and_dependency(self):
+        self.orphaned_module_fixture("6.18.52-1.noarch", requirement="missing-driver-runtime")
+        with self.assertRaisesRegex(UpdateError, "missing-driver-runtime"):
+            self.prepare()
+
+    def test_orphan_cleanup_does_not_remove_unrelated_dependents(self):
+        name = self.orphaned_module_fixture("6.18.52-1.noarch")
+        self.install_health_fixture("local-dependent", headers="Requires: " + name)
+        with self.assertRaises(UpdateError), patch.object(b.Transaction, "download") as download:
+            self.prepare()
+        download.assert_not_called()
+
+    def test_orphan_cleanup_rechecks_kernels_introduced_by_dependency_repair(self):
+        kernel = "6.18.52-1.noarch"
+        self.orphaned_module_fixture(kernel)
+        self.install_health_fixture("local-dependent", headers="Requires: kernel-uname-r = " + kernel)
+        self.add_obsolete_repo_package("kernel-core", "6.18.52", headers=f"Provides: kernel-uname-r = {kernel}")
+        with self.assertRaisesRegex(UpdateError, "Cannot safely remove"), \
+             patch.object(b.Transaction, "download") as download:
+            self.prepare()
+        download.assert_not_called()
+
     def test_repo_upgrade_replaces_local_consumer_without_pulling_its_old_dependencies(self):
         self.install_health_fixture("labwc", headers="Requires: custom-runtime", origin="@commandline")
         self.add_obsolete_repo_package("custom-runtime", "1")

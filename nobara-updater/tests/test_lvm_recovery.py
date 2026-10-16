@@ -91,8 +91,6 @@ class RecoveryBootTests(unittest.TestCase):
             p = self.root / "boot/loader/entries" / (entry + ".conf")
             p.parent.mkdir(parents=True, exist_ok=True)
             p.touch()
-        def path(value):
-            return self.root / str(value).lstrip("/")
         def run(command, **kwargs):
             self.commands.append(command)
             if command[0] == "grub2-set-default":
@@ -107,7 +105,9 @@ class RecoveryBootTests(unittest.TestCase):
                         self.env.pop(key, None)
             return subprocess.CompletedProcess(command, 0)
         self.addCleanup(patch.stopall)
-        patch.object(recovery, "Path", side_effect=path).start()
+        patch.object(recovery, "BOOT", self.root / "boot").start()
+        patch.object(recovery, "ensure_recovery_bootloader").start()
+        patch.object(recovery, "restore_recovery_entry").start()
         patch.object(recovery.subprocess, "run", side_effect=run).start()
         patch.object(recovery, "grub_environment", side_effect=lambda: dict(self.env)).start()
         patch.object(recovery.os, "sync").start()
@@ -122,6 +122,7 @@ class RecoveryBootTests(unittest.TestCase):
         self.env.update(saved_entry="new-kernel", next_entry="new-kernel")
         recovery.trial_boot(self.recovery, "normal")
         self.assertEqual(self.env["nobara_trial"], "normal")
+        self.assertEqual(self.env["next_entry"], "normal")
         self.assertEqual(self.env["nobara_fallback"], self.recovery["entry_id"])
         recovery.confirm_trial("normal")
         self.assertEqual(self.env["saved_entry"], "normal")
@@ -147,13 +148,13 @@ class LvmTunedEntryTests(unittest.TestCase):
         for image in ("vmlinuz", "initramfs", "tuned.img"):
             (self.boot / image).write_text(image)
         self.entry = self.entries / "normal.conf"
-        self.entry.write_text("title Nobara\nlinux /vmlinuz\ninitrd /initramfs $tuned_initrd\n"
+        self.entry.write_text("title Nobara\nversion test-kernel\nlinux /vmlinuz\ninitrd /initramfs $tuned_initrd\n"
                               "options $kernelopts $tuned_params\n")
         self.env = dict(kernelopts="root=UUID=original ro rd.luks.uuid=luks-123 resume=UUID=swap rd.lvm.lv=old/root",
                         tuned_params="isolcpus=1", tuned_initrd="/tuned.img")
         self.job = self.root / "jobs" / JOB
         self.job.mkdir(parents=True)
-        self.layout = dict(vg=ORIGIN["vg_name"], lv="root", origin_uuid=ORIGIN["lv_uuid"],
+        self.layout = dict(backend="lvm", vg=ORIGIN["vg_name"], lv="root", origin_uuid=ORIGIN["lv_uuid"],
                            vg_uuid=ORIGIN["vg_uuid"], origin_path=ORIGIN["lv_path"], reclaim=[],
                            snapshot_bytes=int(RESERVE["lv_size"]), entry=str(self.entry))
 
@@ -180,6 +181,26 @@ class LvmTunedEntryTests(unittest.TestCase):
 
     def options(self, entry):
         return next(line[8:] for line in entry.read_text().splitlines() if line.startswith("options "))
+
+    def test_package_hook_cannot_erase_lvm_merge_or_restored_root_options(self):
+        saved = self.create()
+        expected = {entry: entry.read_text() for entry in (self.restored, self.recovery_entry)}
+        for entry in expected:
+            entry.write_text(entry.read_text().replace(self.options(entry), "root=UUID=wrong ro"))
+        recovery.restore_recovery_entry(saved)
+        for entry, text in expected.items():
+            self.assertEqual(entry.read_text(), text)
+        self.assertIn("nobara.rollback=" + JOB, self.options(self.recovery_entry))
+        self.assertNotIn("nobara.rollback=", self.options(self.restored))
+
+    def test_legacy_lvm_entry_repair_keeps_encryption_and_archived_boot_files(self):
+        saved = self.create()
+        (self.archive / "recovery-entry.conf").unlink()
+        (self.archive / "restored-entry.conf").unlink()
+        self.recovery_entry.write_text(self.recovery_entry.read_text().replace(" nobara.rollback=" + JOB, ""))
+        recovery.restore_recovery_entry(saved)
+        self.assertIn("nobara.rollback=" + JOB, self.options(self.recovery_entry))
+        self.assertIn("rd.luks.uuid=luks-123", self.options(self.recovery_entry))
 
     def finish(self):
         with patch.object(lvm, "inventory", return_value=[ORIGIN, RESERVE]):

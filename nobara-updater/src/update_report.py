@@ -7,6 +7,7 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import tarfile
 import tempfile
@@ -18,6 +19,8 @@ from .update_origins import annotate_failure
 BOOT_REPORTS = Path("/boot/nobara-updater")
 REPORTS = Path("/var/lib/nobara-updater-reports")
 DKMS_LOG_ROOT = Path("/var/lib/dkms")
+CMDLINE = Path("/proc/cmdline")
+BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 LIMIT = 1024 * 1024
 LOG = logging.getLogger(__name__)
 PACKAGE_GUIDANCE = """How packages are handled
@@ -66,8 +69,29 @@ def report_directory(state: dict) -> Path:
             else STATE_DIR / "jobs" / job / "diagnostics")
 
 
-def instructions(recovered: bool, started: bool) -> str:
-    if recovered:
+def instructions(recovered: bool, started: bool, *, recovery_blocked: bool = False) -> str:
+    if recovery_blocked:
+        text = """Automatic recovery did not reach a confirmed recovered system.
+Repeated automatic restarts have been stopped. The update is not confirmed,
+and reaching the desktop does not mean that rollback succeeded.
+
+What to do next
+1. Save this report or upload its logs and share them with Nobara support.
+   You can reopen it using System Update Recovery or nobara-sync recovery-report.
+2. Preserve the recovery snapshots, boot entries and updater state. Do not
+   delete state.json, create /system-update, or repeatedly rerun the update.
+3. Run: sudo nobara-sync retry-recovery
+   This checks the existing snapshot and archived boot images, repairs its
+   boot entry and selects recovery. If it succeeds, save your work and restart
+   normally (sudo reboot). It does not install packages or restart immediately.
+4. If validation refuses the retry, or recovery still cannot be confirmed,
+   share the refreshed report with support. Once recovery is confirmed, fix
+   the original update problem there and run the updater again.
+
+The original failure and recovery diagnostics are included below. Keep the
+offline report bundle if an Internet connection is unavailable.
+"""
+    elif recovered:
         text = """The system update failed and the previous system was restored.
 You can continue using this recovered system. The update did not complete.
 
@@ -217,6 +241,106 @@ def capture_journal(path: Path) -> None:
     os.chmod(path, 0o600)
 
 
+def boot_options(text: str) -> str:
+    """Publish boot selectors, not arbitrary kernel arguments/secrets."""
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
+        return "[unparseable boot options omitted]"
+    allowed = {"root", "rootflags", "rootfstype", "rd.luks.uuid", "rd.lvm.lv", "resume",
+               "resume_offset", "nobara.rollback", "systemd.unit", "rd.systemd.unit", "BOOT_IMAGE"}
+    return shlex.join(token for token in tokens if token.partition("=")[0] in allowed
+                      or token in {"ro", "rw", "noresume", "$kernelopts", "$tuned_params"})
+
+
+def capture_boot_diagnostics(state: dict, phase: str, *, note: str | None = None) -> None:
+    """Best-effort bounded boot evidence; never run a repair while collecting it."""
+    if not state.get("job"):
+        return
+    try:
+        if phase not in {"failure", "confirm", "recover", "current", "recovery-retry-before", "recovery-retry-after"}:
+            raise ValueError("Invalid boot diagnostic phase")
+        directory = report_directory(state)
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        destination = directory / (phase + "-boot.log")
+        if phase == "recovery-retry-before" and destination.exists():
+            return  # Keep the original broken selection across repeated requests.
+        boot = BOOT_REPORTS.parent
+        notes = ["Boot diagnostics (only boot-selection fields are included)"]
+        if note:
+            notes.append(note)
+
+        def read(path):
+            try:
+                if path.is_symlink() or not path.is_file():
+                    return "[missing or symlink]"
+                with path.open("r", errors="replace") as stream:
+                    return stream.read(16384)
+            except OSError as error:
+                return f"[unavailable: {error}]"
+
+        def command(args):
+            # Bound time and memory even if a boot tool is broken. Collection
+            # uses read-only commands and does not consult arbitrary user files.
+            with tempfile.TemporaryFile() as stream:
+                try:
+                    result = subprocess.run(args, stdout=stream, stderr=subprocess.DEVNULL, timeout=3, check=False)
+                    if result.returncode:
+                        return f"[command exited {result.returncode}]"
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    return f"[unavailable: {error}]"
+                stream.seek(0)
+                return stream.read(16384).decode("utf-8", errors="replace")
+
+        notes += ["Boot ID: " + read(BOOT_ID).strip(), "Kernel: " + os.uname().release,
+                  "Kernel boot selectors: " + boot_options(read(CMDLINE)),
+                  "Updater state: " + json.dumps({key: state[key] for key in
+                      ("job", "status", "started", "recovery_blocked", "recovery_retry_ready", "trial_entry", "normal_boot_entry")
+                      if key in state}),
+                  "Saved recovery: " + json.dumps({key: state.get("recovery", {})[key] for key in
+                      ("backend", "created", "uuid", "fsroot", "subvolume", "entry_id", "vg", "lv", "origin_uuid", "snapshot_uuid")
+                      if key in state.get("recovery", {})})]
+        for mount in ("/", "/boot", "/boot/efi"):
+            notes.append("Mounted filesystem " + mount + ":\n" + command(
+                ["findmnt", "--json", "--output", "TARGET,SOURCE,FSTYPE,UUID,FSROOT", "--mountpoint", mount]))
+        environment = command(["grub2-editenv", str(boot / "grub2/grubenv"), "list"])
+        notes.append("GRUB selection:")
+        for line in environment.splitlines():
+            key, _, value = line.partition("=")
+            if key in {"saved_entry", "next_entry", "prev_saved_entry", "tmp_saved_entry", "nobara_fallback", "nobara_trial", "boot_success", "boot_indeterminate"}:
+                notes.append(line)
+            elif key in {"kernelopts", "tuned_params"}:
+                notes.append(key + "=" + boot_options(value))
+            elif line.startswith("["):
+                notes.append(line)
+        # Include both copies: package scripts may have rewritten only the
+        # active BLS entry, and the firmware may load a different GRUB config.
+        entries = sorted((boot / "loader/entries").glob("*.conf"))[:32]
+        entries += [directory / "recovery-entry.conf", directory / "restored-entry.conf"]
+        for path in entries:
+            if any(parent.is_symlink() for parent in path.parents if parent != boot):
+                continue
+            notes.append("Boot entry: " + str(path.relative_to(boot) if path.is_relative_to(boot) else path.name))
+            for line in read(path).splitlines():
+                parts = line.split(None, 1)
+                if len(parts) == 2 and parts[0] in {"title", "version", "linux", "initrd", "options"}:
+                    notes.append(parts[0] + " " + (boot_options(parts[1]) if parts[0] == "options" else parts[1]))
+                elif line.startswith("["):
+                    notes.append(line)
+        for vendor in ("fedora", "nobara"):
+            path = boot / "efi/EFI" / vendor / "grub.cfg"
+            notes.append(str(path.relative_to(boot)) + ":")
+            for line in read(path).splitlines():
+                if re.match(r"\s*(search\s|configfile\s|set\s+(?:prefix|root)=|\[)", line):
+                    notes.append(line)
+        notes.append("EFI boot selection:\n" + command(["efibootmgr"]))
+        contents = redact("\n".join(notes))[:65536]
+        destination.write_text(contents + "\n")
+        os.chmod(destination, 0o600)
+    except Exception:
+        LOG.warning("Could not collect boot-selection diagnostics; preserving the original failure.", exc_info=True)
+
+
 def record_failure(state: dict, phase: str, error: Exception) -> None:
     """Best effort only: diagnostics must never prevent recovery."""
     try:
@@ -236,6 +360,7 @@ def record_failure(state: dict, phase: str, error: Exception) -> None:
                           package_origins=state.get("package_origins", report.get("package_origins", [])),
                           package_conflicts=getattr(error, "package_conflicts", state.get("package_conflicts", [])))
         atomic_json(path, report)
+        capture_boot_diagnostics(state, phase if phase in {"confirm", "recover"} else "failure")
         if not secondary and state.get("started"):
             try:
                 capture_build_logs(directory)
@@ -282,6 +407,7 @@ def record_service_failure(state: dict, phase: str, result: str, exit_code: str,
             # finalization already reported a real package/boot-file failure.
             report["service_failure"] = dict(unit=unit, result=result, exit_code=exit_code, exit_status=exit_status)
             atomic_json(path, report)
+            capture_boot_diagnostics(state, "confirm" if phase == "confirm" else "failure")
             capture_journal(directory / f"failure-{phase}-journal.log")
             if not state.get("recovery", {}).get("created"):
                 publish_failure(state)
@@ -292,26 +418,35 @@ def record_service_failure(state: dict, phase: str, result: str, exit_code: str,
 
 def publish_recovery(job: str) -> dict:
     """Import from separate /boot into the restored system for desktop users."""
+    capture_boot_diagnostics(dict(job=job, recovery={"created": True}), "current")
     return publish_report(job, BOOT_REPORTS / valid_job(job), recovered=True, started=True)
 
 
 def publish_failure(state: dict) -> dict:
+    capture_boot_diagnostics(state, "current")
     return publish_report(state["job"], report_directory(state), recovered=False,
-                          started=bool(state.get("started")), error=state.get("error"))
+                          started=bool(state.get("started")), error=state.get("error"),
+                          recovery_blocked=bool(state.get("recovery_blocked")))
 
 
-def publish_report(job: str, directory: Path, *, recovered: bool, started: bool, error: str | None = None) -> dict:
+def publish_report(job: str, directory: Path, *, recovered: bool, started: bool, error: str | None = None,
+                   recovery_blocked: bool = False) -> dict:
     job = valid_job(job)
     path = directory / "failure.json"
     report = json.loads(path.read_text()) if path.exists() else dict(
         error=error or "Detailed failure information was not saved by the previous updater.", phase="unknown")
     report.update(job=job, recovered=recovered, installation_started=started, active=True)
+    if recovery_blocked:
+        report.update(recovery_blocked=True, recovery_error=error)
     detail = "\n".join(tail(directory / name) for name in (
         "failure.log.1", "failure.log", "failure-build.log", "failure-journal.log",
         "failure-confirm-journal.log", "failure-execute-journal.log", "failure-recover-journal.log"))
     if not detail.strip():
         detail = "No separate failed-boot log was preserved. This updater log may be incomplete.\n" + tail(STATE_DIR / "update.log")
-    guidance = instructions(recovered, started)
+    detail += "\n" + "\n".join("\n" + name + "\n" + tail(directory / name) for name in (
+        "failure-boot.log", "confirm-boot.log", "recover-boot.log", "recovery-retry-before-boot.log",
+        "recovery-retry-after-boot.log", "current-boot.log") if (directory / name).is_file())
+    guidance = instructions(recovered, started, recovery_blocked=recovery_blocked)
     # A hard crash may bypass record_failure. Use the saved pre-update origin
     # inventory only for exact packages identified in the surviving error log.
     if not report.get("package_conflicts") and report.get("package_origins"):

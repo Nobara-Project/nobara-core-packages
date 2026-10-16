@@ -180,6 +180,46 @@ class WorkflowTests(unittest.TestCase):
         prune.assert_called_once()
         self.assertEqual(read_state(self.root)["status"], "unchanged")
 
+    def test_swapfile_preflight_blocks_preparation_even_when_recovery_is_optional(self):
+        write_state(self.root, self.state, "unchanged")
+        result = dict(empty=False, fingerprint="original", execution={"mode": "offline"})
+        with patch("nobara_updater.update_plan.prepare_transaction", return_value=result), \
+             patch.object(backend, "policy", return_value=dict(require_recovery=False,
+                          require_offline_recovery=False, prepare_attempts=1, live_updates=True)), \
+             patch.object(backend, "replay") as replay, \
+             patch.object(backend, "probe_recovery", return_value=dict(available=True)), \
+             patch.object(backend, "check_snapshot_swapfiles", side_effect=UpdateError("Blocked swapfile /swapfile")):
+            with self.assertRaisesRegex(UpdateError, "Blocked swapfile /swapfile"):
+                backend.prepare(self.root)
+        replay.assert_called_once()
+        self.assertEqual(replay.call_args.kwargs, {"test": True})
+        state = read_state(self.root)
+        self.assertEqual(state["status"], "failed")
+        self.assertFalse(state["started"])
+        self.assertIn("/swapfile", state["error"])
+        self.assertFalse(self.trigger.is_symlink())
+
+    def test_changed_swap_before_scheduling_clears_only_our_trigger_without_reboot(self):
+        for triggered in (False, True):
+            with self.subTest(triggered=triggered):
+                write_state(self.root, self.state, "scheduled" if triggered else "ready")
+                if triggered:
+                    self.trigger.symlink_to(self.root)
+                with patch.object(backend, "check_snapshot_swapfiles", side_effect=UpdateError("Blocked swapfile /swapfile")), \
+                     patch.object(backend, "run") as run:
+                    with self.assertRaisesRegex(UpdateError, "Blocked swapfile /swapfile"):
+                        backend.schedule(self.root, reboot=True)
+                run.assert_not_called()
+                self.assertFalse(self.trigger.is_symlink())
+                self.assertEqual(read_state(self.root)["status"], "failed")
+                self.assertFalse(read_state(self.root)["started"])
+        self.trigger.symlink_to(self.root / "another-updater")
+        write_state(self.root, self.state, "ready")
+        with patch.object(backend, "check_snapshot_swapfiles", side_effect=UpdateError("Blocked swapfile /swapfile")):
+            with self.assertRaises(UpdateError):
+                backend.schedule(self.root)
+        self.assertEqual(self.trigger.readlink(), self.root / "another-updater")
+
     def test_interrupted_root_layout_repair_blocks_new_preparation_without_resetting_state(self):
         from nobara_updater.update_btrfs import JOURNAL
         write_state(self.root, self.state, "complete", started=False)
@@ -386,8 +426,10 @@ class WorkflowTests(unittest.TestCase):
         run.assert_not_called()
 
     def test_interrupted_system_with_snapshot_still_triggers_rollback(self):
-        write_state(self.root, self.state, "installing", started=True, recovery={"created": True})
-        with self.assertRaisesRegex(UpdateError, "did not finish"):
+        write_state(self.root, self.state, "installing", started=True,
+                    recovery={"created": True, "entry_id": "nobara-recovery-" + self.state["job"]})
+        with patch("nobara_updater.update_recovery.recovery_reboot_attempted", return_value=False), \
+             self.assertRaisesRegex(UpdateError, "did not finish"):
             backend.confirm_boot(self.root)
 
     def test_recovery_requires_actual_saved_system_not_dnf_history(self):
@@ -424,6 +466,13 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(UpdateError, "module build failed"):
                 backend.validate_boot(packages)
         run.assert_called_once_with(["akmods", "--force", "--kernels", "1-1.x86_64"])
+
+    def test_removing_orphaned_kernel_modules_does_not_rebuild_retained_kernels(self):
+        packages = [dict(name="kmod-wl-old-kernel", action="Remove", nevra="kmod-wl-old-kernel-1-1.x86_64")]
+        with patch.object(backend, "installed_boot_kernels") as kernels, patch.object(backend, "run") as run:
+            backend.validate_boot(packages)
+        kernels.assert_not_called()
+        run.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -531,12 +531,14 @@ class RootLayoutWorkflowTests(unittest.TestCase):
         with patch.object(recovery, "Path", side_effect=path), \
              patch.object(Path, "is_mount", return_value=False), \
              patch.object(recovery, "probe_recovery", return_value=selected), \
+             patch.object(recovery, "check_snapshot_swapfiles") as swaps, \
              patch.object(recovery, "ensure_recovery_bootloader"), \
              patch.object(recovery, "check_recovery_space"), \
              patch.object(recovery.shutil, "disk_usage", return_value=types.SimpleNamespace(free=2**40)), \
              patch.object(recovery.subprocess, "run", side_effect=run), \
              self.assertRaisesRegex(OSError, "snapshot interrupted"):
             recovery.create_recovery(self.root / JOB, selected)
+        self.assertEqual(swaps.call_count, 2)
 
     def test_root_layout_module_is_included_in_frozen_worker(self):
         self.assertIn("update_btrfs.py", self.backend.ENGINE_FILES)

@@ -1,12 +1,14 @@
 [Unit]
 Description=Restart into an armed Nobara recovery system
 DefaultDependencies=no
+After=nobara-updater-recovery.service
+RequiresMountsFor=/boot
 ConditionPathExists=/boot/nobara-updater/recovery-armed
-# PID 1 can request the restart even if an updated Python/libc cannot run.
-SuccessAction=reboot
-FailureAction=reboot
+# A shell helper restores the private boot entry and consumes one durable
+# restart ticket per job, including when the Python worker cannot run.
+OnFailure=emergency.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/true
-TimeoutStartSec=5s
+ExecStart=/usr/libexec/nobara-update-reboot
+TimeoutStartSec=60s

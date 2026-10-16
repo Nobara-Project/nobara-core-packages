@@ -137,6 +137,8 @@ class AppCenterUpdateUiTests(unittest.TestCase):
 
     def test_select_deselect_and_update_count_required_packages_without_duplicate_execution(self):
         window = self.window
+        self.assertFalse(window.reboot_button.get_sensitive())
+        self.assertIs(window.send_paste_button.get_next_sibling(), window.reboot_button)
         self.assertEqual(window.update_all_button.get_label(), "Select All")
         self.assertFalse(window.update_selected_button.get_sensitive())
         window.update_all_button.emit("clicked")
@@ -164,8 +166,38 @@ class AppCenterUpdateUiTests(unittest.TestCase):
         self.assertEqual(window.bottom_queue_progress.get_fraction(), 1)
         self.assertEqual(window.bottom_queue_status.get_text(), "Prepared for restart")
         self.assertTrue(window.update_banner.get_revealed())
+        self.assertTrue(window.reboot_button.get_sensitive())
         self.assertNotIn("NOBARA_UPDATE_PROGRESS", window._get_queue_log_text())
         self.assertNotIn("NOBARA_UPDATE_RESULT", window._get_queue_log_text())
+
+    def test_reboot_button_waits_for_completion_and_handles_denied_restart(self):
+        window = self.window
+        item = self.ui.QueueItem(self.apps[0], "system-update", pkg_names=["browser"])
+        window.queue_items = [item]
+        window.queue_worker_running = True
+        window._queue_item_started(item)
+        window._handle_queue_event(item, dict(event="update-status", message="Restart to install.", reboot_required=True))
+        self.drain()
+        self.assertFalse(window.reboot_button.get_sensitive())
+        window._queue_item_finished(item, True, "Restart to install.")
+        self.assertFalse(window.reboot_button.get_sensitive())
+        window._queue_worker_done()
+        self.assertTrue(window.reboot_button.get_sensitive())
+        # Exercise real Gio async completion without ever requesting a reboot.
+        spawn = self.ui.Gio.Subprocess.new
+        def denied_restart(argv, flags):
+            self.assertEqual(argv, ["systemctl", "reboot"])
+            return spawn(["/bin/sh", "-c", "echo 'Reboot inhibited' >&2; exit 1"], flags)
+        with patch.object(self.ui.Gio.Subprocess, "new", side_effect=denied_restart), \
+             patch.object(window, "_show_info_popup") as popup:
+            window.reboot_button.emit("clicked")
+            self.assertFalse(window.reboot_button.get_sensitive())
+            self.drain()
+            popup.assert_called_once_with("Unable to reboot", "Reboot inhibited")
+        self.assertTrue(window.reboot_button.get_sensitive())
+        item.update_result["reboot_required"] = False
+        window._refresh_queue_page()
+        self.assertFalse(window.reboot_button.get_sensitive())
 
     def test_full_selection_keeps_complete_sync_and_clear_does_not_update(self):
         window = self.window

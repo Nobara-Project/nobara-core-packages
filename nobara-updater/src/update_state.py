@@ -212,6 +212,8 @@ def os_release(path: Path = Path("/etc/os-release")) -> str:
 
 
 def status_message(state: dict) -> str:
+    if state.get("recovery_retry_ready"):
+        return "The saved recovery system is selected. Save your work and restart normally (sudo reboot); do not run another update until recovery is confirmed."
     if state.get("scheduling_error"):
         return state["scheduling_error"]
     status = state.get("status", "idle")

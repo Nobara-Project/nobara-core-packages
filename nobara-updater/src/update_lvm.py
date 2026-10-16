@@ -55,6 +55,41 @@ def owned_snapshots(rows, origin):
             and re.fullmatch(r"nobara_rollback_[a-f0-9]{32}", r["lv_name"])]
 
 
+def validate_saved_snapshot(layout, job, current):
+    """Refuse missing, replaced, full or already-merging rollback volumes."""
+    if current.get("fstype") not in {"ext4", "xfs"} or current["fstype"] != layout.get("fstype"):
+        raise UpdateError("The running filesystem does not match the saved LVM recovery.")
+    rows = inventory()
+    origins = [row for row in rows if row["vg_uuid"] == layout.get("vg_uuid")
+               and row["lv_uuid"] == layout.get("origin_uuid")]
+    if len(origins) != 1:
+        raise UpdateError("The saved recovery origin LV is missing or has changed identity.")
+    origin = origins[0]
+    if (origin["vg_name"] != name(layout.get("vg")) or origin["lv_name"] != name(layout.get("lv"))
+            or origin["lv_path"] != layout.get("origin_path")
+            or os.path.realpath(origin["lv_path"]) != os.path.realpath(current.get("source", ""))
+            or origin["segtype"] != "linear" or not origin["lv_attr"].startswith("o")):
+        raise UpdateError("The running root is not the saved LVM snapshot's original volume, or a merge is pending.")
+    snapshots = [row for row in owned_snapshots(rows, origin)
+                 if row["lv_name"] == "nobara_rollback_" + job]
+    if (layout.get("snapshot") != "nobara_rollback_" + job or len(snapshots) != 1
+            or not layout.get("snapshot_uuid") or snapshots[0]["lv_uuid"] != layout["snapshot_uuid"]):
+        raise UpdateError("The saved LVM rollback snapshot is missing or has changed identity.")
+    snapshot = snapshots[0]
+    attributes = snapshot["lv_attr"]
+    try:
+        usage = Decimal(snapshot["data_percent"])
+        usable = usage.is_finite() and 0 <= usage < 100
+    except ArithmeticError:
+        usable = False
+    if (len(attributes) < 6 or attributes[0] != "s" or attributes[4] not in {"a", "-"}
+            or snapshot["segtype"] != "snapshot" or not usable):
+        raise UpdateError("The LVM rollback snapshot is full, invalid, merging, or its health cannot be verified.")
+    owner = BOOT / "nobara-updater" / job / "owner.json"
+    if owner.is_symlink() or json.loads(owner.read_text()) != dict(owner="nobara-updater", job=job, backend="lvm"):
+        raise UpdateError("Cannot verify ownership of the saved LVM recovery archive.")
+
+
 def probe(root):
     if root["fstype"] not in {"ext4", "xfs"}:
         raise UpdateError("LVM recovery supports ext4 and XFS roots.")
@@ -99,7 +134,7 @@ def probe(root):
 
 
 def create(job, layout):
-    from .update_recovery import boot_payloads, expand_bls, grub_variables
+    from .update_recovery import boot_payloads, expand_bls, grub_variables, save_recovery_entry
     job_id = job.name
     vg, lv = name(layout["vg"]), name(layout["lv"])
     origin_path = vg + "/" + lv
@@ -174,15 +209,15 @@ def create(job, layout):
     if options is None:
         raise UpdateError("Recovery boot entry is missing root options.")
     # A separate normal entry keeps copied old boot files usable after merge.
-    entries = BOOT / "loader/entries"
-    (entries / (values["restored_entry"] + ".conf")).write_text("\n".join(lines) + "\n")
     recovery_lines = [line for line in lines if not line.startswith("initrd ")]
     recovery_lines += ["initrd /" + str(image.relative_to(BOOT))]
     recovery_lines = [("options " + " ".join(options) + " noresume nobara.rollback=" + job_id) if line.startswith("options ") else line for line in recovery_lines]
     entry_id = "nobara-recovery-" + job_id
-    (entries / (entry_id + ".conf")).write_text("\n".join(recovery_lines) + "\n")
+    result = dict(layout, created=True, entry_id=entry_id, snapshot=snap,
+                  snapshot_uuid=row["lv_uuid"], restored_entry=values["restored_entry"])
+    save_recovery_entry(result, "\n".join(recovery_lines) + "\n", restored_text="\n".join(lines) + "\n")
     os.sync()
-    return dict(layout, created=True, entry_id=entry_id, snapshot=snap, snapshot_uuid=row["lv_uuid"], restored_entry=values["restored_entry"])
+    return result
 
 
 def restore_tuned_options(job_id, origin):

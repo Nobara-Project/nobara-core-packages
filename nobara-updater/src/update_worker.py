@@ -18,7 +18,7 @@ from nobara_updater.update_report import attach_log, record_failure, record_serv
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["prepare", "prepare-codecs", "refresh-pending", "schedule", "reboot", "cancel", "retry", "execute", "finalize", "execute-live", "live-finalize", "recover", "confirm", "confirm-stopped", "offline-stopped", "status", "foreign-trigger", "own-trigger", "installer-update", "installer-codecs", "installer-finalize"])
+    parser.add_argument("action", choices=["prepare", "prepare-codecs", "refresh-pending", "schedule", "reboot", "cancel", "retry", "retry-recovery", "execute", "finalize", "execute-live", "live-finalize", "recover", "confirm", "confirm-stopped", "offline-stopped", "status", "foreign-trigger", "own-trigger", "installer-update", "installer-codecs", "installer-finalize"])
     parser.add_argument("--early-upgrade-complete", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--request", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -92,11 +92,17 @@ def main():
             backend.prepare(codecs=True)
         elif args.action == "refresh-pending":
             backend.refresh_pending()
+        elif args.action == "recover":
+            if backend.recover():
+                # The same durable guard handles this path and the fallback
+                # used if Python cannot run. No-op recovery must not reboot.
+                backend.run(["systemctl", "--no-block", "start", "nobara-updater-fallback-reboot.service"])
         elif args.action in {"schedule", "reboot"}:
             backend.schedule(reboot=args.action == "reboot")
         else:
-            {"prepare": backend.prepare, "cancel": backend.cancel, "retry": backend.retry_failed, "execute": backend.execute,
-             "finalize": backend.finalize, "recover": backend.recover, "confirm": backend.confirm_boot}[args.action]()
+            {"prepare": backend.prepare, "cancel": backend.cancel, "retry": backend.retry_failed,
+             "retry-recovery": backend.retry_recovery, "execute": backend.execute,
+             "finalize": backend.finalize, "confirm": backend.confirm_boot}[args.action]()
         return 0
     except Exception as error:
         if isinstance(error, UpdateError):

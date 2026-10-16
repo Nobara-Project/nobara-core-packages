@@ -43,6 +43,9 @@ class ReportTests(unittest.TestCase):
         patcher = patch.object(reports.os, "sync")
         patcher.start()
         self.addCleanup(patcher.stop)
+        patcher = patch.object(reports, "capture_boot_diagnostics")
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.state = dict(job=JOB, started=True, recovery={"created": True}, source_release="43", target_release="44")
 
     def close_handlers(self):
@@ -87,6 +90,21 @@ class ReportTests(unittest.TestCase):
         report = reports.latest_report()
         self.assertEqual(report["error"], "offline RPM failure")
         self.assertEqual(report["recovery_error"], "boot unavailable")
+
+    def test_stopped_recovery_loop_preserves_original_error_and_gives_distinct_guidance(self):
+        self.publish()
+        self.state.update(recovery_blocked=True, error="Automatic restarts stopped")
+        reports.publish_failure(self.state)
+        report = reports.latest_report()
+        self.assertFalse(report["recovered"])
+        self.assertTrue(report["recovery_blocked"])
+        self.assertEqual(report["error"], "offline RPM failure")
+        self.assertEqual(report["recovery_error"], "Automatic restarts stopped")
+        guide = Path(report["log"]).with_name("README.txt").read_text()
+        self.assertIn("Repeated automatic restarts have been stopped", guide)
+        self.assertIn("Preserve the recovery snapshots", guide)
+        self.assertIn("sudo nobara-sync retry-recovery", guide)
+        self.assertNotIn("sudo nobara-sync retry-update", guide)
 
     def test_confirmation_failure_preserves_installation_error_and_its_journal(self):
         self.publish()
@@ -346,7 +364,12 @@ class ServiceOrderingTests(unittest.TestCase):
         self.assertIn("shutdown.target", recovery["Before"])
         self.assertEqual(recovery["RequiresMountsFor"], "/boot")
         self.assertIn("nobara-updater-fallback-reboot.service", recovery["OnFailure"])
-        self.assertEqual(recovery["SuccessAction"], "reboot")
+        self.assertNotIn("SuccessAction", recovery)
+        fallback = self.unit("fallback-reboot")
+        self.assertIn("nobara-updater-recovery.service", fallback["Unit"]["After"])
+        self.assertNotIn("SuccessAction", fallback["Unit"])
+        self.assertNotIn("FailureAction", fallback["Unit"])
+        self.assertEqual(fallback["Service"]["ExecStart"], "/usr/libexec/nobara-update-reboot")
 
     def test_confirmation_failure_without_backup_keeps_failed_state_but_allows_desktop(self):
         spec = importlib.util.spec_from_file_location("report_worker_test", SOURCE / "update_worker.py")

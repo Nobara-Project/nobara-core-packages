@@ -484,6 +484,18 @@ and GRUB_DEFAULT=saved. External system-state mounts,
 unsupported nested subvolumes, ambiguous boot entries, and UKI-only recovery
 layouts are rejected by the recovery probe.
 
+Btrfs recovery also checks active swapfiles and existing swapfiles configured in
+`/etc/fstab`, including inactive entries. Files belonging to the root subvolume
+block preparation and scheduling with their paths and relocation guidance;
+this does not silently downgrade an otherwise supported update to run without
+rollback. The check runs again before snapshot creation, including after boot
+archives are saved. Filesystem UUIDs and subvolume IDs distinguish swap in a
+separate subvolume from root files reached through a bind mount or symlink.
+The updater never disables swap or edits its configuration. Swap partitions,
+zram, separate-subvolume swapfiles, live application updates, and the LVM
+snapshot backend are unaffected. See [RECOVERY.md](RECOVERY.md#if-a-swapfile-blocks-a-btrfs-recovery-snapshot)
+for relocation and retry instructions.
+
 Nested `/var/lib/machines` and `/var/lib/portables` subvolumes are supported as
 shared container data. Btrfs root snapshots omit nested subvolume contents, so
 the updater records their filesystem UUID and stable subvolume ID and adds
@@ -549,6 +561,20 @@ they do not invalidate successful update confirmation. Existing excess kernels
 are also cleaned when an updater invocation otherwise has nothing to install.
 Installation, unconfirmed startup, recovery boots and installer chroots do not
 perform this cleanup.
+
+Preparation also repairs a narrower case: generated `kmod-<driver>-<kernel-version>`
+RPMs left behind after another tool removed their kernel. Before requesting
+missing dependencies, the updater schedules these RPMs for removal in the same
+saved transaction. Both the package name and its exact `kernel-uname-r`
+requirement must identify the absent kernel. Modules are kept if that kernel is
+running, installed, present as a boot image, or included in the proposed update.
+Repository availability or a `@commandline` origin alone never authorizes removal.
+This repair works in either kernel-family switch direction, independently of
+version ordering and the previous update's completion status. It keeps driver
+source packages and generic module packages, and refuses unrelated removals.
+Preparation itself does not change installed packages. If later dependency
+resolution introduces a kernel whose modules were selected for cleanup,
+preparation stops before downloading or installing anything.
 
 On unsupported layouts the default permits offline updates and explicitly
 reports that automatic rollback is unavailable. New guided installations set
@@ -655,6 +681,27 @@ can reject local RPMs in cache-only mode. Preparation now tests the serialized
 transaction with native `dnf5 replay` and `tsflags=test`, after clearing metadata
 cache and releasing the libdnf lock. No RPMs or scriptlets are installed by this
 test. Recovery finishes before the fallback reboot service can run.
+
+Recovery BLS entries have a validated private copy at
+`/boot/nobara-updater/<job>/recovery-entry.conf`. LVM also saves its post-merge
+entry as `restored-entry.conf`. Package scripts that run `grub2-mkconfig` can
+replace options in every entry under `/boot/loader/entries`; the updater
+rechecks GRUB integration and restores these copies before selecting recovery
+or arming the updated boot. Legacy entries without copies are repaired only
+from that job's recorded root identity and archived images. The standard GRUB
+`next_entry` and Nobara's `nobara_trial` both select the validated updated entry;
+the permanent fallback remains armed until confirmation.
+
+Recovery requests a restart only when needed. Both ordinary recovery and the
+failure handler use `nobara-update-reboot`, a shell helper that restores the
+private entry, clears trial selections, and durably creates the job's
+`reboot-attempted` directory on `/boot` before requesting a restart. A second
+request for the same job cannot restart again, even if Python cannot run. A
+subsequent boot into an unconfirmed failed system retains failed installation
+state and publishes a report with recovery-specific repair guidance. Valid
+recovery markers are handled first, so a successful recovery still confirms
+and cleans up normally. The ticket is retired with the job's boot archive;
+each new job has its own restart budget. See [RECOVERY.md](RECOVERY.md).
 
 Failed updates preserve a bounded log and failure record under
 `/boot/nobara-updater/<job>/`, outside root snapshot rollback. After recovery,

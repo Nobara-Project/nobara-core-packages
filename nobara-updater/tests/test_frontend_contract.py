@@ -262,5 +262,77 @@ class FrontendContractTests(unittest.TestCase):
         updater.notification.send.assert_called_once_with(0)
 
 
+@unittest.skipUnless((ROOT / "appcenter/ui.py").is_file(), "dnf-app-center checkout unavailable")
+class FrontendRebootTests(unittest.TestCase):
+    def setUp(self):
+        self.ns = functions_from_file("ui.py", {"_can_reboot", "_on_reboot_clicked", "_reboot_finished",
+                                               "_reboot_failed", "_refresh_queue_page"}, "MainWindow")
+        self.gio = types.SimpleNamespace(Subprocess=Mock(), SubprocessFlags=types.SimpleNamespace(STDOUT_PIPE=1, STDERR_PIPE=2))
+        self.ns.update(Gio=self.gio, GLib=types.SimpleNamespace(Error=RuntimeError), _=lambda text: text)
+        self.item = types.SimpleNamespace(action="system-update", status="done", update_result={"reboot_required": True})
+        self.window = types.SimpleNamespace(queue_items=[self.item], queue_worker_running=False,
+                                            _reboot_in_progress=False, reboot_button=Mock(),
+                                            _show_info_popup=Mock(), _show_toast=Mock())
+        for name in ("_can_reboot", "_on_reboot_clicked", "_reboot_finished", "_reboot_failed", "_refresh_queue_page"):
+            setattr(self.window, name, types.MethodType(self.ns[name], self.window))
+
+    def test_only_successful_explicit_reboot_result_enables_idle_button(self):
+        for status in ("queued", "running", "failed", "done"):
+            for required in (True, False, None, "true"):
+                for busy in (True, False):
+                    with self.subTest(status=status, required=required, busy=busy):
+                        self.item.status = status
+                        self.item.update_result = {"reboot_required": required}
+                        self.window.queue_worker_running = busy
+                        self.window._refresh_queue_page()
+                        self.window.reboot_button.set_sensitive.assert_called_with(status == "done" and required is True and not busy)
+        self.window.queue_worker_running = False
+        self.item.update_result = {"reboot_required": True}
+        for action in ("install", "remove", "system-update"):
+            pending = types.SimpleNamespace(action=action, status="queued", update_result={})
+            self.window.queue_items.append(pending)
+            self.assertFalse(self.window._can_reboot())
+            pending.status = "running"
+            self.assertFalse(self.window._can_reboot())
+            pending.status = "failed"
+            self.assertEqual(self.window._can_reboot(), action != "system-update")
+            self.window.queue_items.pop()
+        self.window.queue_items.clear()
+        self.assertFalse(self.window._can_reboot())
+
+    def test_click_requires_idle_queue_and_does_not_request_reboot_twice(self):
+        self.window.queue_worker_running = True
+        self.window._on_reboot_clicked(None)
+        self.gio.Subprocess.new.assert_not_called()
+        self.window.queue_worker_running = False
+        self.window._on_reboot_clicked(None)
+        self.gio.Subprocess.new.assert_called_once_with(["systemctl", "reboot"], 3)
+        process = self.gio.Subprocess.new.return_value
+        process.communicate_utf8_async.assert_called_once_with(None, None, self.window._reboot_finished)
+        self.window.reboot_button.set_sensitive.assert_called_with(False)
+        self.window._on_reboot_clicked(None)
+        self.gio.Subprocess.new.assert_called_once()
+        process.communicate_utf8_finish.return_value = (True, "", "")
+        process.get_successful.return_value = True
+        self.window._reboot_finished(process, Mock())
+        self.assertFalse(self.window._can_reboot())
+        self.window._show_info_popup.assert_not_called()
+
+    def test_reboot_failures_report_error_and_allow_retry(self):
+        for failure in ("spawn", "inhibited", "communication"):
+            with self.subTest(failure=failure):
+                self.gio.Subprocess.new.side_effect = RuntimeError("Cannot launch") if failure == "spawn" else None
+                self.window._on_reboot_clicked(None)
+                if failure != "spawn":
+                    process = self.gio.Subprocess.new.return_value
+                    process.communicate_utf8_finish.return_value = (True, "", "Reboot inhibited")
+                    process.communicate_utf8_finish.side_effect = RuntimeError("Communication failed") if failure == "communication" else None
+                    process.get_successful.return_value = False
+                    self.window._reboot_finished(process, Mock())
+                self.assertTrue(self.window._can_reboot())
+                self.window.reboot_button.set_sensitive.assert_called_with(True)
+                self.assertEqual(self.window._show_info_popup.call_args.args[0], "Unable to reboot")
+
+
 if __name__ == "__main__":
     unittest.main()

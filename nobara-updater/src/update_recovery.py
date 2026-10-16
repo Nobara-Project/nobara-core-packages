@@ -12,15 +12,111 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from .update_state import UpdateError, atomic_json
+from .update_boot import write_boot_file
 
 SHARED_CONTAINER_PATHS = {"var/lib/machines", "var/lib/portables"}
 BOOT = Path("/boot")
 BTRFS_TOP = Path("/run/nobara-updater-btrfs")
+ACTIVE_SWAPS = Path("/proc/swaps")
+FSTAB = Path("/etc/fstab")
 LOG = logging.getLogger(__name__)
+
+
+def check_snapshot_swapfiles(layout: dict) -> None:
+    """Refuse root snapshots containing active or configured Btrfs swapfiles.
+
+    Do not turn this into an unavailable-recovery result: an otherwise supported
+    system must report the repair instead of silently losing rollback coverage.
+    No swap is disabled and neither files nor their configuration are changed.
+    """
+    if not layout.get("available") or layout.get("backend") == "lvm":
+        return
+
+    def unescape(value: str) -> str:
+        # procfs and fstab escape whitespace/backslashes as octal, not shell
+        # quotes. Decode once so a literal backslash followed by digits survives.
+        return re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), value)
+
+    candidates = {}
+    inspecting = "the swap configuration"
+    try:
+        lines = ACTIVE_SWAPS.read_text().splitlines()
+        if not lines or lines[0].split() != ["Filename", "Type", "Size", "Used", "Priority"]:
+            raise ValueError("Unrecognized /proc/swaps header")
+        for line in lines[1:]:
+            fields = line.split()
+            if len(fields) != 5 or fields[1] not in {"file", "partition"}:
+                raise ValueError("Unrecognized /proc/swaps entry")
+            if fields[1] == "file":
+                candidates[unescape(fields[0])] = True
+        for line in FSTAB.read_text().splitlines():
+            fields = line.split()
+            if not fields or fields[0].startswith("#"):
+                continue
+            if len(fields) >= 4 and fields[2] == "swap" and fields[0].startswith("/"):
+                # Include noauto entries too: snapshotting an inactive swapfile
+                # can prevent the user from activating it again afterwards.
+                candidates.setdefault(unescape(fields[0]), False)
+        if not candidates:
+            return
+        root_id = None
+        blockers = []
+        for name, active in sorted(candidates.items()):
+            inspecting = f"swapfile {name!r}"
+            path = Path(name)
+            if not path.is_absolute():
+                raise ValueError("Swapfile path is not absolute")
+            try:
+                mode = path.stat().st_mode
+            except FileNotFoundError:
+                if active:
+                    raise
+                # A missing inactive fstab target cannot be snapshotted.
+                continue
+            if not stat.S_ISREG(mode):
+                if active:
+                    raise ValueError("Active swapfile is not a regular file")
+                continue
+            mount = json.loads(output(["findmnt", "--json", "--target", name,
+                                       "--output", "FSTYPE,UUID"]))["filesystems"][0]
+            if mount["fstype"] != "btrfs":
+                continue
+            if not mount.get("uuid"):
+                raise ValueError("Cannot identify swapfile filesystem UUID")
+            if mount["uuid"].lower() != layout["uuid"].lower():
+                continue
+            if root_id is None:
+                root_id = int(output(["btrfs", "inspect-internal", "rootid", "/"]))
+                if root_id < 5:
+                    raise ValueError("Invalid root subvolume ID")
+            # Mount paths alone cannot distinguish an unmounted nested subvolume
+            # or a bind mount alias of a file still belonging to the root.
+            subvol_id = int(output(["btrfs", "inspect-internal", "rootid", name]))
+            if subvol_id < 5:
+                raise ValueError("Invalid swapfile subvolume ID")
+            if subvol_id == root_id:
+                blockers.append(f"{name!r} ({'active' if active else 'configured in /etc/fstab'})")
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError, IndexError, TypeError) as error:
+        raise UpdateError(f"Cannot verify Btrfs snapshot safety while checking {inspecting}: {error}. "
+                          "Review the swap configuration before retrying the update.") from error
+    if blockers:
+        raise UpdateError(
+            "Btrfs recovery snapshot blocked by swapfile(s) in the root subvolume:\n  "
+            + "\n  ".join(blockers)
+            + "\nAn active swapfile prevents snapshot creation; snapshotting an inactive configured "
+              "swapfile can prevent its later activation. Create a replacement in a separate, persistently "
+              "mounted Btrfs subvolume (for example @swap at /swap, with /swap/swapfile), then update "
+              "/etc/fstab and any custom swap unit or hibernation resume settings. Ensure enough RAM "
+              "or replacement swap is available before disabling the old swapfile; remove it only after "
+              "the replacement works. A directory named /swap alone is not sufficient. "
+              "See RECOVERY.md for relocation guidance, then run the updater again. "
+              "The updater has not disabled or modified swap.")
 
 
 def nested_recovery_mounts(root: dict, listing: str, fstab: str) -> list[dict]:
@@ -91,7 +187,7 @@ def output(command: list[str]) -> str:
 
 
 def grub_environment() -> dict[str, str]:
-    return dict(line.split("=", 1) for line in output(["grub2-editenv", "-", "list"]).splitlines() if "=" in line)
+    return dict(line.split("=", 1) for line in output(["grub2-editenv", str(BOOT / "grub2/grubenv"), "list"]).splitlines() if "=" in line)
 
 
 # Variables GRUB substitutes into BLS fields that recovery understands. TuneD's
@@ -189,8 +285,11 @@ def recovery_entry(entry: Path, job_id: str, subvolume: str) -> str:
     variables = grub_variables()
     entry_lines = []
     for line in entry.read_text().splitlines():
-        key, separator, value = line.partition(" ")
-        value = value.strip()
+        fields = line.split(None, 1)
+        if len(fields) != 2:
+            entry_lines.append(line)
+            continue
+        key, value = fields
         if key == "title":
             line = "title Nobara — previous system (" + job_id[:8] + ")"
         elif key in {"linux", "initrd"}:
@@ -208,6 +307,196 @@ def recovery_entry(entry: Path, job_id: str, subvolume: str) -> str:
             line = "options " + replace_subvolume(" ".join(expand_bls(key, value, variables)), subvolume)
         entry_lines.append(line)
     return "\n".join(entry_lines) + "\n"
+
+
+def recovery_archive(recovery: dict) -> Path:
+    match = re.fullmatch(r"nobara-recovery-([a-f0-9]{32})", recovery.get("entry_id", ""))
+    if not match:
+        raise UpdateError("Invalid recovery boot entry identifier.")
+    archive = BOOT / "nobara-updater" / match[1]
+    if archive.is_symlink() or archive.parent.is_symlink():
+        raise UpdateError("The recovery boot archive is a symlink.")
+    return archive
+
+
+def recovery_options(options: str, recovery: dict, *, restored: bool = False) -> str:
+    """Reconstruct only selectors whose identity is recorded by this job."""
+    job = recovery_archive(recovery).name
+    tokens = shlex.split(options)
+    tokens = [token for token in tokens if not token.startswith(("root=", "nobara.rollback="))]
+    if recovery.get("backend") == "lvm":
+        from .update_lvm import name
+        origin = name(recovery["vg"]) + "/" + name(recovery["lv"])
+        tokens = [token for token in tokens if not token.startswith(("rd.lvm.lv=", "resume="))]
+        tokens += ["root=/dev/" + origin, "rd.lvm.lv=" + origin]
+        if not restored:
+            tokens = [token for token in tokens if token != "noresume"]
+            tokens += ["noresume", "nobara.rollback=" + job]
+        return " ".join(tokens)
+    uuid = recovery.get("uuid", "")
+    if not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", uuid):
+        raise UpdateError("Invalid recovery filesystem UUID.")
+    subvolume = ".nobara-updater/" + job + "/root"
+    if recovery.get("subvolume", subvolume) != subvolume:
+        raise UpdateError("The recovery subvolume does not match its job.")
+    return replace_subvolume(" ".join(tokens + ["root=UUID=" + uuid]), subvolume)
+
+
+def validate_recovery_entry(text: str, recovery: dict, *, restored: bool = False) -> None:
+    """A fallback must use this job's saved images and exact root selectors."""
+    fields = {}
+    for line in text.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            fields.setdefault(parts[0], []).append(parts[1])
+    if any(len(fields.get(key, [])) != 1 for key in ("linux", "options", "version")) or not fields.get("initrd"):
+        raise UpdateError("The recovery boot entry is incomplete or ambiguous.")
+    options = fields["options"][0]
+    if "$" in options:
+        raise UpdateError("Recovery root options must not depend on GRUB variables.")
+    # Comparing parsed tokens permits harmless spacing/order differences, but
+    # detects duplicate roots, stale subvolume IDs and removed LVM merge flags.
+    if sorted(shlex.split(options)) != sorted(shlex.split(recovery_options(options, recovery, restored=restored))):
+        raise UpdateError("The recovery boot entry no longer selects its saved system.")
+    archive = recovery_archive(recovery)
+    for key in ("linux", "initrd"):
+        for value in fields[key]:
+            if "$" in value:
+                raise UpdateError("Recovery boot images must not depend on GRUB variables.")
+            paths = boot_files(key, value, {})
+            if not paths or (key == "linux" and len(paths) != 1):
+                raise UpdateError("The recovery boot entry is missing saved boot images.")
+            if any(not p.resolve().is_relative_to(archive.resolve()) for p in paths):
+                raise UpdateError("The recovery boot entry references images outside its own archive.")
+
+
+def save_recovery_entry(recovery: dict, text: str, *, restored_text: str | None = None) -> None:
+    """Keep trusted copies outside the BLS directory rewritten by RPM hooks."""
+    archive = recovery_archive(recovery)
+    validate_recovery_entry(text, recovery)
+    if restored_text is not None:
+        validate_recovery_entry(restored_text, recovery, restored=True)
+        write_boot_file(archive / "restored-entry.conf", text=restored_text)
+        write_boot_file(BOOT / "loader/entries" / ("nobara-restored-" + archive.name + ".conf"), text=restored_text)
+    write_boot_file(archive / "recovery-entry.conf", text=text)
+    write_boot_file(BOOT / "loader/entries" / (recovery["entry_id"] + ".conf"), text=text)
+
+
+def restore_recovery_entry(recovery: dict, *, verify_images: bool = False) -> None:
+    archive = recovery_archive(recovery)
+    identifiers = [(recovery["entry_id"], "recovery-entry.conf", False)]
+    if recovery.get("backend") == "lvm":
+        identifiers.append(("nobara-restored-" + archive.name, "restored-entry.conf", True))
+    replacements = []
+    for identifier, filename, restored in identifiers:
+        saved = archive / filename
+        entry = BOOT / "loader/entries" / (identifier + ".conf")
+        if saved.is_symlink() or entry.is_symlink():
+            raise UpdateError("The recovery boot entry is a symlink.")
+        if saved.exists():
+            text = saved.read_text()
+        else:
+            # Older jobs have no private copy. Their saved image paths and
+            # recorded filesystem/LV identify the target without guessing '@'.
+            text = entry.read_text()
+            options = re.findall(r"(?m)^options\s+(.+)$", text)
+            if len(options) != 1:
+                raise UpdateError("Cannot repair an ambiguous legacy recovery entry.")
+            variables = grub_variables()
+            desired = recovery_options(" ".join(expand_bls("options", options[0], variables)),
+                                       recovery, restored=restored)
+            text = re.sub(r"(?m)^options\s+.+$", lambda _: "options " + desired, text)
+            for key in ("linux", "initrd"):
+                text = re.sub(r"(?m)^" + key + r"\s+(.+)$",
+                              lambda match: key + " " + " ".join(expand_bls(key, match[1], variables)), text)
+        validate_recovery_entry(text, recovery, restored=restored)
+        if verify_images:
+            for line in text.splitlines():
+                fields = line.split(None, 1)
+                if len(fields) != 2 or fields[0] not in {"linux", "initrd"}:
+                    continue
+                for image in boot_files(fields[0], fields[1], {}):
+                    if not image.stat().st_size:
+                        raise UpdateError(f"The archived recovery boot image is empty: {image.name}")
+                    if fields[0] == "initrd":
+                        subprocess.run(["lsinitrd", str(image)], check=True, timeout=60,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        replacements.append((saved, entry, text))
+    for saved, entry, text in replacements:
+        if not saved.exists():
+            write_boot_file(saved, text=text)
+        if not entry.exists() or entry.read_text() != text:
+            LOG.warning("Restoring recovery boot entry %s after its contents changed.", entry.name)
+            write_boot_file(entry, text=text)
+
+
+def recovery_reboot_attempted(recovery: dict) -> bool:
+    attempt = recovery_archive(recovery) / "reboot-attempted"
+    return attempt.exists() or attempt.is_symlink()
+
+
+def validate_saved_recovery(recovery: dict, job: str) -> None:
+    """Check the existing rollback target without creating or merging snapshots."""
+    archive = recovery_archive(recovery)
+    if archive.name != job or not recovery.get("created"):
+        raise UpdateError("The saved recovery does not belong to the interrupted update.")
+    if not BOOT.is_mount() or BOOT.stat().st_dev == Path("/").stat().st_dev:
+        raise UpdateError("Mount the separate /boot filesystem before retrying recovery.")
+    current = json.loads(output(["findmnt", "--json", "--mountpoint", "/",
+                                 "--output", "FSTYPE,UUID,FSROOT,SOURCE"]))["filesystems"][0]
+    if current.get("uuid") != recovery.get("uuid") or not current.get("uuid"):
+        raise UpdateError("The running root filesystem differs from this update's recorded root.")
+    if Path("/etc/nobara-updater-recovery.json").exists():
+        raise UpdateError("This system already has a recovery marker. Resolve startup confirmation before retrying recovery.")
+    if recovery.get("backend") == "lvm":
+        from .update_lvm import validate_saved_snapshot
+        validate_saved_snapshot(recovery, job, current)
+        return
+    if recovery.get("backend") not in {None, "btrfs"} or current.get("fstype") != "btrfs":
+        raise UpdateError("Unsupported saved recovery filesystem.")
+    if current.get("fsroot") != recovery.get("fsroot"):
+        raise UpdateError("The running Btrfs subvolume differs from this update's original root.")
+    # Validate the recorded UUID and exact job subvolume before mounting it.
+    recovery_options("", recovery)
+    top = Path(tempfile.mkdtemp(prefix="nobara-recovery-check-", dir="/run"))
+    mounted = False
+    try:
+        subprocess.run(["mount", "-t", "btrfs", "-o", "ro,subvolid=5",
+                        "UUID=" + recovery["uuid"], str(top)], check=True)
+        mounted = True
+        parent = top / ".nobara-updater" / job
+        snapshot = parent / "root"
+        marker = snapshot / "etc/nobara-updater-recovery.json"
+        paths = [parent.parent, parent, parent / "owner.json", parent / "origin.json",
+                 snapshot, snapshot / "etc", marker]
+        if any(path.is_symlink() for path in paths):
+            raise UpdateError("The saved recovery snapshot contains a symlink in its identity paths.")
+        owner = json.loads((parent / "owner.json").read_text())
+        origin = json.loads((parent / "origin.json").read_text())
+        saved_marker = json.loads(marker.read_text())
+        if (owner != dict(owner="nobara-updater", job=job)
+                or origin != dict(version=1, job=job, uuid=recovery["uuid"], fsroot=recovery["fsroot"])
+                or saved_marker != dict(job=job, original_subvolume=recovery["fsroot"])):
+            raise UpdateError("The saved recovery snapshot identity or marker does not match this update.")
+        # An ordinary directory at this path is not a bootable snapshot.
+        subprocess.run(["btrfs", "subvolume", "show", str(snapshot)], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if output(["btrfs", "property", "get", "-ts", str(snapshot), "ro"]) != "ro=false":
+            raise UpdateError("The saved recovery root is not writable.")
+    finally:
+        if mounted:
+            subprocess.run(["umount", str(top)], check=True)
+        # Never recursively clean up a mountpoint, including on umount failure.
+        top.rmdir()
+
+
+def reserve_manual_recovery_attempt(recovery: dict) -> None:
+    """A user-requested restart must not re-enable automatic restart loops."""
+    attempt = recovery_archive(recovery) / "reboot-attempted"
+    if attempt.is_symlink() or (attempt.exists() and not attempt.is_dir()):
+        raise UpdateError("The recovery restart record is invalid; preserve it for support.")
+    attempt.mkdir(mode=0o700, exist_ok=True)
+    os.sync()
 
 
 def probe_recovery() -> dict:
@@ -298,6 +587,7 @@ def create_recovery(job: Path, layout: dict, *, boot_space: dict | None = None) 
     for key in ("backend", "origin_uuid", "vg_uuid"):
         if actual.get(key) != layout.get(key):
             raise UpdateError("The recovery volume changed after preparation.")
+    check_snapshot_swapfiles(actual)
     ensure_recovery_bootloader()
     layout = actual
     check_recovery_space(layout, boot_space or {})
@@ -325,6 +615,8 @@ def create_recovery(job: Path, layout: dict, *, boot_space: dict | None = None) 
                                                  uuid=layout["uuid"], fsroot=layout["fsroot"]))
         saved = parent / "saved"
         restored = mountpoint / relative
+        # Recheck after archiving /boot, immediately before the first snapshot.
+        check_snapshot_swapfiles(layout)
         subprocess.run(["btrfs", "subvolume", "snapshot", "-r", "/", str(saved)], check=True)
         subprocess.run(["btrfs", "subvolume", "snapshot", str(saved), str(restored)], check=True)
         fstab = restored / "etc/fstab"
@@ -334,20 +626,34 @@ def create_recovery(job: Path, layout: dict, *, boot_space: dict | None = None) 
         subprocess.run(["umount", str(mountpoint)], check=True)
     text = recovery_entry(Path(layout["entry"]), job_id, relative)
     entry_id = "nobara-recovery-" + job_id
-    (Path("/boot/loader/entries") / (entry_id + ".conf")).write_text(text)
+    result = dict(layout, entry_id=entry_id, subvolume=relative, created=True)
+    save_recovery_entry(result, text)
     os.sync()
-    return dict(layout, entry_id=entry_id, subvolume=relative, created=True)
+    return result
 
 
-def select_recovery(recovery: dict) -> None:
+def select_recovery(recovery: dict, *, verify_images: bool = False) -> None:
     if not recovery.get("created"):
         raise UpdateError("Automatic recovery is not available for this update.")
-    subprocess.run(["grub2-set-default", "--boot-directory=/boot", recovery["entry_id"]], check=True)
-    subprocess.run(["grub2-editenv", "-", "set", "nobara_fallback=" + recovery["entry_id"]], check=True)
-    subprocess.run(["grub2-editenv", "-", "unset", "next_entry", "prev_saved_entry", "tmp_saved_entry", "nobara_trial"], check=True)
-    if grub_environment().get("nobara_fallback") != recovery["entry_id"]:
+    # Package hooks can regenerate grub.cfg and replace every BLS options
+    # line. Recheck the integration, then restore saved entries last.
+    ensure_recovery_bootloader()
+    try:
+        restore_recovery_entry(recovery, verify_images=verify_images)
+    except Exception:
+        # The native fallback must not boot a copy Python just rejected.
+        (BOOT / "nobara-updater/recovery-armed").unlink(missing_ok=True)
+        os.sync()
+        raise
+    subprocess.run(["grub2-set-default", "--boot-directory=" + str(BOOT), recovery["entry_id"]], check=True)
+    subprocess.run(["grub2-editenv", str(BOOT / "grub2/grubenv"), "set", "nobara_fallback=" + recovery["entry_id"]], check=True)
+    subprocess.run(["grub2-editenv", str(BOOT / "grub2/grubenv"), "unset", "next_entry", "prev_saved_entry", "tmp_saved_entry", "nobara_trial"], check=True)
+    environment = grub_environment()
+    if (environment.get("nobara_fallback") != recovery["entry_id"]
+            or environment.get("saved_entry") != recovery["entry_id"]
+            or any(environment.get(key) for key in ("next_entry", "prev_saved_entry", "tmp_saved_entry", "nobara_trial"))):
         raise UpdateError("Could not arm the recovery boot entry.")
-    atomic_json(Path("/boot/nobara-updater/recovery-armed"), {"entry": recovery["entry_id"]})
+    atomic_json(BOOT / "nobara-updater/recovery-armed", {"entry": recovery["entry_id"]})
     os.sync()
 
 
@@ -498,25 +804,27 @@ def trial_boot(recovery: dict, entry: str | None = None) -> None:
         return
     select_recovery(recovery)
     if entry:
-        if not re.fullmatch(r"[A-Za-z0-9_.+~-]+", entry) or not (Path("/boot/loader/entries") / (entry + ".conf")).is_file():
+        if not re.fullmatch(r"[A-Za-z0-9_.+~-]+", entry) or not (BOOT / "loader/entries" / (entry + ".conf")).is_file():
             raise UpdateError("The trial boot entry is missing or invalid.")
-        subprocess.run(["grub2-editenv", "/boot/grub2/grubenv", "set", "nobara_trial=" + entry], check=True)
-        if grub_environment().get("nobara_trial") != entry:
+        subprocess.run(["grub2-editenv", str(BOOT / "grub2/grubenv"), "set", "nobara_trial=" + entry, "next_entry=" + entry], check=True)
+        environment = grub_environment()
+        if environment.get("nobara_trial") != entry or environment.get("next_entry") != entry:
             raise UpdateError("Could not arm the updated system's trial boot.")
+        LOG.info("Armed updated boot entry %s; fallback is %s.", entry, recovery["entry_id"])
     os.sync()
 
 
 def confirm_trial(entry: str) -> None:
-    if not re.fullmatch(r"[A-Za-z0-9_.+~-]+", entry) or not (Path("/boot/loader/entries") / (entry + ".conf")).is_file():
+    if not re.fullmatch(r"[A-Za-z0-9_.+~-]+", entry) or not (BOOT / "loader/entries" / (entry + ".conf")).is_file():
         raise UpdateError("The confirmed boot entry is unavailable.")
-    subprocess.run(["grub2-set-default", "--boot-directory=/boot", entry], check=True)
-    subprocess.run(["grub2-editenv", "/boot/grub2/grubenv", "unset", "next_entry", "prev_saved_entry", "tmp_saved_entry", "nobara_trial"], check=True)
+    subprocess.run(["grub2-set-default", "--boot-directory=" + str(BOOT), entry], check=True)
+    subprocess.run(["grub2-editenv", str(BOOT / "grub2/grubenv"), "unset", "next_entry", "prev_saved_entry", "tmp_saved_entry", "nobara_trial"], check=True)
     if grub_environment().get("saved_entry") != entry:
         raise UpdateError("Could not persist the confirmed boot entry.")
-    subprocess.run(["grub2-editenv", "/boot/grub2/grubenv", "unset", "nobara_fallback"], check=True)
+    subprocess.run(["grub2-editenv", str(BOOT / "grub2/grubenv"), "unset", "nobara_fallback"], check=True)
     if grub_environment().get("nobara_fallback"):
         raise UpdateError("Could not retire the automatic fallback after confirmation.")
-    Path("/boot/nobara-updater/recovery-armed").unlink(missing_ok=True)
+    (BOOT / "nobara-updater/recovery-armed").unlink(missing_ok=True)
     os.sync()
 
 

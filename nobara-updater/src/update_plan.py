@@ -25,6 +25,7 @@ from .update_state import UpdateError, atomic_json, file_digest, os_release, rpm
 from .update_health import PackageHealth
 from .update_progress import PackageProgress
 from .update_repositories import migrated_media_urls, load_repositories
+from .update_retention import versioned_kmod_kernel, package_kernel
 
 LOG = logging.getLogger(__name__)
 ESSENTIAL = {"glibc", "rpm", "dnf5", "libdnf5", "systemd", "bash", "coreutils", "python3", "nobara-updater"}
@@ -270,6 +271,73 @@ def projected_packages(base, transaction):
     return retained, final
 
 
+def kernel_present(packages, kernel):
+    providers = rpm_api.PackageQuery(packages)
+    providers.filter_provides(["kernel-uname-r = " + kernel])
+    if not providers.empty():
+        return True
+    # Also preserve a core RPM with incomplete Provides metadata.
+    return any((p.get_name() == "kernel" or
+                (p.get_name().startswith("kernel-") and p.get_name().endswith("-core")))
+               and package_kernel(p) == kernel for p in packages)
+
+
+def orphaned_kmods(base, transaction):
+    """Identify broken per-kernel modules left after their kernel was erased.
+
+    Repository availability and RPM origin are deliberately irrelevant. A
+    family switch can disable the old repository, and akmods records locally
+    generated RPMs as @commandline. Keep running, installed, incoming, and
+    manually managed boot kernels even when their repository is disabled.
+    """
+    installed = rpm_api.PackageQuery(base)
+    installed.filter_installed()
+    retained, final = projected_packages(base, transaction)
+    root = Path(base.get_config().get_installroot_option().get_value())
+    running = os.uname().release
+    candidates = []
+    for package in retained:
+        kernel = versioned_kmod_kernel(package)
+        if not kernel or kernel == running:
+            continue
+        requirement = "kernel-uname-r = " + kernel
+        if requirement not in {str(dep) for dep in package.get_requires()}:
+            continue
+        if kernel_present(installed, kernel) or kernel_present(final, kernel):
+            continue
+        images = (root / "boot" / ("vmlinuz-" + kernel), root / "usr/lib/modules" / kernel / "vmlinuz")
+        if any(path.exists() or path.is_symlink() for path in images):
+            continue
+        candidates.append((package, kernel))
+    return candidates
+
+
+def repair_orphaned_kmods(base, goal, transaction, settings, origins, migrations):
+    candidates = orphaned_kmods(base, transaction)
+    for package, kernel in candidates:
+        LOG.info("Will remove orphaned module %s: kernel %s is not installed, bootable, running, "
+                 "or included in this update. Driver source packages are kept.", package.get_full_nevra(), kernel)
+        goal.add_rpm_remove(package, settings)
+        migrations.remove.add(package.get_full_nevra())
+    if candidates:
+        transaction = goal.resolve()
+        check_resolution(transaction, origins)
+    return transaction, candidates
+
+
+def validate_kmod_cleanup(base, transaction, candidates):
+    # Later dependency repairs must not introduce a kernel whose modules we
+    # already scheduled for removal. Stop before downloads or any RPM writes.
+    if not candidates:
+        return
+    retained, final = projected_packages(base, transaction)
+    for package, kernel in candidates:
+        if retained.contains(package) or kernel_present(final, kernel):
+            raise UpdateError(f"Cannot safely remove {package.get_full_nevra()}: kernel {kernel} "
+                              "or its module package is required by the final update. Repair that kernel's "
+                              "packages before retrying.")
+
+
 def add_dnf_inhibitor_migration(base, migrations):
     """Handle the optional plugin split missing from older mirrored DNF builds.
 
@@ -452,10 +520,10 @@ def add_kernel_development(base, goal, transaction, settings, hooks, origins):
     incoming_boot_kernels = set()
     rebuild = any(h.startswith("plymouth-") for h in hooks)
     for item in items:
-        rebuild |= any(part in item.get_package().get_name() for part in ("dkms", "akmod", "kmod", "dracut"))
         if item.get_action() not in inbound:
             continue
         package = item.get_package()
+        rebuild |= any(part in package.get_name() for part in ("dkms", "akmod", "kmod", "dracut"))
         targets.update(kernel_unames(package))
         if package.get_name() in {"kernel", "kernel-core"}:
             incoming_boot_kernels.update(kernel_unames(package))
@@ -658,6 +726,7 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
         check_resolution(transaction, origins)
         transaction = repair_plymouth_packages(goal, transaction, settings, plymouth_repairs, origins)
         transaction = resolve_obsolete_cleanup(base, goal, transaction, settings, origins, migrations)
+        transaction, retired_kmods = repair_orphaned_kmods(base, goal, transaction, settings, origins, migrations)
         _, projected = projected_packages(base, transaction)
         requirements = health.repair_requirements(transaction, projected)
         if requirements:
@@ -680,6 +749,7 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
             transaction, preserved_kernels = add_kernel_development(
                 base, goal, transaction, settings, migrations.hooks, origins)
             transaction = resolve_obsolete_cleanup(base, goal, transaction, settings, origins, migrations)
+        validate_kmod_cleanup(base, transaction, retired_kmods)
         allow_architecture_cleanup(base, transaction, migrations)
         actions = {
             trans.TransactionItemAction_INSTALL: "Install", trans.TransactionItemAction_UPGRADE: "Upgrade",
