@@ -723,6 +723,39 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertEqual(remaining, "x86_64")
         self.check_fixture_health()
 
+    def architecture_replacement(self, old_arch, new_arch, *, old_version="1", new_version="1", expected_action="Install"):
+        name = "architecture-transition-fixture"
+        self.install_health_fixture(name, old_version, arch=old_arch, origin="@commandline")
+        self.add_obsolete_repo_package(name, new_version, arch=new_arch)
+        result = self.prepare()
+        # Test actual replay, not just the solver/test transaction. DNF5 can
+        # report success after skipping a wrong-architecture Reinstall request.
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        installed = subprocess.run(["rpm", "--root", str(self.root), "-q", name,
+                                    "--qf", "%{ARCH}\\n"], capture_output=True, text=True)
+        self.assertEqual(installed.returncode, 0, replay.stdout + replay.stderr + installed.stdout)
+        self.assertEqual(installed.stdout, new_arch + "\n")
+        self.assertEqual((self.root / "usr/share" / name / "version").read_text(), new_version + "\n")
+        records = [p for p in result["packages"] if p["name"] == name]
+        self.assertIn((new_arch, expected_action), [(p["arch"], p["action"]) for p in records])
+        stored = json.loads((self.job / "transaction.json").read_text())
+        self.assertEqual(next(p["action"] for p in stored["rpms"] if p["nevra"].endswith("." + new_arch)
+                              and p["nevra"].startswith(name + "-")), expected_action)
+        self.check_fixture_health()
+
+    def test_same_version_native_to_noarch_is_installed_during_replay(self):
+        self.architecture_replacement("x86_64", "noarch")
+
+    def test_same_version_noarch_to_native_is_installed_during_replay(self):
+        self.architecture_replacement("noarch", "x86_64")
+
+    def test_architecture_change_with_upgrade_keeps_upgrade_operation(self):
+        self.architecture_replacement("x86_64", "noarch", new_version="2", expected_action="Upgrade")
+
+    def test_architecture_change_with_downgrade_keeps_downgrade_operation(self):
+        self.architecture_replacement("x86_64", "noarch", old_version="2", expected_action="Downgrade")
+
     def test_architecture_cleanup_does_not_authorize_removing_32_bit_library(self):
         for arch, path in (("i686", "/usr/lib/library"), ("x86_64", "/usr/lib64/library")):
             self.install_health_fixture("multilib", arch=arch, payload=path)

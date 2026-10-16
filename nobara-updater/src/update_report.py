@@ -317,6 +317,7 @@ def capture_boot_diagnostics(state: dict, phase: str, *, note: str | None = None
         # active BLS entry, and the firmware may load a different GRUB config.
         entries = sorted((boot / "loader/entries").glob("*.conf"))[:32]
         entries += [directory / "recovery-entry.conf", directory / "restored-entry.conf"]
+        entries += sorted((directory / "disabled-entries").glob("*.conf"))[:16]
         for path in entries:
             if any(parent.is_symlink() for parent in path.parents if parent != boot):
                 continue

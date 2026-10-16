@@ -35,6 +35,16 @@ the normal entry uses your restored system. Once boot is confirmed, unused
 updater rollback snapshots and their recovery entries are removed. Your
 active system remains in place.
 
+Recovery uses the saved pre-update kernel and initramfs from `/boot`, with the
+matching modules in the restored root. Before confirming recovery, the updater
+checks that this kernel has its module tree, restores the saved recovery entry
+if package scripts changed it, and selects the recovered kernel for normal boot.
+Normal entries belonging to this installation whose modules are absent from
+the restored root are moved out of the boot menu. Their saved entry contents
+are included in the recovery report. Other installations, explicit snapshot
+entries, and kernel images on `/boot` are preserved. This applies to Btrfs and
+ext4/XFS on LVM; restoring root does not mean blindly restoring the whole ESP.
+
 On Btrfs, the updater restores a confirmed recovered system to its original
 root-subvolume name, usually `@`, while preserving changes you made in recovery.
 This works with or without Timeshift. Systems left on

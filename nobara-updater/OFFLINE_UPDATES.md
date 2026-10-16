@@ -31,6 +31,15 @@ fresh interpreter from the installed updater, then performs the main sequence
 below. The same early step applies to the codec wizard and Calamares target
 updates. Read-only update checks and offline replay never run it.
 
+DNF5 can label a same-version architecture replacement as `Reinstall`, although
+replay requires that exact architecture to be installed already. When the
+solver explicitly replaces another architecture of the same package/version,
+the updater records an exact `Install` operation for the selected replacement
+RPM, preserving the outgoing replacement and transaction safeguards. This
+applies to all packages and repository origins. Ordinary reinstalls keep their
+original operation, and final validation still requires each exact inbound
+NEVRA, including architecture, to be installed.
+
 1. A systemd service checks the existing RPM database, refreshes the enabled repositories, detects the
    target release, and resolves one distro-sync transaction, including known
    package migrations and updates to installed group/environment members.
@@ -309,6 +318,16 @@ fails this confirmation and invokes the existing recovery policy. Previous
 kernels remain available. If the trial kernel cannot reach startup validation,
 the next reset boots recovery automatically. A hard hang can still require a
 physical reset; this implementation does not provide a hardware watchdog.
+
+When rollback restores an older root, `/boot` can still contain kernels from
+the failed installation. Before confirming recovery, the updater restores the
+trusted recovery BLS entry, verifies the running recovered kernel's module tree,
+and archives this installation's normal entries for kernels missing from that
+root. The known-good recovered kernel becomes the normal saved default. This
+reconciliation covers Btrfs and LVM recovery and leaves kernel payloads, rescue
+entries, explicit entries for other snapshots, and other installations intact.
+Archived disabled entries are included in the failure report before recovery
+storage is retired.
 
 This selection backend supports Nobara's GRUB with split kernel/initramfs BLS
 entries. Kernel updates on other loaders or UKI-only layouts are rejected

@@ -13,8 +13,8 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root, installed_boot_kernels
-from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment, check_recovery_space, check_snapshot_swapfiles
+from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root, installed_boot_kernels, reconcile_recovered_kernels
+from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment, check_recovery_space, check_snapshot_swapfiles, restore_recovery_entry
 from .update_report import arm_report, publish_recovery, publish_failure, resolve_notice
 from .update_origins import annotate_failure
 from .update_progress import OfflineProgress, PackageProgress
@@ -896,10 +896,20 @@ def confirm_boot(root: Path = STATE_DIR) -> None:
             # Only mark the snapshot's original job as recovered. Subsequent
             # updates from the recovered root have their own independent jobs.
             if state.get("job") == recovery["job"]:
+                # Snapshot state predates create_recovery's return. /boot holds
+                # the trusted entry copies even if RPM hooks rewrote active BLS.
+                saved_recovery = dict(state.get("recovery", {}), created=True,
+                                      entry_id="nobara-recovery-" + recovery["job"])
+                # If validation fails here, preserve the real rollback state
+                # and its /boot diagnostics instead of treating the snapshot's
+                # pre-install state as an update that never started.
+                write_state(root, state, "recovering", started=True, recovery=saved_recovery)
+                restore_recovery_entry(saved_recovery)
                 entry = (recovery["restored_entry"] if recovery.get("backend") == "lvm"
                          else "nobara-recovery-" + recovery["job"])
                 if recovery.get("backend") != "lvm":
                     entry = synchronize_boot_root(recovery_entry=entry) or entry
+                reconcile_recovered_kernels(recovery["job"], entry)
                 confirm_trial(entry)
                 try:
                     report = publish_recovery(recovery["job"])

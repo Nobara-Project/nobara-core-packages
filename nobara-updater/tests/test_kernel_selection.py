@@ -358,6 +358,7 @@ class KernelWorkflowTests(unittest.TestCase):
                 return '{"job": "' + "a" * 32 + '"}'
             return real_read(path, *args, **kwargs)
         with patch.object(Path, "exists", return_value=True), patch.object(Path, "read_text", read), \
+             patch.object(backend, "restore_recovery_entry"), patch.object(backend, "reconcile_recovered_kernels"), \
              patch.object(backend, "publish_recovery", return_value={"error": "saved failure"}) as report, \
              patch.object(Path, "unlink") as unlink, patch.object(backend, "confirm_trial") as confirmed, \
              patch.object(backend.os, "uname", return_value=Mock(release="old-kernel")):

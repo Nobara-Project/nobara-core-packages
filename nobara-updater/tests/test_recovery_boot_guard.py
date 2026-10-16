@@ -274,7 +274,9 @@ class RecoveryLoopTests(unittest.TestCase):
         def path(value):
             return marker if value == "/etc/nobara-updater-recovery.json" else native_path(value)
         with patch.object(backend, "Path", side_effect=path), \
+             patch.object(backend, "restore_recovery_entry") as restore, \
              patch.object(backend, "synchronize_boot_root", return_value="normal"), \
+             patch.object(backend, "reconcile_recovered_kernels") as reconcile, \
              patch.object(backend, "confirm_trial") as confirm, \
              patch.object(backend, "publish_recovery", return_value={"error": "original failure"}), \
              patch.object(backend, "cleanup_confirmed_update"):
@@ -285,7 +287,34 @@ class RecoveryLoopTests(unittest.TestCase):
         self.assertFalse(saved["recovery_blocked"])
         self.assertFalse(saved["recovery_retry_ready"])
         confirm.assert_called_once_with("normal")
+        restore.assert_called_once()
+        reconcile.assert_called_once_with(JOB, "normal")
         self.assertFalse(marker.exists())
+
+    def test_recovered_kernel_validation_must_finish_before_disarming_or_cleanup(self):
+        marker = self.root / "marker.json"
+        state.write_state(self.root, dict(job=JOB, started=False, recovery={}), "scheduled")
+        marker.write_text(json.dumps(dict(job=JOB, original_subvolume="/@")))
+        self.attempt.mkdir(parents=True)
+        native_path = Path
+        def path(value):
+            return marker if value == "/etc/nobara-updater-recovery.json" else native_path(value)
+        with patch.object(backend, "Path", side_effect=path), \
+             patch.object(backend, "restore_recovery_entry"), \
+             patch.object(backend, "synchronize_boot_root", return_value="normal"), \
+             patch.object(backend, "reconcile_recovered_kernels", side_effect=state.UpdateError("Missing modules")), \
+             patch.object(backend, "confirm_trial") as confirm, \
+             patch.object(backend, "cleanup_confirmed_update") as cleanup, \
+             self.assertRaisesRegex(state.UpdateError, "Missing modules"):
+            backend.confirm_boot(self.root)
+        confirm.assert_not_called()
+        cleanup.assert_not_called()
+        self.assertTrue(marker.is_file())
+        saved = state.read_state(self.root)
+        self.assertTrue(saved["started"])
+        self.assertTrue(saved["recovery"]["created"])
+        self.assertFalse(backend.recover(self.root))
+        self.assertTrue(state.read_state(self.root)["recovery_blocked"])
 
     def test_worker_queues_guard_only_when_recovery_requests_a_restart(self):
         spec = importlib.util.spec_from_file_location("guard_worker_test", SOURCE / "update_worker.py")

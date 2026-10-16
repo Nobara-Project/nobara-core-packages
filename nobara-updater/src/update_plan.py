@@ -566,13 +566,37 @@ def add_kernel_development(base, goal, transaction, settings, hooks, origins):
     return transaction, preserved
 
 
+def replay_action(item) -> str:
+    """DNF's same-EVR architecture replacement is not a replayable reinstall.
+
+    The solver/RPM transaction accepts it, but replay's reinstall job requires
+    the destination architecture to be installed already. Use an explicit
+    install of the exact selected RPM and keep the solver's replaced packages.
+    """
+    action = trans.transaction_item_action_to_string(item.get_action())
+    if action != "Reinstall":
+        return action
+    package = item.get_package()
+    replaced = item.get_replaces()
+    if (not any(old.get_nevra() == package.get_nevra() for old in replaced)
+            and any(old.get_name() == package.get_name() and old.get_evr() == package.get_evr()
+                    and old.get_arch() != package.get_arch() for old in replaced)):
+        return "Install"
+    return action
+
+
 def store_transaction(transaction, incoming: list, job: Path) -> None:
     # The 5.4 Python bindings do not wrap std::filesystem::path. Use the
     # native serializer's defaults and attach local paths in its replay
     # format; Group/Environment.serialize accept ordinary strings.
     serialized = json.loads(transaction.serialize())
+    actions = {item.get_package().get_nevra(): replay_action(item)
+               for item in transaction.get_transaction_packages()
+               if item.get_action() == trans.TransactionItemAction_REINSTALL}
     payloads = {p.get_nevra(): Path(p.get_location()).name for p in incoming}
     for item in serialized.get("rpms", []):
+        if item["action"] == "Reinstall":
+            item["action"] = actions[item["nevra"]]
         if item["action"] in {"Install", "Upgrade", "Downgrade", "Reinstall"}:
             filename = payloads[item["nevra"]]
             relative = "packages/" + filename
@@ -625,7 +649,7 @@ def prepare_early_transaction(job: Path, names: tuple[str, ...]) -> dict:
         records, incoming = [], []
         for item in transaction.get_transaction_packages():
             package = item.get_package()
-            action = trans.transaction_item_action_to_string(item.get_action())
+            action = replay_action(item)
             records.append(dict(name=package.get_name(), arch=package.get_arch(),
                                 nevra=package.get_full_nevra(), action=action))
             if action in {"Install", "Upgrade", "Reinstall"}:
@@ -751,19 +775,13 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
             transaction = resolve_obsolete_cleanup(base, goal, transaction, settings, origins, migrations)
         validate_kmod_cleanup(base, transaction, retired_kmods)
         allow_architecture_cleanup(base, transaction, migrations)
-        actions = {
-            trans.TransactionItemAction_INSTALL: "Install", trans.TransactionItemAction_UPGRADE: "Upgrade",
-            trans.TransactionItemAction_DOWNGRADE: "Downgrade", trans.TransactionItemAction_REINSTALL: "Reinstall",
-            trans.TransactionItemAction_REMOVE: "Remove", trans.TransactionItemAction_REPLACED: "Replaced",
-            trans.TransactionItemAction_REASON_CHANGE: "Reason Change",
-        }
         records = []
         footprints = []
         incoming = []
         incoming_footprints = []
         for item in transaction.get_transaction_packages():
             package = item.get_package()
-            action = actions[item.get_action()]
+            action = replay_action(item)
             records.append(dict(name=package.get_name(), arch=package.get_arch(), nevra=package.get_full_nevra(), action=action))
             footprints.append(dict(name=package.get_name(), action=action, files=list(package.get_files())))
             if action in {"Install", "Upgrade", "Downgrade", "Reinstall"}:

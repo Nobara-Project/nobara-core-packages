@@ -30,6 +30,9 @@ class RecoveredBootRootTests(unittest.TestCase):
         self.boot = self.root / "boot"
         self.entries = self.boot / "loader/entries"
         self.entries.mkdir(parents=True)
+        self.modules = self.root / "usr/lib/modules"
+        (self.modules / KERNEL / "kernel").mkdir(parents=True)
+        (self.modules / KERNEL / "modules.dep").write_text("kernel/example.ko:\n")
         self.defaults = self.root / "grub-defaults"
         self.defaults.write_text('GRUB_DEFAULT=saved\nGRUB_TIMEOUT=17\nGRUB_CMDLINE_LINUX="quiet rootflags=subvol=@,subvolid=256,compress=zstd"\n')
         self.machine = self.root / "machine-id"
@@ -50,7 +53,7 @@ class RecoveredBootRootTests(unittest.TestCase):
         self.mount = dict(fstype="btrfs", fsroot="/" + SUBVOL, uuid=UUID)
         self.environment = dict(saved_entry="nobara-recovery-" + JOB, nobara_fallback="nobara-recovery-" + JOB)
         self.commands = []
-        for name, value in (("BOOT", self.boot), ("GRUB_DEFAULTS", self.defaults), ("MACHINE_ID", self.machine), ("KERNEL_CMDLINE", self.cmdline)):
+        for name, value in (("BOOT", self.boot), ("GRUB_DEFAULTS", self.defaults), ("MACHINE_ID", self.machine), ("KERNEL_CMDLINE", self.cmdline), ("MODULES", self.modules)):
             patcher = patch.object(boot, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -71,12 +74,12 @@ class RecoveredBootRootTests(unittest.TestCase):
             return ""
         raise AssertionError(command)
 
-    def entry(self, identifier, *, recovery=False, options=None):
+    def entry(self, identifier, *, recovery=False, options=None, version=KERNEL):
         path = self.entries / (identifier + ".conf")
         prefix = "/nobara-updater/" + JOB + "/" if recovery else "/"
-        linux = prefix + ("linux-0-" if recovery else "") + "vmlinuz-" + KERNEL
-        initrd = prefix + ("initrd-0-" if recovery else "") + "initramfs-" + KERNEL + ".img"
-        path.write_text(f"title Nobara {'previous system' if recovery else 'Linux'}\nversion {KERNEL}\nlinux {linux}\ninitrd {initrd}\noptions {options or self.options}\n")
+        linux = prefix + ("linux-0-" if recovery else "") + "vmlinuz-" + version
+        initrd = prefix + ("initrd-0-" if recovery else "") + "initramfs-" + version + ".img"
+        path.write_text(f"title Nobara {'previous system' if recovery else 'Linux'}\nversion {version}\nlinux {linux}\ninitrd {initrd}\noptions {options or self.options}\n")
         return path
 
     def test_recovery_becomes_normal_boot_using_saved_images_and_preserves_fallback(self):
@@ -179,6 +182,77 @@ class RecoveredBootRootTests(unittest.TestCase):
         self.assertEqual(boot.synchronize_boot_root(recovery_entry=self.recovery.stem), self.canonical.stem)
         self.assertTrue(self.canonical.is_file())
         self.assertIn("subvol=" + SUBVOL, self.cmdline.read_text())
+
+    def test_rollback_hides_failed_kernel_before_normal_boot_and_keeps_saved_images(self):
+        newer = "7.2.10-200.nobara.fc44.x86_64"
+        stale = self.entry(MACHINE + "-" + newer, version=newer)
+        image = self.boot / ("vmlinuz-" + newer)
+        image.write_bytes(b"new kernel still on separate boot")
+        selected = boot.synchronize_boot_root(recovery_entry=self.recovery.stem)
+        original = stale.read_bytes()
+        boot.reconcile_recovered_kernels(JOB, selected)
+        self.assertFalse(stale.exists())
+        self.assertEqual((self.archive / "disabled-entries" / stale.name).read_bytes(), original)
+        self.assertEqual(image.read_bytes(), b"new kernel still on separate boot")
+        self.assertEqual((self.boot / ("vmlinuz-" + KERNEL)).read_bytes(), b"known-good kernel")
+        self.assertTrue(self.canonical.is_file())
+        self.assertTrue(self.recovery.is_file())
+        self.assertEqual(self.environment["nobara_fallback"], self.recovery.stem)
+        boot.reconcile_recovered_kernels(JOB, selected)  # Safe after interrupted confirmation.
+
+    def test_missing_running_kernel_modules_blocks_confirmation_without_hiding_entries(self):
+        newer = self.entry(MACHINE + "-newer", version="newer")
+        (self.modules / KERNEL / "modules.dep").unlink()
+        before = newer.read_bytes()
+        with self.assertRaisesRegex(UpdateError, "no complete module tree"):
+            boot.reconcile_recovered_kernels(JOB, self.canonical.stem)
+        self.assertEqual(newer.read_bytes(), before)
+        self.assertFalse((self.archive / "disabled-entries").exists())
+
+    def test_other_roots_other_installations_rescue_and_valid_kernels_stay_visible(self):
+        valid = "retained-kernel"
+        (self.modules / valid / "kernel").mkdir(parents=True)
+        (self.modules / valid / "modules.dep").touch()
+        paths = [self.entry(MACHINE + "-" + valid, version=valid),
+                 self.entry("2" * 32 + "-other", version="other"),
+                 self.entry(MACHINE + "-foreign", version="foreign", options="root=UUID=other ro rootflags=subvol=@"),
+                 self.entry(MACHINE + "-snapshot", version="snapshot", options="root=UUID=" + UUID + " ro rootflags=subvol=another-snapshot"),
+                 self.entry(MACHINE + "-0-rescue", version="rescue")]
+        originals = {path: path.read_bytes() for path in paths}
+        boot.reconcile_recovered_kernels(JOB, self.canonical.stem)
+        for path, text in originals.items():
+            self.assertEqual(path.read_bytes(), text)
+
+    def test_external_module_leftovers_do_not_make_new_kernel_bootable(self):
+        newer = "newer-kernel"
+        (self.modules / newer / "extra").mkdir(parents=True)
+        (self.modules / newer / "modules.dep").touch()
+        stale = self.entry(MACHINE + "-" + newer, version=newer)
+        boot.synchronize_boot_root(recovery_entry=self.recovery.stem)
+        boot.reconcile_recovered_kernels(JOB, self.canonical.stem)
+        self.assertFalse(stale.exists())
+
+    def test_lvm_recovered_root_hides_only_its_unsupported_kernels(self):
+        for fstype in ("ext4", "xfs"):
+            with self.subTest(fstype=fstype):
+                self.mount.update(fstype=fstype, fsroot="/", source="/dev/nobara/root")
+                stale = self.entry(MACHINE + "-newer", version="newer", options="root=/dev/nobara/root rd.lvm.lv=nobara/root ro")
+                foreign = self.entry(MACHINE + "-foreign-lv", version="foreign", options="root=/dev/other/root ro")
+                boot.reconcile_recovered_kernels(JOB, self.canonical.stem)
+                self.assertFalse(stale.exists())
+                self.assertTrue(foreign.is_file())
+
+    def test_changed_archived_entry_and_wrong_kernel_selection_are_refused(self):
+        stale = self.entry(MACHINE + "-newer", version="newer")
+        boot.synchronize_boot_root(recovery_entry=self.recovery.stem)
+        archive = self.archive / "disabled-entries"
+        archive.mkdir()
+        (archive / stale.name).write_text("different previous contents")
+        with self.assertRaisesRegex(UpdateError, "different contents"):
+            boot.reconcile_recovered_kernels(JOB, self.canonical.stem)
+        self.assertTrue(stale.is_file())
+        with self.assertRaisesRegex(UpdateError, "does not match"):
+            boot.reconcile_recovered_kernels(JOB, stale.stem)
 
 
 if __name__ == "__main__":

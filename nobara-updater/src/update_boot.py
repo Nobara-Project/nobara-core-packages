@@ -19,6 +19,7 @@ BOOT = Path("/boot")
 GRUB_DEFAULTS = Path("/etc/default/grub")
 MACHINE_ID = Path("/etc/machine-id")
 KERNEL_CMDLINE = Path("/etc/kernel/cmdline")
+MODULES = Path("/usr/lib/modules")
 INBOUND = {"Install", "Upgrade", "Downgrade", "Reinstall"}
 
 
@@ -370,3 +371,87 @@ def synchronize_boot_root(*, recovery_entry: str | None = None) -> str | None:
     os.sync()
     LOG.info("Normal kernel entries now boot the active system at %s.", root["fsroot"])
     return canonical.stem
+
+
+def reconcile_recovered_kernels(job: str, selected: str) -> None:
+    """Hide this root's unbootable normal entries before retiring recovery.
+
+    /boot is shared across snapshots. Keep saved images and other installations
+    intact, but don't offer a kernel installed only in the abandoned root.
+    """
+    if not re.fullmatch(r"[a-f0-9]{32}", job) or not re.fullmatch(r"[A-Za-z0-9_.+~-]+", selected):
+        raise UpdateError("Invalid recovered boot selection.")
+    machine = MACHINE_ID.read_text().strip()
+    if not re.fullmatch(r"[a-fA-F0-9]{32}", machine):
+        raise UpdateError("Cannot identify the recovered installation's boot entries.")
+    kernel = os.uname().release
+    if not re.fullmatch(r"[A-Za-z0-9_.+~-]+", kernel):
+        raise UpdateError("Invalid running kernel version.")
+
+    def has_modules(version):
+        # A leftover directory containing only external DKMS/akmods modules is
+        # not the complete in-tree module set of the restored kernel.
+        directory = MODULES / version
+        return directory.is_dir() and (directory / "kernel").is_dir() and (directory / "modules.dep").is_file()
+
+    if not has_modules(kernel):
+        raise UpdateError(f"The recovered root has no complete module tree for running kernel {kernel}. "
+                          "Boot its saved previous-system kernel before confirming recovery.")
+    entries = BOOT / "loader/entries"
+    selected_path = entries / (selected + ".conf")
+    if (selected_path.is_symlink() or re.findall(r"(?m)^version\s+(.+)$", selected_path.read_text()) != [kernel]):
+        raise UpdateError("The recovered boot selection does not match the running kernel.")
+    current = json.loads(output(["findmnt", "--json", "--mountpoint", "/",
+                                 "--output", "FSTYPE,UUID,FSROOT,SOURCE"]))["filesystems"][0]
+    if not current.get("uuid"):
+        raise UpdateError("Cannot identify the recovered filesystem for boot-entry cleanup.")
+    environment = dict(line.split("=", 1) for line in output(
+        ["grub2-editenv", str(BOOT / "grub2/grubenv"), "list"]).splitlines() if "=" in line)
+    retired = []
+    for path in sorted(entries.glob(machine + "-*.conf")):
+        if path == selected_path or "0-rescue" in path.name:
+            continue
+        if path.is_symlink():
+            raise UpdateError("A normal kernel boot entry is a symlink; cannot safely reconcile recovery.")
+        text = path.read_text()
+        versions = re.findall(r"(?m)^version\s+(.+)$", text)
+        options = re.findall(r"(?m)^options\s+(.+)$", text)
+        if len(versions) != 1 or not re.fullmatch(r"[A-Za-z0-9_.+~-]+", versions[0]) or len(options) != 1:
+            continue
+        version = versions[0]
+        if has_modules(version):
+            continue
+        expanded = options[0].replace("$kernelopts", environment.get("kernelopts", ""))
+        expanded = re.sub(r"(?<!\S)\$tuned_params(?!\S)", "", expanded)
+        if "$" in expanded:
+            raise UpdateError(f"Cannot identify the root selected by {path.name}.")
+        tokens = shlex.split(expanded)
+        roots = [token[5:] for token in tokens if token.startswith("root=")]
+        if len(roots) != 1:
+            continue
+        same_root = roots[0] == "UUID=" + current["uuid"]
+        if roots[0].startswith("/dev/") and current.get("source", "").startswith("/dev/"):
+            same_root = os.path.realpath(roots[0]) == os.path.realpath(current["source"].split("[", 1)[0])
+        if not same_root:
+            continue
+        if current["fstype"] == "btrfs":
+            flags = [flag for token in tokens if token.startswith("rootflags=") for flag in token[10:].split(",")]
+            paths = [flag[7:].strip("/") for flag in flags if flag.startswith("subvol=")]
+            if paths != [current["fsroot"].strip("/")] or any(flag.startswith("subvolid=") for flag in flags):
+                continue  # Another snapshot may still contain that kernel.
+        retired.append((path, text))
+    archive = BOOT / "nobara-updater" / job / "disabled-entries"
+    if any(path.is_symlink() for path in (entries.parent, entries, archive.parent.parent, archive.parent, archive)):
+        raise UpdateError("Recovery boot storage contains a symlink.")
+    for path, text in retired:
+        saved = archive / path.name
+        if saved.is_symlink() or (saved.exists() and saved.read_text() != text):
+            raise UpdateError("A disabled boot entry already exists with different contents; preserve it for support.")
+    for path, text in retired:
+        # A durable copy precedes removal from BLS. Keep images for diagnosis
+        # and other roots; never delete RPM-owned kernel files during rollback.
+        write_boot_file(archive / path.name, text=text)
+        path.unlink()
+        LOG.warning("Disabled boot entry %s: kernel %s has no module tree in the recovered root.",
+                    path.name, re.findall(r"(?m)^version\s+(.+)$", text)[0])
+    os.sync()
