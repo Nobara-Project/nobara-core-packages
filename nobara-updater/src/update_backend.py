@@ -13,7 +13,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root, installed_boot_kernels, reconcile_recovered_kernels
+from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root, installed_boot_kernels, reconcile_recovered_kernels, ensure_grub_kernel, validate_grub_initramfs
 from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment, check_recovery_space, check_snapshot_swapfiles, restore_recovery_entry
 from .update_report import arm_report, publish_recovery, publish_failure, resolve_notice
 from .update_origins import annotate_failure
@@ -763,27 +763,20 @@ def validate_boot(packages: list[dict], *, rebuild_all: bool = False, preserved_
             run(["akmods", "--force", "--kernels", kernel])
         if subprocess.run(["rpm", "-q", "dkms-nvidia"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
             run(["modinfo", "-k", kernel, "nvidia"])
-        image = Path("/boot") / ("vmlinuz-" + kernel)
-        if image.is_file():
-            temporary = Path("/boot") / (".nobara-initramfs-" + kernel + ".img")
-            run(["dracut", "--force", "--kver", kernel, str(temporary)])
+        ensure_grub_kernel(kernel, run)
+        temporary = Path("/boot") / (".nobara-initramfs-" + kernel + ".img")
+        try:
+            # This backend selects GRUB split-image entries. A dracut config
+            # requesting UEFI output must not silently turn the initrd into a UKI.
+            run(["dracut", "--force", "--no-uefi", "--kver", kernel, str(temporary)])
             run(["lsinitrd", str(temporary)])
             os.replace(temporary, Path("/boot") / ("initramfs-" + kernel + ".img"))
-            entries = list(Path("/boot/loader/entries").glob("*.conf"))
-            if not any(re.search(r"(?m)^version\s+" + re.escape(kernel) + r"\s*$", p.read_text()) for p in entries):
-                raise UpdateError(f"No BLS boot entry exists for kernel {kernel}.")
-        else:
-            image = Path("/usr/lib/modules") / kernel / "vmlinuz"
-            if not image.is_file():
-                raise UpdateError(f"The boot image for kernel {kernel} is missing.")
-            run(["kernel-install", "add", kernel, str(image)])
-            ukis = [p for directory in (Path("/boot/EFI/Linux"), Path("/boot/efi/EFI/Linux")) for p in directory.glob(f"*{kernel}*.efi")]
-            if not ukis:
-                raise UpdateError(f"No unified kernel image was generated for {kernel}.")
-            for uki in ukis:
-                result = subprocess.run(["bootctl", "kernel-identify", str(uki)], check=True, capture_output=True, text=True)
-                if result.stdout.strip() != "uki":
-                    raise UpdateError(f"Invalid unified kernel image: {uki}")
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                LOG.warning("Could not remove temporary initramfs %s.", temporary, exc_info=True)
+        validate_grub_initramfs(kernel, run)
     os.sync()
 
 

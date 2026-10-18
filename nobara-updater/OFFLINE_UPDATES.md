@@ -337,6 +337,17 @@ Calamares target and retain that expectation across a following codec job.
 Previously prepared jobs retain their frozen engine; cancel and reprepare an
 unstarted job to use this behavior.
 
+Boot validation repairs missing kernel images and normal BLS entries using
+`kernel-install`, then rechecks the result. A missing `/boot/vmlinuz-<version>`
+does not imply a UKI installation. If kernel-install selects its generic BLS
+layout (for example because a stale entry-token directory exists), the updater
+uses the distribution's GRUB install hook to restore the split-image layout
+already used by Nobara. It retains existing kernel-install settings and other
+boot trees, respects disabled or overridden GRUB hooks, and logs the detected
+layout and plugin paths for troubleshooting. Completion still requires the
+correct kernel entry, a freshly built non-UKI initramfs, and valid referenced
+initramfs files. A failed repair keeps the update in the failure/recovery flow.
+
 ## Commands and frontend contract
 
 | Command | Effect |

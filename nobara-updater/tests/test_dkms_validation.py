@@ -33,6 +33,9 @@ class DkmsValidationTests(unittest.TestCase):
         self.status_calls = []
         self.autoinstall_error = None
         self.native_run = subprocess.run
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        boot_directory = Path(temporary.name)
 
         def subprocess_run(command, **kwargs):
             if command[:3] == ["rpm", "-q", "--qf"]:
@@ -56,6 +59,8 @@ class DkmsValidationTests(unittest.TestCase):
         for patcher in (
             patch.object(backend.subprocess, "run", side_effect=subprocess_run),
             patch.object(backend, "run", side_effect=run),
+            patch.object(backend, "ensure_grub_kernel"),
+            patch.object(backend, "Path", side_effect=lambda value: boot_directory if value == "/boot" else Path(value)),
             patch.object(backend.shutil, "which", side_effect=lambda name: "/usr/bin/dkms" if name == "dkms" else None),
             patch.object(backend.os, "uname", return_value=Mock(machine=ARCH)),
             patch.object(Path, "is_file", return_value=True),

@@ -20,6 +20,8 @@ GRUB_DEFAULTS = Path("/etc/default/grub")
 MACHINE_ID = Path("/etc/machine-id")
 KERNEL_CMDLINE = Path("/etc/kernel/cmdline")
 MODULES = Path("/usr/lib/modules")
+GRUB_INSTALL = Path("/usr/lib/kernel/install.d/20-grub.install")
+GRUB_INSTALL_OVERRIDE = Path("/etc/kernel/install.d/20-grub.install")
 INBOUND = {"Install", "Upgrade", "Downgrade", "Reinstall"}
 
 
@@ -147,6 +149,143 @@ def kernel_entry(kernel: str) -> str:
     if len(entries) != 1:
         raise UpdateError(f"Cannot identify one normal boot entry for kernel {kernel}.")
     return entries[0]
+
+
+def kernel_install_diagnostics(kernel: str, image: Path) -> dict:
+    """Log layout/plugin selection without publishing the plugin environment."""
+    try:
+        result = subprocess.run(["kernel-install", "--json=short", "inspect", kernel, str(image)],
+                                check=True, capture_output=True, text=True, timeout=15)
+        details = json.loads(result.stdout)
+        if not isinstance(details, dict):
+            raise ValueError("Invalid kernel-install inspection")
+        LOG.info("kernel-install configuration for %s: %s", kernel, json.dumps({
+            key: details[key] for key in ("Layout", "BootRoot", "EntryDirectory", "KernelImageType", "Plugins")
+            if key in details}))
+        return details
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        LOG.warning("Could not inspect kernel-install configuration for %s.", kernel)
+        return {}
+
+
+def ensure_grub_kernel(kernel: str, run) -> str:
+    """Repair missing split images/entries on our already-supported GRUB layout.
+
+    kernel-install's 'bls' layout is systemd's token/version/linux layout, not
+    Fedora GRUB's vmlinuz-version layout. A stale token directory can select it
+    automatically and make 20-grub.install silently skip installation. Retry
+    the normal plugin chain in /boot unless it selects a different layout,
+    then use the distribution's GRUB hook if necessary. Never infer UKI from
+    a missing /boot/vmlinuz file or change persistent kernel-install settings.
+    """
+    image = BOOT / ("vmlinuz-" + kernel)
+
+    def selected_entry():
+        entry = kernel_entry(kernel)
+        path = BOOT / "loader/entries" / (entry + ".conf")
+        if path.is_symlink() or image.is_symlink() or image.stat().st_size == 0:
+            raise UpdateError(f"Kernel boot files are empty or symlinked for {kernel}.")
+        initrds = re.findall(r"(?m)^initrd\s+(.+)$", path.read_text())
+        if not any(Path(word).name == "initramfs-" + kernel + ".img" for line in initrds for word in line.split()):
+            raise UpdateError(f"The GRUB entry for {kernel} is missing its split initramfs reference.")
+        return entry
+
+    try:
+        return selected_entry()
+    except UpdateError as error:
+        LOG.warning("Repairing GRUB boot files for %s: %s", kernel, error)
+    check_selection_support()
+    machine = MACHINE_ID.read_text().strip()
+    if not re.fullmatch(r"[a-fA-F0-9]{32}", machine):
+        raise UpdateError("Cannot repair GRUB boot files without a valid machine ID.")
+    canonical = BOOT / "loader/entries" / (machine + "-" + kernel + ".conf")
+    if canonical.is_symlink() or image.is_symlink():
+        raise UpdateError("Cannot repair symlinked kernel boot files.")
+    source = MODULES / kernel / "vmlinuz"
+    if not source.is_file():
+        source = image
+    if not source.is_file() or source.stat().st_size == 0:
+        raise UpdateError(f"The packaged kernel image for {kernel} is missing or empty.")
+    details = kernel_install_diagnostics(kernel, source)
+    if details.get("KernelImageType") == "uki":
+        raise UpdateError(f"The packaged image for {kernel} is a UKI; automatic selection requires a split GRUB kernel.")
+    if details.get("Layout") not in {"bls", "uki"}:
+        run(["kernel-install", "--boot-path=" + str(BOOT), "add", kernel, str(source)])
+        try:
+            return selected_entry()
+        except UpdateError:
+            pass
+
+    # Do not bypass an administrator's disabled/replaced GRUB plugin. Its
+    # normal invocation during RPM installation already had the opportunity
+    # to handle the boot. Don't create another unused generic BLS/UKI tree.
+    if (GRUB_INSTALL_OVERRIDE.exists() or GRUB_INSTALL_OVERRIDE.is_symlink()
+            or not GRUB_INSTALL.is_file() or not os.access(GRUB_INSTALL, os.X_OK)):
+        raise UpdateError(f"kernel-install did not create GRUB boot files for {kernel}. "
+                          "Restore the distribution's 20-grub.install hook; it is missing, disabled, or overridden.")
+    # TuneD may have already extended the entry made by 90-loaderentry.install.
+    # Preserve its late-bound settings when the GRUB hook recreates that entry.
+    old = canonical.read_text() if canonical.is_file() else ""
+    if not old:
+        running = BOOT / "loader/entries" / (machine + "-" + os.uname().release + ".conf")
+        if running.is_file() and not running.is_symlink():
+            old = running.read_text()
+    tuned = {key: variable for key, variable in (("options", "$tuned_params"), ("initrd", "$tuned_initrd"))
+             if any(variable in line.split()[1:] for line in old.splitlines() if line.startswith(key + " "))}
+    LOG.warning("Recreating the split kernel and BLS entry with the distribution GRUB hook for %s.", kernel)
+    with tempfile.TemporaryDirectory(prefix="nobara-grub-install-") as directory:
+        # Fedora's hook skips existing entry directories regardless of layout.
+        # Supply an absent directory in a private temporary parent; do not
+        # delete or repurpose any existing systemd-boot/kernel-install tree.
+        run(["env", "KERNEL_INSTALL_MACHINE_ID=" + machine, "KERNEL_INSTALL_LAYOUT=other",
+             "KERNEL_INSTALL_BOOT_ROOT=" + str(BOOT), "KERNEL_INSTALL_ENTRY_TOKEN=" + machine,
+             str(GRUB_INSTALL), "add", kernel, str(Path(directory) / "entry"), str(source)])
+    try:
+        entry = selected_entry()
+    except UpdateError as error:
+        raise UpdateError(f"Could not restore GRUB boot files for {kernel}: {error}") from error
+    if tuned and entry == canonical.stem:
+        lines = canonical.read_text().splitlines()
+        for index, line in enumerate(lines):
+            fields = line.split()
+            if fields and fields[0] in tuned and tuned[fields[0]] not in fields[1:]:
+                lines[index] += " " + tuned[fields[0]]
+        atomic_text(canonical, "\n".join(lines) + "\n")
+    return entry
+
+
+def validate_grub_initramfs(kernel: str, run) -> None:
+    """Require the selected entry to use the rebuilt initramfs, plus valid extras."""
+    from .update_recovery import expand_bls, grub_variables
+    entry = BOOT / "loader/entries" / (kernel_entry(kernel) + ".conf")
+    image = BOOT / ("initramfs-" + kernel + ".img")
+    fields = re.findall(r"(?m)^initrd\s+(.+)$", entry.read_text())
+    variables = grub_variables() if any("$" in field for field in fields) else {}
+    names = [name for field in fields for name in expand_bls("initrd", field, variables)]
+    aliases = {"/" + image.name, "/boot/" + image.name}
+    if not aliases.intersection(names):
+        aliases.update((output(["grub2-mkrelpath", str(image)]), output(["grub2-mkrelpath", "-r", str(image)])))
+    if not aliases.intersection(names):
+        raise UpdateError(f"The GRUB entry for {kernel} does not reference its rebuilt initramfs.")
+    for name in names:
+        if name in aliases:
+            payload = image
+        else:
+            payload = BOOT / name.lstrip("/")
+            if not payload.is_file():
+                # Without a separate /boot, GRUB paths include /boot and
+                # possibly the Btrfs subvolume; resolve them relative to BOOT.
+                for command in (["grub2-mkrelpath", str(BOOT)], ["grub2-mkrelpath", "-r", str(BOOT)]):
+                    prefix = output(command).rstrip("/") + "/"
+                    if name.startswith(prefix):
+                        payload = BOOT / name[len(prefix):]
+                        break
+        if not payload.resolve().is_relative_to(BOOT.resolve()) or not payload.is_file() or payload.stat().st_size == 0:
+            raise UpdateError(f"The GRUB initramfs image is missing, empty, or outside /boot: {name}")
+        # The main image was verified immediately before its atomic rename.
+        # Only auxiliary images (e.g. TuneD/microcode) still need inspection.
+        if payload != image:
+            run(["lsinitrd", str(payload)])
 
 
 def validate_running_entry(kernel: str, entry: str) -> None:
