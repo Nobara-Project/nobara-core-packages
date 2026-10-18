@@ -88,6 +88,13 @@ What to do next
    share the refreshed report with support. Once recovery is confirmed, fix
    the original update problem there and run the updater again.
 
+If installation finished but confirmation failed solely because the wrong
+kernel booted, and you are now running the expected updated kernel on the
+original root, sudo nobara-sync confirm-update can revalidate it. It requires
+recorded successful installation validation and checks packages, boot files,
+the running system and saved recovery before retiring rollback protection.
+It refuses partial installations; see RECOVERY.md for the full procedure.
+
 The original failure and recovery diagnostics are included below. Keep the
 offline report bundle if an Internet connection is unavailable.
 """
@@ -258,12 +265,13 @@ def capture_boot_diagnostics(state: dict, phase: str, *, note: str | None = None
     if not state.get("job"):
         return
     try:
-        if phase not in {"failure", "confirm", "recover", "current", "recovery-retry-before", "recovery-retry-after"}:
+        if phase not in {"failure", "confirm", "recover", "current", "recovery-retry-before", "recovery-retry-after",
+                         "confirmation-retry-before", "confirmation-retry-after"}:
             raise ValueError("Invalid boot diagnostic phase")
         directory = report_directory(state)
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         destination = directory / (phase + "-boot.log")
-        if phase == "recovery-retry-before" and destination.exists():
+        if phase in {"recovery-retry-before", "confirmation-retry-before"} and destination.exists():
             return  # Keep the original broken selection across repeated requests.
         boot = BOOT_REPORTS.parent
         notes = ["Boot diagnostics (only boot-selection fields are included)"]
@@ -446,7 +454,8 @@ def publish_report(job: str, directory: Path, *, recovered: bool, started: bool,
         detail = "No separate failed-boot log was preserved. This updater log may be incomplete.\n" + tail(STATE_DIR / "update.log")
     detail += "\n" + "\n".join("\n" + name + "\n" + tail(directory / name) for name in (
         "failure-boot.log", "confirm-boot.log", "recover-boot.log", "recovery-retry-before-boot.log",
-        "recovery-retry-after-boot.log", "current-boot.log") if (directory / name).is_file())
+        "recovery-retry-after-boot.log", "confirmation-retry-before-boot.log",
+        "confirmation-retry-after-boot.log", "current-boot.log") if (directory / name).is_file())
     guidance = instructions(recovered, started, recovery_blocked=recovery_blocked)
     # A hard crash may bypass record_failure. Use the saved pre-update origin
     # inventory only for exact packages identified in the surviving error log.

@@ -12,7 +12,7 @@ from nobara_updater import update_backend as backend, update_recovery as recover
 from nobara_updater import update_lvm as lvm, update_state as state, update_report as reports
 
 
-class RetryTests(RecoveryFixture):
+class RetryFixture(RecoveryFixture):
     def setUp(self):
         super().setUp()
         self.state_root = self.root / "state"
@@ -32,6 +32,8 @@ class RetryTests(RecoveryFixture):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+
+class RetryTests(RetryFixture):
     def test_retry_repairs_bls_selects_recovery_and_keeps_original_failure_and_ticket(self):
         self.overwrite_options()
         before = (self.state_root / "state.json").read_text()
@@ -230,7 +232,9 @@ class LvmRetryValidationTests(RecoveryFixture):
 
     def test_both_lvm_filesystems_accept_intact_owned_snapshot(self):
         for fstype in ("ext4", "xfs"):
-            lvm.validate_saved_snapshot(dict(self.layout, fstype=fstype), JOB, dict(self.current, fstype=fstype))
+            for segment in ("linear", "snapshot"):
+                with self.subTest(fstype=fstype, segment=segment), patch.dict(self.snapshot, segtype=segment):
+                    lvm.validate_saved_snapshot(dict(self.layout, fstype=fstype), JOB, dict(self.current, fstype=fstype))
 
     def test_full_invalid_merging_foreign_and_replaced_snapshots_are_refused(self):
         for fields in (dict(data_percent="100.0"), dict(data_percent=""), dict(data_percent="NaN"),
@@ -240,6 +244,16 @@ class LvmRetryValidationTests(RecoveryFixture):
                 lvm.validate_saved_snapshot(self.layout, JOB, self.current)
         with patch.dict(self.origin, lv_attr="Owi-a-s---"), self.assertRaises(state.UpdateError):
             lvm.validate_saved_snapshot(self.layout, JOB, self.current)
+
+    def test_linear_storage_does_not_bypass_snapshot_health_or_identity_checks(self):
+        for fields in (dict(lv_attr="-wi-a-----"), dict(lv_attr="swi-a-t---"), dict(lv_attr="swi-a-s-p-"),
+                       dict(lv_attr="swi-a-s--k"), dict(lv_attr="swi-X-s---"), dict(lv_attr="swi-m-s---"),
+                       dict(lv_attr="swi-M-s---"), dict(lv_attr="swi-s-s---"), dict(lv_attr="swi-a"),
+                       dict(data_percent="Infinity"), dict(data_percent="-1"), dict(data_percent="invalid"),
+                       dict(lv_uuid="other"), dict(origin_uuid="other"), dict(lv_tags="")):
+            with self.subTest(fields=fields), patch.dict(self.snapshot, dict(segtype="linear", **fields)), \
+                 self.assertRaises(state.UpdateError):
+                lvm.validate_saved_snapshot(self.layout, JOB, self.current)
         with patch.object(lvm, "inventory", return_value=[self.origin]), self.assertRaises(state.UpdateError):
             lvm.validate_saved_snapshot(self.layout, JOB, self.current)
 

@@ -450,6 +450,106 @@ def retry_recovery(root: Path = STATE_DIR) -> None:
         LOG.info("%s", status_message(state))
 
 
+def validate_completed_packages(packages: list[dict]) -> None:
+    """Verify the saved result, allowing later same-architecture upgrades.
+
+    In particular, installing an updater containing this repair must not make
+    confirmation impossible. Missing packages, architecture substitutions and
+    downgrades below the finalized versions still require investigation.
+    """
+    from libdnf5.rpm import rpmvercmp
+    result = subprocess.run(["rpm", "-qa", "--qf", "%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n"],
+                            check=True, text=True, capture_output=True)
+    installed = {}
+    for line in result.stdout.splitlines():
+        name, epoch, version, release, arch = line.split("|")
+        installed.setdefault((name, arch), []).append((epoch, version, release))
+
+    def identity(item):
+        name, ev, release_arch = item["nevra"].rsplit("-", 2)
+        release, arch = release_arch.rsplit(".", 1)
+        epoch, version = ev.split(":", 1) if ":" in ev else ("0", ev)
+        if name != item["name"]:
+            raise UpdateError("Invalid package identity in the saved update.")
+        return (name, arch), (epoch, version, release)
+
+    inbound = {identity(item) for item in packages if item["action"] in {"Install", "Upgrade", "Downgrade", "Reinstall"}}
+    for item in packages:
+        key, expected = identity(item)
+        versions = installed.get(key, [])
+        if (key, expected) in inbound:
+            def at_least(version):
+                return next((difference for a, b in zip(version, expected)
+                             if (difference := rpmvercmp(a, b))), 0) >= 0
+            if not any(at_least(version) for version in versions):
+                raise UpdateError(f"The finalized package is missing or older than expected: {item['nevra']}.")
+        elif item["action"] in {"Remove", "Replaced"} and expected in versions:
+            raise UpdateError(f"A package removed by the finalized update is still installed: {item['nevra']}.")
+
+
+def confirm_update(root: Path = STATE_DIR) -> None:
+    """Explicitly revalidate a finalized update; never bless a partial replay."""
+    from .update_boot import validate_running_entry
+    from .update_recovery import validate_saved_recovery
+    from .update_report import capture_boot_diagnostics
+    if in_installer_root():
+        raise UpdateError("Update confirmation is only available on an installed system.")
+    with update_lock(root):
+        state = read_state(root)
+        if (state.get("status") not in {"failed", "interrupted", "awaiting-boot"} or not state.get("started")
+                or state.get("installer") or state.get("execution", {}).get("mode") == "live"
+                or not state.get("recovery", {}).get("created")):
+            raise UpdateError("There is no unconfirmed offline installation with saved recovery to validate.")
+        # finalize writes this only after hooks, boot images, exact inbound
+        # RPMs, dependencies and release checks succeed. Failed replay/finalize
+        # jobs have no receipt and must never be promoted by this command.
+        if not re.fullmatch(r"[a-f0-9]{64}", state.get("installed_fingerprint", "")):
+            raise UpdateError("No successful installation validation was recorded. Recover the saved system instead.")
+        selection = state.get("boot_selection", {})
+        if not selection.get("kernel") or not selection.get("entry"):
+            raise UpdateError("The finalized update has no recorded kernel selection to verify.")
+        if any(path.exists() or path.is_symlink() for path in (TRIGGER, Path("/etc/system-update"),
+                                                              Path("/run/nobara-updater-offline"))):
+            raise UpdateError("An offline update is scheduled or running. Confirmation is not available.")
+        job = job_directory(state, root)
+        capture_boot_diagnostics(state, "confirmation-retry-before")
+        try:
+            verify_files(job, state["files"])
+            validate_saved_recovery(state["recovery"], state["job"])
+            environment = grub_environment()
+            if environment.get("nobara_fallback") not in {None, "", state["recovery"]["entry_id"]}:
+                raise UpdateError("Another update's recovery is armed.")
+            before = rpm_fingerprint()
+            check_installed_system()
+            validate_completed_packages(state["packages"])
+            validate_running_update(state)
+            validate_running_entry(selection["kernel"], selection["entry"])
+            if rpm_fingerprint() != before:
+                raise UpdateError("Installed packages changed during confirmation. Retry after package operations finish.")
+            saved = job / "confirmation-retry-state.json"
+            if not saved.exists():
+                atomic_json(saved, state)
+            # Cleanup can retire the private /boot archive. Publish the
+            # original failure and retry evidence before permitting that.
+            publish_failure(state)
+            # All checks precede disarming fallback. Keep the snapshot, ticket
+            # and original failure until confirmation has been persisted.
+            confirm_trial(selection["entry"])
+        except Exception as error:
+            capture_boot_diagnostics(state, "confirmation-retry-after", note=f"Update confirmation refused: {error}")
+            try:
+                publish_failure(state)
+            except Exception:
+                LOG.exception("Could not refresh the update failure report.")
+            raise UpdateError(f"Cannot safely confirm the updated system: {error}") from error
+        write_state(root, state, "complete", recovery_blocked=False, recovery_retry_ready=False,
+                    manually_confirmed=True, normal_boot_entry=selection["entry"], trial_entry=selection["entry"])
+        capture_boot_diagnostics(state, "confirmation-retry-after")
+        Path("/etc/nobara/newinstall").unlink(missing_ok=True)
+        LOG.info("The installed update and running boot passed validation. Normal updating is available again.")
+        cleanup_confirmed_update(root, state)
+
+
 def replay(job: Path, *, test: bool = False) -> None:
     # Every payload is local. Keep native DNF5 in its own process so a Python
     # or libdnf5 upgrade cannot replace modules used by an in-flight binding.
@@ -972,33 +1072,38 @@ def confirm_boot(root: Path = STATE_DIR) -> None:
             return
         if state.get("status") not in {"awaiting-boot", "installer-complete"}:
             return
-        if os_release() != state["target_release"]:
-            raise UpdateError("The system booted into a different release than expected.")
-        expected_kernel = state.get("boot_selection", {}).get("kernel")
-        if expected_kernel and os.uname().release != expected_kernel:
-            raise UpdateError(f"The system booted kernel {os.uname().release}, but this update selected {expected_kernel}.")
-        # finalize() already checked every installed dependency and duplicate
-        # before saving this inventory. Repeating DNF's per-package RPM checks
-        # on a cold boot can take minutes on an HDD and used to exceed the
-        # confirmation service's deadline. Reuse that result only if RPM can
-        # still read the same complete inventory (including install times).
-        LOG.info("Checking whether the installed package inventory changed since validation.")
-        validated = state.get("installed_fingerprint")
-        if validated and rpm_fingerprint() == validated:
-            LOG.info("Installed packages match the inventory validated before restart.")
-        else:
-            LOG.info("Package inventory changed or no saved validation is available; checking dependencies again.")
-            check_installed_packages()
-        if not (Path("/usr/lib/modules") / os.uname().release).is_dir():
-            raise UpdateError("Modules for the running kernel are missing.")
-        # A desktop install must at least reach its login manager before its
-        # recovery protection is retired. This does not certify every GPU or
-        # application workload; those still need normal release testing.
-        if Path("/etc/systemd/system/display-manager.service").exists():
-            run(["systemctl", "is-active", "--quiet", "display-manager.service"])
+        validate_running_update(state)
         if state.get("trial_entry"):
             confirm_trial(state["trial_entry"])
         write_state(root, state, "complete")
         Path("/etc/nobara/newinstall").unlink(missing_ok=True)
         LOG.info("%s", status_message(state))
         cleanup_confirmed_update(root, state)
+
+
+def validate_running_update(state: dict) -> None:
+    """Normal startup checks, also required for an explicit confirmation retry."""
+    if os_release() != state["target_release"]:
+        raise UpdateError("The system booted into a different release than expected.")
+    expected_kernel = state.get("boot_selection", {}).get("kernel")
+    if expected_kernel and os.uname().release != expected_kernel:
+        raise UpdateError(f"The system booted kernel {os.uname().release}, but this update selected {expected_kernel}.")
+    # finalize() already checked every installed dependency and duplicate
+    # before saving this inventory. Repeating DNF's per-package RPM checks
+    # on a cold boot can take minutes on an HDD and used to exceed the
+    # confirmation service's deadline. Reuse that result only if RPM can
+    # still read the same complete inventory (including install times).
+    LOG.info("Checking whether the installed package inventory changed since validation.")
+    validated = state.get("installed_fingerprint")
+    if validated and rpm_fingerprint() == validated:
+        LOG.info("Installed packages match the inventory validated before restart.")
+    else:
+        LOG.info("Package inventory changed or no saved validation is available; checking dependencies again.")
+        check_installed_packages()
+    if not (Path("/usr/lib/modules") / os.uname().release).is_dir():
+        raise UpdateError("Modules for the running kernel are missing.")
+    # A desktop install must at least reach its login manager before its
+    # recovery protection is retired. This does not certify every GPU or
+    # application workload; those still need normal release testing.
+    if Path("/etc/systemd/system/display-manager.service").exists():
+        run(["systemctl", "is-active", "--quiet", "display-manager.service"])

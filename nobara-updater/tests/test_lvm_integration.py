@@ -156,6 +156,10 @@ class LvmIntegrationTests(unittest.TestCase):
                 with patch.object(backend.subprocess, "run", side_effect=command), \
                      patch.object(update_recovery, "grub_environment", return_value={}):
                     saved = backend.create(job, layout)
+                # Use real lvs output: the COW LV can report segtype=linear
+                # while lv_attr identifies a healthy classic snapshot.
+                backend.validate_saved_snapshot(saved, job.name,
+                    dict(fstype=filesystem, source="/dev/" + vg + "/root"))
                 restored = boot / "loader/entries" / (saved["restored_entry"] + ".conf")
                 recovery_entry = boot / "loader/entries" / (saved["entry_id"] + ".conf")
                 self.assertIn("isolcpus=1", restored.read_text())

@@ -158,6 +158,39 @@ rewrote their root options. Older entries can be repaired using the recorded
 snapshot or LVM identity and existing archived boot files; missing or ambiguous
 boot data requires support instead of guessing a replacement root.
 
+## If installation finished but boot confirmation failed
+
+An update can finish installation and validation, then fail confirmation
+because the next boot selected an older kernel. If you subsequently boot the
+expected updated kernel's normal entry successfully, a new updater command
+can validate that installation without reverting it:
+
+```sh
+sudo nobara-sync confirm-update
+```
+
+Use a build containing this command. It runs the installed updater, so an old
+job's frozen worker does not need to be edited. The command requires a saved
+record of successful post-install validation and a recorded kernel selection.
+It checks the original root and recovery snapshot, saved transaction integrity,
+RPM database, dependencies, planned package results, release, running kernel,
+module tree, normal boot entry, boot images, and login-manager status. Later
+same-architecture package upgrades are allowed, including installing the fixed
+updater; missing packages and versions older than the finalized plan are refused.
+
+Only after these checks pass does it select the updated normal entry, mark the
+update complete, and retire its rollback snapshot through normal cleanup. The
+previous failure report and saved state are retained. Cleanup failures are
+retried on later boots. The command does not replay packages, force a snapshot
+merge, or reboot. You can then run the updater normally.
+
+A partial installation, wrong kernel/root, pending offline update, missing
+validation record, or failed check remains blocked with recovery retained.
+Share the report or use `retry-recovery` when appropriate; do not edit
+`state.json` to mark an update complete. This verification cannot certify
+every application or hardware workload, and GRUB's `boot_success=1` alone is
+not proof that the updater completed.
+
 ## If installation failed without automatic rollback
 
 Reaching the desktop does not confirm that installation completed. Some

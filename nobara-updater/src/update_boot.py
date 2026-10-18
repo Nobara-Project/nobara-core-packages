@@ -149,6 +149,41 @@ def kernel_entry(kernel: str) -> str:
     return entries[0]
 
 
+def validate_running_entry(kernel: str, entry: str) -> None:
+    """Read-only checks before manually confirming an interrupted trial boot."""
+    from .update_recovery import boot_payloads, expand_bls, grub_variables
+    if os.uname().release != kernel or kernel_entry(kernel) != entry:
+        raise UpdateError("Boot the updated kernel's normal entry before confirming this update.")
+    modules = MODULES / kernel
+    if not (modules / "kernel").is_dir() or not (modules / "modules.dep").is_file():
+        raise UpdateError("The updated kernel's complete module tree is missing.")
+    path = BOOT / "loader/entries" / (entry + ".conf")
+    if path.is_symlink():
+        raise UpdateError("The updated boot entry is a symlink.")
+    options = re.findall(r"(?m)^options\s+(.+)$", path.read_text())
+    if len(options) != 1:
+        raise UpdateError("The updated boot entry has ambiguous root options.")
+    tokens = shlex.split(" ".join(expand_bls("options", options[0], grub_variables())))
+    current = json.loads(output(["findmnt", "--json", "--mountpoint", "/",
+                                 "--output", "FSTYPE,UUID,FSROOT,SOURCE"]))["filesystems"][0]
+    roots = [token[5:] for token in tokens if token.startswith("root=")]
+    matches = len(roots) == 1 and bool(current.get("uuid")) and roots[0] == "UUID=" + current["uuid"]
+    if len(roots) == 1 and roots[0].startswith("/dev/") and current.get("source", "").startswith("/dev/"):
+        matches = os.path.realpath(roots[0]) == os.path.realpath(current["source"].split("[", 1)[0])
+    if current.get("fstype") == "btrfs":
+        flags = [flag for token in tokens if token.startswith("rootflags=") for flag in token[10:].split(",")]
+        matches = (matches and [flag[7:].strip("/") for flag in flags if flag.startswith("subvol=")]
+                   == [current["fsroot"].strip("/")] and not any(flag.startswith("subvolid=") for flag in flags))
+    if not matches or any(token.startswith("nobara.rollback=") for token in tokens):
+        raise UpdateError("The updated boot entry does not select the running original root.")
+    payloads = boot_payloads(path)
+    for index, payload in enumerate(payloads):
+        if not payload.is_file() or payload.stat().st_size == 0:
+            raise UpdateError(f"Updated boot image is missing or empty: {payload}")
+        if index:
+            subprocess.run(["lsinitrd", str(payload)], check=True, stdout=subprocess.DEVNULL)
+
+
 def atomic_text(path: Path, text: str) -> None:
     path = path.resolve(strict=True)
     fd, temporary = tempfile.mkstemp(prefix=".nobara-", dir=path.parent)

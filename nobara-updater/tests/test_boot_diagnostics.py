@@ -72,13 +72,16 @@ class BootDiagnosticsTests(unittest.TestCase):
         reports.capture_boot_diagnostics(self.state, "recovery-retry-before")
         reports.capture_boot_diagnostics(self.state, "recovery-retry-after",
                                          note="Retry refused: https://user:pass@example.test/?token=QUERY_SECRET")
+        reports.capture_boot_diagnostics(self.state, "confirmation-retry-before")
+        reports.capture_boot_diagnostics(self.state, "confirmation-retry-after", note="Confirmation refused: wrong kernel")
         original = (self.archive / "failure-boot.log").read_text()
         self.cmdline.write_text("root=UUID=fixture rootflags=subvol=recovered\n")
         reports.publish_recovery(JOB)
         result = reports.latest_report()
         text = Path(result["log"]).read_text()
         for expected in ("subvol=@", "subvol=recovered", ".nobara-updater/" + JOB + "/root", "nobara_fallback=",
-                         "BootCurrent: 0001", "boot-uuid", "test-boot-id", "Retry refused", "recovery-retry-after-boot.log"):
+                         "BootCurrent: 0001", "boot-uuid", "test-boot-id", "Retry refused", "recovery-retry-after-boot.log",
+                         "confirmation-retry-before-boot.log", "confirmation-retry-after-boot.log", "Confirmation refused"):
             self.assertIn(expected, text)
         for secret in ("COMMANDLINE_SECRET", "BLS_SECRET", "ENV_SECRET", "OTHER_SECRET", "STUB_SECRET", "QUERY_SECRET", "user:pass", "PRIVATE-TRANSACTION-FIELD"):
             self.assertNotIn(secret, text)
@@ -87,6 +90,8 @@ class BootDiagnosticsTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), contents)
         reports.capture_boot_diagnostics(self.state, "recovery-retry-before")
         self.assertNotIn("subvol=recovered", (self.archive / "recovery-retry-before-boot.log").read_text())
+        reports.capture_boot_diagnostics(self.state, "confirmation-retry-before")
+        self.assertNotIn("subvol=recovered", (self.archive / "confirmation-retry-before-boot.log").read_text())
         self.assertEqual((self.archive / "failure-boot.log").stat().st_mode & 0o777, 0o600)
         with tarfile.open(result["bundle"]) as archive:
             self.assertEqual(archive.extractfile("update.log").read().decode(), text)

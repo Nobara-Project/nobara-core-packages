@@ -82,8 +82,13 @@ def validate_saved_snapshot(layout, job, current):
         usable = usage.is_finite() and 0 <= usage < 100
     except ArithmeticError:
         usable = False
-    if (len(attributes) < 6 or attributes[0] != "s" or attributes[4] not in {"a", "-"}
-            or snapshot["segtype"] != "snapshot" or not usable):
+    # segtype describes the COW storage mapping, which is normally linear,
+    # not the snapshot target layered over it. lv_attr identifies the classic
+    # snapshot and its live health; UUIDs, origin and ownership were checked
+    # above. Never accept a plain linear LV just because its segtype matches.
+    if (len(attributes) != 10 or attributes[0] != "s" or attributes[4] not in {"a", "-"}
+            or attributes[6] != "s" or attributes[8:] != "--"
+            or snapshot["segtype"] not in {"linear", "snapshot"} or not usable):
         raise UpdateError("The LVM rollback snapshot is full, invalid, merging, or its health cannot be verified.")
     owner = BOOT / "nobara-updater" / job / "owner.json"
     if owner.is_symlink() or json.loads(owner.read_text()) != dict(owner="nobara-updater", job=job, backend="lvm"):

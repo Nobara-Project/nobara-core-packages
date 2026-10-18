@@ -20,7 +20,7 @@ LOG = logging.getLogger("nobara-sync")
 RESULT_PREFIX = "NOBARA_UPDATE_RESULT "
 COMMANDS = {"cli", "prepare-update", "install-updates", "install-fixups", "install-codecs",
             "repair", "check-updates", "check-repos", "update-status", "schedule-update",
-            "cancel-update", "reboot", "recovery-report", "retry-update", "retry-recovery"}
+            "cancel-update", "reboot", "recovery-report", "retry-update", "retry-recovery", "confirm-update"}
 
 
 def parse_args(argv=None):
@@ -43,6 +43,7 @@ def parse_args(argv=None):
         "cancel-update": "Cancel an update that has not begun installation.",
         "retry-update": "After manual repairs without rollback, validate and prepare a fresh update.",
         "retry-recovery": "Validate and select the saved recovery system for your next restart.",
+        "confirm-update": "Revalidate a finished installation after boot confirmation failed.",
         "reboot": "Restart now and install the prepared update.",
     }.items():
         commands.add_parser(name, help=help_text)
@@ -134,10 +135,10 @@ def result_message(state):
 
 
 def dispatch(args):
-    if args.command == "retry-recovery":
+    if args.command in {"retry-recovery", "confirm-update"}:
         if in_installer_root():
-            raise UpdateError("Recovery retry is only available on an installed system.")
-        if not worker_action("retry-recovery", LOG):
+            raise UpdateError("Recovery and confirmation are only available on an installed system.")
+        if not worker_action(args.command, LOG):
             return False
         print(RESULT_PREFIX + json.dumps(result_message(read_state())), flush=True)
         return True
