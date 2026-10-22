@@ -44,7 +44,7 @@ class RecoveryFixture(unittest.TestCase):
                         patch.object(recovery, "grub_variables", return_value={}), patch.object(recovery.os, "sync")):
             patcher.start()
             self.addCleanup(patcher.stop)
-        self.saved = recovery.recovery_entry(self.normal, JOB, SUBVOL)
+        self.saved = recovery.recovery_entry(self.normal, JOB, SUBVOL, recovery=self.layout)
         recovery.save_recovery_entry(self.layout, self.saved)
 
     def overwrite_options(self):
@@ -126,7 +126,8 @@ class RecoveryEntryTests(RecoveryFixture):
 
     def test_tabs_in_source_entry_do_not_leave_normal_root_in_fallback(self):
         self.normal.write_text(self.normal.read_text().replace("options ", "options\t"))
-        text = recovery.recovery_entry(self.normal, "b" * 32, ".nobara-updater/" + "b" * 32 + "/root")
+        text = recovery.recovery_entry(self.normal, "b" * 32, ".nobara-updater/" + "b" * 32 + "/root",
+                                       recovery=dict(uuid=UUID, entry_id="nobara-recovery-" + "b" * 32))
         self.assertNotIn("subvol=@", text)
 
 
@@ -208,7 +209,8 @@ path.write_text(json.dumps(environment))
     def test_new_job_gets_its_own_restart_budget(self):
         self.assertEqual(self.guard().returncode, 0)
         job = "b" * 32
-        text = recovery.recovery_entry(self.normal, job, ".nobara-updater/" + job + "/root")
+        text = recovery.recovery_entry(self.normal, job, ".nobara-updater/" + job + "/root",
+                                       recovery=dict(uuid=UUID, entry_id="nobara-recovery-" + job))
         recovery.save_recovery_entry(dict(created=True, uuid=UUID, entry_id="nobara-recovery-" + job), text)
         state.atomic_json(self.boot / "nobara-updater/recovery-armed", dict(entry="nobara-recovery-" + job))
         self.environment["NB_TEST_JOB"] = job
