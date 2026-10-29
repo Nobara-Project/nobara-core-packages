@@ -33,8 +33,12 @@ def load_repositories(create_base):
             try:
                 message = str(error)
                 match = re.search(r'''for repository ["']([^"'\n]+)["']''', message)
-                if ("Failed to download metadata" not in message or "Usable URL not found" not in message
-                        or not match or match[1] in refreshed or len(refreshed) >= 3):
+                
+                is_metadata_failure = "Failed to download metadata" in message
+                is_gpg_error = "Bad PGP signature" in message or "GPG signature verification error" in message
+                is_usable_url_error = "Usable URL not found" in message
+                
+                if not (is_metadata_failure or is_gpg_error or is_usable_url_error) or not match or match[1] in refreshed or len(refreshed) >= 3:
                     raise
                 repo = next((repo for repo in repo_api.RepoQuery(base)
                              if repo.get_id() == match[1] and repo.get_config().get_enabled_option().get_value()), None)
