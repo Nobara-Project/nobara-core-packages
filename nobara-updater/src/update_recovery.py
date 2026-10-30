@@ -657,6 +657,66 @@ def select_recovery(recovery: dict, *, verify_images: bool = False) -> None:
     os.sync()
 
 
+def prune_boot_archives(state: dict, state_root: Path) -> tuple[int, int]:
+    """Remove obsolete job tarballs, never snapshots, boot images or reports.
+
+    Called under the updater lock. Older Btrfs cleanup retired the snapshots
+    and /boot job directories but left these separate tarballs behind.
+    Remaining boot data is treated as a reference, even for an older job.
+    """
+    from .update_state import TRIGGER
+    from .update_btrfs import JOURNAL
+    if state.get("status") not in {"complete", "recovered", "live-complete", "unchanged"}:
+        raise UpdateError("Finish the pending update or recovery before cleaning update storage.")
+    blockers = (TRIGGER, Path("/etc/system-update"), Path("/run/nobara-updater-offline"),
+                Path("/etc/nobara-updater-recovery.json"), state_root / JOURNAL,
+                BOOT / "nobara-updater/recovery-armed")
+    if any(p.exists() or p.is_symlink() for p in blockers):
+        raise UpdateError("Update or recovery work is still pending; keeping update storage.")
+    jobs = state_root / "jobs"
+    if state_root.is_symlink() or jobs.is_symlink():
+        raise UpdateError("Refusing cleanup through a symlinked update directory.")
+    candidates = []
+    for job in jobs.glob("*"):
+        if (not re.fullmatch(r"[a-f0-9]{32}", job.name) or job.is_symlink()
+                or not job.is_dir() or job.is_mount()):
+            continue
+        for name in ("boot.tar", "efi.tar"):
+            archive = job / name
+            if archive.is_file() and not archive.is_symlink() and not archive.is_mount():
+                candidates.append(archive)
+    if not candidates:
+        return 0, 0
+    entries = BOOT / "loader/entries"
+    boot_jobs = BOOT / "nobara-updater"
+    if (not BOOT.is_mount() or BOOT.is_symlink() or boot_jobs.is_symlink()
+            or (BOOT / "loader").is_symlink() or entries.is_symlink() or not entries.is_dir()):
+        raise UpdateError("Mount the separate /boot filesystem with its normal boot entries before cleaning boot archives.")
+    environment = grub_environment()
+    selected = environment.get("saved_entry", "")
+    if (any(environment.get(key) for key in ("nobara_fallback", "nobara_trial", "next_entry"))
+            or not re.fullmatch(r"[A-Za-z0-9_.+~-]+", selected)
+            or selected.startswith("nobara-recovery-")
+            or not (entries / (selected + ".conf")).is_file()):
+        raise UpdateError("A confirmed normal boot must be selected before cleaning boot archives.")
+    removed_bytes = kept = 0
+    for archive in candidates:
+        job_id = archive.parent.name
+        references = (boot_jobs / job_id, entries / ("nobara-recovery-" + job_id + ".conf"),
+                      entries / ("nobara-restored-" + job_id + ".conf"))
+        if (any(p.exists() or p.is_symlink() for p in references)
+                or (job_id == state.get("job") and state.get("recovery", {}).get("created")
+                    and not state.get("recovery_cleanup_complete"))):
+            kept += 1
+            continue
+        size = archive.stat().st_size
+        archive.unlink()
+        removed_bytes += size
+    if removed_bytes:
+        os.sync()
+    return removed_bytes, kept
+
+
 def prune_recovery(recovery: dict, confirmed_job: str, *, state_root=None) -> None:
     """Retire rollback data after confirmation, preserving roots/images in use."""
     if not recovery.get("created"):

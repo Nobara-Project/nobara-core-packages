@@ -176,6 +176,15 @@ Unexpected removals of dependent applications also stop preparation. Resolve
 those conflicts using [RECOVERY.md](RECOVERY.md); the updater does not erase
 applications just to force obsolete-package cleanup through.
 
+Updates never change the kernel family. Mainline and LTS kernels share package
+names, so if the other family's repository is enabled, its kernels would look
+like ordinary upgrades. The updater ignores that repository for the update and
+logs a warning. It uses the family recorded by Nobara Kernel Manager in
+`/etc/nobara/kernel-family`, or else the family of the installed Nobara
+kernels. If both families are installed and no choice is recorded, it changes
+nothing. To change families, or to remove the other family's kernels, use
+Nobara Kernel Manager.
+
 On systems using Plymouth, the updater also repairs missing BGRT theme files
 and its `two-step` plugin. It installs missing packages or restores deleted
 files from installed packages using an upgrade or reinstall. These RPMs are
@@ -385,6 +394,32 @@ next offline installation creates new recovery data from that current,
 repaired system.
 
 ### Cleanup and retention
+
+Downloaded packages and caches are removed after completion or before a later
+update. The `boot.tar` and `efi.tar` files in `/var/lib/nobara-updater/jobs/` are
+temporary boot backups; they should not accumulate after their recovery data
+has been retired. Older Btrfs cleanup left these files behind. The updater now
+also checks for those obsolete archives after confirmation and on later runs.
+
+After installing a version containing this cleanup fix, you can request cleanup
+without starting another update:
+
+```bash
+sudo nobara-sync clean-update-cache
+```
+
+The command takes the updater lock and requires a completed update, confirmed
+recovery, or a completed check with no updates. It refuses pending or failed
+updates, offline triggers, and unfinished root-layout recovery. Boot archives
+are only removed with the separate `/boot` mounted and a normal boot selected;
+archives with remaining recovery/boot references are kept. It does not cancel
+updates, confirm a failed installation, remove snapshots, or change packages.
+
+Small job directories containing transaction metadata and diagnostics are
+retained. Do not recursively delete the jobs directory: it may contain a
+prepared update or data still needed for recovery. Failure reports remain
+available through `nobara-sync recovery-report`; see [RECOVERY.md](RECOVERY.md)
+when an update has failed.
 
 A cleanup problem is logged and retried at a later boot; it does not turn a
 successfully confirmed update into a failed update. Mounted subvolumes and

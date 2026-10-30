@@ -29,6 +29,27 @@ from .update_retention import versioned_kmod_kernel, package_kernel
 
 LOG = logging.getLogger(__name__)
 ESSENTIAL = {"glibc", "rpm", "dnf5", "libdnf5", "systemd", "bash", "coreutils", "python3", "nobara-updater"}
+# Nobara Kernel Manager records the selected family here; nobara-repos keeps it.
+KERNEL_FAMILY_STATE = Path("/etc/nobara/kernel-family")
+KERNEL_REPOS = {"mainline": "nobara-kernel-mainline", "lts": "nobara-kernel-lts"}
+
+
+def selected_kernel_family(kernel_releases: list[str]) -> str | None:
+    """Return the user's kernel family, or None when it cannot be known.
+
+    A repository-file reset must not switch families during an update. Without
+    a recorded choice, a system whose Nobara kernels are all one family stays
+    on that family. Mixed or third-party-only systems are left unchanged.
+    """
+    try:
+        recorded = KERNEL_FAMILY_STATE.read_text().strip()
+    except OSError:
+        recorded = ""
+    if recorded in KERNEL_REPOS:
+        return recorded
+    families = {"lts" if ".lts." in release else "mainline"
+                for release in kernel_releases if ".nobara." in release}
+    return families.pop() if len(families) == 1 else None
 
 
 class DownloadProgress(repo_api.DownloadCallbacks):
@@ -137,9 +158,14 @@ def _configure_base(job: Path, release: str | None = None, *, codecs: bool = Fal
     sack.create_repos_from_system_configuration()
     # Existing freeworld packages record a previous codec opt-in, even if a
     # repository-file replacement accidentally disabled the codec repo.
-    installed_names = subprocess.run(["rpm", "-qa", "--qf", "%{NAME}\n"],
-                                     check=True, capture_output=True, text=True).stdout.splitlines()
+    installed = [line.split("\t") for line in subprocess.run(
+        ["rpm", "-qa", "--qf", "%{NAME}\t%{RELEASE}\n"],
+        check=True, capture_output=True, text=True).stdout.splitlines()]
+    installed_names = [fields[0] for fields in installed]
     codecs = codecs or any(name.endswith("-freeworld") for name in installed_names)
+    family = selected_kernel_family([fields[1] for fields in installed
+                                     if fields[0] == "kernel-core" and len(fields) == 2])
+    other_kernel_repo = {"mainline": KERNEL_REPOS["lts"], "lts": KERNEL_REPOS["mainline"]}.get(family)
     base.nobara_codecs = codecs
     base.nobara_enable_codecs = False
     base.nobara_migrate_media = False
@@ -150,6 +176,13 @@ def _configure_base(job: Path, release: str | None = None, *, codecs: bool = Fal
             if codecs and not enabled:
                 base.nobara_enable_codecs = True
                 repo.get_config().get_enabled_option().set(True)
+        if repo.get_id() == other_kernel_repo and repo.get_config().get_enabled_option().get_value():
+            # Both families use the same package names, so an enabled
+            # other-family repo looks like an ordinary kernel upgrade.
+            repo.get_config().get_enabled_option().set(False)
+            LOG.warning("Ignoring %s for this update: this system uses the %s kernel family. "
+                        "Use Nobara Kernel Manager to change kernel families.",
+                        other_kernel_repo, "LTS" if family == "lts" else "Mainline")
         if repo.get_config().get_enabled_option().get_value():
             urls = migrated_media_urls(repo, base.get_vars().get_value("basearch"))
             if urls is not None:

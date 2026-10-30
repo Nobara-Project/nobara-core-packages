@@ -88,6 +88,13 @@ class CliTests(unittest.TestCase):
         worker.assert_called_once_with("retry", cli.LOG)
         prepare.assert_not_called()
 
+    def test_cache_cleanup_only_calls_cleanup_worker(self):
+        with patch.object(cli, "worker_action", return_value=True) as worker, \
+             patch.object(cli, "prepare_update") as prepare:
+            self.assertTrue(cli.dispatch(cli.parse_args(["clean-update-cache"])))
+        worker.assert_called_once_with("clean-cache", cli.LOG)
+        prepare.assert_not_called()
+
     def test_preparation_failure_is_nonzero_and_does_not_schedule(self):
         with patch.object(cli, "elevate"), patch.object(cli, "initialize_logging"), \
              patch.object(cli, "prepare_update", return_value=False), \

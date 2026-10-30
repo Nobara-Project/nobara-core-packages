@@ -13,12 +13,12 @@ if (Path(__file__).parent / "nobara_updater").is_dir():
 
 from nobara_updater.update_state import PROXY_DIR, load_proxy_settings, STATE_DIR, TRIGGER, UpdateError, read_state, read_status, status_message, write_state, read_request
 from nobara_updater import update_backend as backend
-from nobara_updater.update_report import attach_log, record_failure, record_service_failure
+from nobara_updater.update_report import attach_log, capture_system_journal, record_failure, record_service_failure
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["prepare", "prepare-codecs", "refresh-pending", "schedule", "reboot", "cancel", "retry", "retry-recovery", "confirm-update", "execute", "finalize", "execute-live", "live-finalize", "recover", "confirm", "confirm-stopped", "offline-stopped", "status", "foreign-trigger", "own-trigger", "installer-update", "installer-codecs", "installer-finalize"])
+    parser.add_argument("action", choices=["prepare", "prepare-codecs", "refresh-pending", "schedule", "reboot", "cancel", "retry", "retry-recovery", "confirm-update", "clean-cache", "execute", "finalize", "execute-live", "live-finalize", "recover", "confirm", "confirm-stopped", "offline-stopped", "status", "foreign-trigger", "own-trigger", "installer-update", "installer-codecs", "installer-finalize"])
     parser.add_argument("--early-upgrade-complete", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--request", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -78,6 +78,13 @@ def main():
                 attach_log(read_state())
             except Exception:
                 logging.exception("Could not attach the persistent update log.")
+        if args.action == "confirm":
+            try:
+                state = read_state()
+                if state.get("status") == "awaiting-boot" and state.get("started"):
+                    capture_system_journal(state, "confirmation")
+            except Exception:
+                logging.warning("Could not inspect startup state for journal collection.", exc_info=True)
         if args.action in {"installer-update", "installer-codecs"}:
             backend.install_in_target(codecs=args.action == "installer-codecs")
         elif args.action == "installer-finalize":
@@ -101,8 +108,18 @@ def main():
             backend.schedule(reboot=args.action == "reboot")
         else:
             {"prepare": backend.prepare, "cancel": backend.cancel, "retry": backend.retry_failed,
-             "retry-recovery": backend.retry_recovery, "confirm-update": backend.confirm_update, "execute": backend.execute,
+             "retry-recovery": backend.retry_recovery, "confirm-update": backend.confirm_update,
+             "clean-cache": backend.clean_update_cache, "execute": backend.execute,
              "finalize": backend.finalize, "confirm": backend.confirm_boot}[args.action]()
+        if args.action == "finalize":
+            # Save the offline boot's journal before the service reboots. Its
+            # /var/log may disappear from view if the next boot rolls back.
+            try:
+                state = read_state()
+                if state.get("status") == "awaiting-boot":
+                    capture_system_journal(state, "installation")
+            except Exception:
+                logging.warning("Could not inspect finalized state for journal collection.", exc_info=True)
         return 0
     except Exception as error:
         if isinstance(error, UpdateError):

@@ -46,6 +46,9 @@ class ReportTests(unittest.TestCase):
         patcher = patch.object(reports, "capture_boot_diagnostics")
         patcher.start()
         self.addCleanup(patcher.stop)
+        patcher = patch.object(reports, "capture_system_journal")
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.state = dict(job=JOB, started=True, recovery={"created": True}, source_release="43", target_release="44")
 
     def close_handlers(self):
@@ -295,6 +298,16 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report["package_conflicts"][0]["name"], "labwc")
         self.assertTrue(Path(report["bundle"]).is_file())
 
+    def test_previous_boot_context_does_not_blame_packages_in_the_current_job(self):
+        self.state["package_origins"] = [self.origin()]
+        reports.arm_report(self.state)
+        (self.boot / JOB / "report-system-journal.log").write_text(
+            "Available previous boot\nError: labwc-5-1.x86_64 conflicts with an unrelated old package\n")
+        reports.publish_recovery(JOB)
+        report = reports.latest_report()
+        self.assertEqual(report["package_conflicts"], [])
+        self.assertIn("unrelated old package", Path(report["log"]).read_text())
+
     def test_success_retires_notification_but_keeps_report_for_support(self):
         report = self.publish()
         reports.resolve_notice()
@@ -386,7 +399,8 @@ class ServiceOrderingTests(unittest.TestCase):
                      patch.object(worker, "RotatingFileHandler"), \
                      patch.object(worker, "read_state", return_value=state), \
                      patch.object(worker, "write_state") as write, \
-                     patch.object(worker, "attach_log"), patch.object(worker, "record_failure") as report, \
+                     patch.object(worker, "attach_log"), patch.object(worker, "capture_system_journal"), \
+                     patch.object(worker, "record_failure") as report, \
                      patch.object(worker.backend, "confirm_boot", side_effect=UpdateError("boot checks failed")), \
                      contextlib.redirect_stderr(io.StringIO()):
                     self.assertEqual(worker.main(), 1 if snapshot else 0)

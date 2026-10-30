@@ -113,13 +113,41 @@ def policy() -> dict:
 
 def prune_payloads(root: Path, keep_job: str = "") -> None:
     """Discard obsolete download data; never remove recovery boot archives."""
-    for job in (root / "jobs").glob("*"):
-        if job.name == keep_job or not re.fullmatch(r"[a-f0-9]{32}", job.name) or job.is_symlink():
+    jobs = root / "jobs"
+    if jobs.is_symlink():
+        raise UpdateError("Refusing cleanup through a symlinked jobs directory.")
+    for job in jobs.glob("*"):
+        if (job.name == keep_job or not re.fullmatch(r"[a-f0-9]{32}", job.name)
+                or job.is_symlink() or not job.is_dir() or job.is_mount()):
             continue
         for name in ("cache", "packages", "comps", "engine"):
             path = job / name
-            if path.is_dir() and not path.is_symlink():
+            if path.is_dir() and not path.is_symlink() and not path.is_mount():
                 shutil.rmtree(path)
+
+
+def cleanup_boot_archives(root: Path, state: dict, *, strict: bool = False) -> None:
+    """Catch up on tarballs left by older workers without risking recovery."""
+    from .update_recovery import prune_boot_archives
+    try:
+        if not strict and not any((root / "jobs").glob("*/boot.tar")) and not any((root / "jobs").glob("*/efi.tar")):
+            return
+        removed, kept = prune_boot_archives(state, root)
+        LOG.info("Boot archive cleanup: removed %.1f MiB; kept %d archives referenced by recovery or boot data.",
+                 removed / 1024**2, kept)
+    except Exception:
+        if strict:
+            raise
+        LOG.warning("Boot archive cleanup deferred; it will retry on a later boot or updater run.", exc_info=True)
+
+
+def clean_update_cache(root: Path = STATE_DIR) -> None:
+    """Explicit, locked cleanup; never prepare, cancel or confirm an update."""
+    with update_lock(root):
+        state = read_state(root)
+        cleanup_boot_archives(root, state, strict=True)
+        prune_payloads(root)
+        LOG.info("Obsolete update downloads and boot archives cleaned. Job metadata and reports were retained.")
 
 
 def reconcile_pending(root: Path, state: dict) -> None:
@@ -175,6 +203,7 @@ def upgrade_early(root: Path = STATE_DIR, *, installer: bool = False) -> None:
                 raise UpdateError("Finish the interrupted Btrfs root-layout repair before upgrading packages.")
             # Permit the narrow updater/helper upgrade to deliver a repair.
             # Main preparation must restore the layout before making a new job.
+        cleanup_boot_archives(root, previous)
         prune_payloads(root)
         check_installed_system(preparing=True)
         before = rpm_fingerprint()
@@ -224,6 +253,7 @@ def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = F
                     "subvolumes or switch to an old root manually.")
             cleanup_kernel_retention(previous)
         settings = policy()
+        cleanup_boot_archives(root, previous)
         prune_payloads(root)
         for attempt in range(1, settings["prepare_attempts"] + 1):
             state = {"job": uuid.uuid4().hex, "started": False, "attempt": attempt, "installer": installer, "selection": packages}
@@ -930,6 +960,7 @@ def cleanup_confirmed_update(root: Path, state: dict) -> None:
     if not maintain_btrfs_root(root, state):
         return
     if state.get("recovery_cleanup_complete"):
+        cleanup_boot_archives(root, state)
         cleanup_kernel_retention(state)
         return
     try:
@@ -944,6 +975,7 @@ def cleanup_confirmed_update(root: Path, state: dict) -> None:
         prune_recovery(state.get("recovery", {}), state["job"], state_root=root)
         prune_payloads(root)
         write_state(root, state, state["status"], recovery_cleanup_complete=True)
+        cleanup_boot_archives(root, state)
         cleanup_kernel_retention(state)
     except Exception:
         LOG.exception("System boot confirmed, but recovery cleanup could not finish; it will retry on the next boot.")
@@ -1037,6 +1069,7 @@ def confirm_boot(root: Path = STATE_DIR) -> None:
                 if state.get("btrfs_root_layout") and not state.get("recovery_cleanup_complete"):
                     cleanup_confirmed_update(root, state)
                 else:
+                    cleanup_boot_archives(root, state)
                     cleanup_kernel_retention(state)
             return
         if stop_recovery_loop(root, state):

@@ -248,6 +248,105 @@ def capture_journal(path: Path) -> None:
     os.chmod(path, 0o600)
 
 
+def capture_system_journal(state: dict, phase: str, *, previous: bool = False) -> None:
+    """Save boot context outside rollback, without publishing user-session logs.
+
+    Boot offsets describe the journal that is visible now, not necessarily the
+    boots that actually occurred: a restored /var/log can hide the failed boot.
+    Resolve available offsets to IDs before collecting and label that limitation.
+    This is diagnostic only; unavailable journals must never fail an update.
+    """
+    if not state.get("job"):
+        return
+    try:
+        if phase not in {"installation", "confirmation", "failure", "report"}:
+            raise ValueError("Invalid system journal phase")
+        directory = report_directory(state)
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        destination = directory / (phase + "-system-journal.log")
+        if destination.exists():
+            return  # Preserve the first attempt, including across later reboots.
+
+        def query(arguments, budget, timeout=2):
+            note = ""
+            with tempfile.TemporaryFile() as stream:
+                try:
+                    result = subprocess.run(["journalctl", "--no-pager", "--no-hostname", "--system", *arguments],
+                                            stdout=stream, stderr=subprocess.STDOUT, timeout=timeout, check=False,
+                                            env=dict(os.environ, LC_ALL="C.UTF-8"))
+                    if result.returncode:
+                        note = f"[Journal query exited {result.returncode}; output may be unavailable.]\n"
+                except subprocess.TimeoutExpired:
+                    note = "[Journal collection timed out; partial output follows.]\n"
+                except OSError as error:
+                    note = f"[Journal collection unavailable: {error}]\n"
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - budget))
+                contents = stream.read(budget).decode("utf-8", errors="replace")
+            if size > budget:
+                note += "[Earlier journal output omitted to limit report size.]\n"
+            return note + (contents or "[No matching journal entries were available.]\n")
+
+        try:
+            current = BOOT_ID.read_text().strip().replace("-", "")
+        except OSError:
+            current = ""
+        if not re.fullmatch(r"[a-f0-9]{32}", current):
+            current = ""
+        notes = [f"System boot journal excerpts: {phase}; job {state['job']}",
+                 f"Captured at {time.strftime('%Y-%m-%dT%H:%M:%S%z')}; current boot ID: {current or 'unavailable'}",
+                 "Includes kernel, system manager, updater, initramfs and login-manager messages.",
+                 "User-session journals are excluded. Excerpts are limited by time, entry count and size."]
+        boots = [(current or "0", "Current boot at collection time")]
+        if previous:
+            history = query(["--list-boots", "--no-legend", "-n", "3"], 8192, timeout=1)
+            notes += ["Available journal boot history:\n" + history,
+                      "Previous entries are available journal history, not proof of which boot failed. "
+                      "Rollback, volatile storage, rotation or a hard reset may leave the failed boot absent."]
+            records = []
+            for line in history.splitlines():
+                fields = line.split(maxsplit=2)
+                if (len(fields) >= 2 and re.fullmatch(r"-\d+", fields[0])
+                        and re.fullmatch(r"[a-f0-9]{32}", fields[1]) and fields[1] != current):
+                    records.append((int(fields[0]), fields[1]))
+            for offset, identifier in sorted(set(records), reverse=True)[:2]:
+                boots.append((identifier, f"Available previous boot (offset {offset} at collection time)"))
+
+        matches = ["_TRANSPORT=kernel", "+", "_PID=1"]
+        units = ("nobara-updater-offline.service", "nobara-updater-confirm.service", "nobara-updater-recovery.service",
+                 "nobara-updater-fallback-reboot.service", "systemd-journald.service", "systemd-udevd.service",
+                 "dracut-cmdline.service", "dracut-initqueue.service", "dracut-pre-mount.service",
+                 "dracut-mount.service", "dracut-pre-pivot.service", "display-manager.service",
+                 "plasmalogin.service", "sddm.service", "gdm.service", "lightdm.service")
+        for unit in units:
+            matches.extend(["+", "_SYSTEMD_UNIT=" + unit])
+        budget = max(1024, (LIMIT - 16384) // len(boots))
+        for identifier, label in boots:
+            contents = query(["--boot=" + identifier, "-o", "short-iso", "-n", "4000", *matches], budget)
+            # Kernel/dracut messages can repeat arbitrary boot arguments. Use
+            # the same selector-only policy as the existing boot diagnostics.
+            contents = re.sub(r"(?m)(^.*(?:[Cc]ommand line|command line parameters): ?)([^\n]*)",
+                              lambda match: match[1] + boot_options(match[2]), contents)
+            notes.append(f"\n{label}; boot ID/selector: {identifier}\n{contents}")
+        contents = redact("\n".join(notes)).encode("utf-8")
+        if len(contents) > LIMIT:
+            marker = b"\n[Further journal output omitted to limit report size.]\n"
+            contents = contents[:LIMIT - len(marker)] + marker
+        # Write privately even if called outside the worker's restrictive umask.
+        fd, temporary = tempfile.mkstemp(dir=directory)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(contents)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    except Exception:
+        LOG.warning("Could not collect system boot journals; preserving update/recovery behavior.", exc_info=True)
+
+
 def boot_options(text: str) -> str:
     """Publish boot selectors, not arbitrary kernel arguments/secrets."""
     try:
@@ -380,6 +479,7 @@ def record_failure(state: dict, phase: str, error: Exception) -> None:
             capture_journal(directory / journal_name)
         except Exception:
             LOG.warning("Could not collect the journal; preserving the update failure report.", exc_info=True)
+        capture_system_journal(state, "failure")
         if not state.get("recovery", {}).get("created"):
             publish_failure(state)
         os.sync()
@@ -418,6 +518,7 @@ def record_service_failure(state: dict, phase: str, result: str, exit_code: str,
             atomic_json(path, report)
             capture_boot_diagnostics(state, "confirm" if phase == "confirm" else "failure")
             capture_journal(directory / f"failure-{phase}-journal.log")
+            capture_system_journal(state, "failure")
             if not state.get("recovery", {}).get("created"):
                 publish_failure(state)
             os.sync()
@@ -447,20 +548,31 @@ def publish_report(job: str, directory: Path, *, recovered: bool, started: bool,
     report.update(job=job, recovered=recovered, installation_started=started, active=True)
     if recovery_blocked:
         report.update(recovery_blocked=True, recovery_error=error)
+    # This also runs when a hard reset bypassed the worker's exception handler.
+    # Select storage from the report being imported, not the restored state.json.
+    capture_system_journal(dict(job=job, recovery={"created": directory == BOOT_REPORTS / job}),
+                           "report", previous=started)
     detail = "\n".join(tail(directory / name) for name in (
         "failure.log.1", "failure.log", "failure-build.log", "failure-journal.log",
         "failure-confirm-journal.log", "failure-execute-journal.log", "failure-recover-journal.log"))
     if not detail.strip():
         detail = "No separate failed-boot log was preserved. This updater log may be incomplete.\n" + tail(STATE_DIR / "update.log")
+    failure_detail = detail
     detail += "\n" + "\n".join("\n" + name + "\n" + tail(directory / name) for name in (
         "failure-boot.log", "confirm-boot.log", "recover-boot.log", "recovery-retry-before-boot.log",
         "recovery-retry-after-boot.log", "confirmation-retry-before-boot.log",
         "confirmation-retry-after-boot.log", "current-boot.log") if (directory / name).is_file())
+    detail += "\n" + "\n".join("\n" + name + "\n" + tail(directory / name) for name in (
+        "installation-system-journal.log", "confirmation-system-journal.log", "failure-system-journal.log",
+        "report-system-journal.log")
+        if (directory / name).is_file())
     guidance = instructions(recovered, started, recovery_blocked=recovery_blocked)
     # A hard crash may bypass record_failure. Use the saved pre-update origin
     # inventory only for exact packages identified in the surviving error log.
     if not report.get("package_conflicts") and report.get("package_origins"):
-        evidence = "\n".join(line for line in detail.splitlines()
+        # Available boot history may describe an unrelated older failure.
+        # It is context for humans, not evidence against this job's packages.
+        evidence = "\n".join(line for line in failure_detail.splitlines()
                              if re.search(r"(?i)conflict|requires |nothing provides|scriptlet.*fail|error:", line))
         error = annotate_failure(UpdateError(report["error"] + "\n" + evidence), report["package_origins"])
         report["package_conflicts"] = getattr(error, "package_conflicts", [])
@@ -471,7 +583,7 @@ def publish_report(job: str, directory: Path, *, recovered: bool, started: bool,
     report.pop("package_origins", None)
     text = redact(guidance + "\nFailure details\n" + json.dumps(report, indent=2) + "\n\nUpdate log\n" + detail)
     # These intentionally user-readable reports contain updater diagnostics,
-    # not the private transaction state, full journal, or credentials/configs.
+    # not the private transaction state, full user journals, or credentials/configs.
     REPORTS.mkdir(mode=0o755, parents=True, exist_ok=True)
     os.chmod(REPORTS, 0o755)
     destination = REPORTS / job

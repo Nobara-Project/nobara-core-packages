@@ -49,6 +49,7 @@ class BootDiagnosticsTests(unittest.TestCase):
                         patch.object(reports, "REPORTS", self.root / "public"),
                         patch.object(reports, "STATE_DIR", self.root / "state"),
                         patch.object(reports, "CMDLINE", self.cmdline),
+                        patch.object(reports, "capture_system_journal"),
                         patch.object(reports, "BOOT_ID", self.bootid), patch.object(reports.os, "sync"),
                         patch.object(reports.subprocess, "run", side_effect=self.command)):
             patcher.start()

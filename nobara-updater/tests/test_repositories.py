@@ -150,5 +150,67 @@ class RepositoryMigrationTests(unittest.TestCase):
         self.assertEqual(repo.get_config().get_excludepkgs_option().get_value(), ("custom-hold*",))
 
 
+class KernelFamilyTests(unittest.TestCase):
+    """A reset kernel repository file must not switch kernel families."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="nobara-kernel-family-")
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name)
+        self.repos = self.directory / "repos"
+        self.root = self.directory / "root"
+        self.job = self.directory / "job"
+        for path in (self.root, self.repos, self.job):
+            path.mkdir()
+        self.state = self.directory / "kernel-family"
+        patcher = patch.object(planner, "KERNEL_FAMILY_STATE", self.state)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for family in ("mainline", "lts"):
+            (self.repos / f"nobara-kernel-{family}.repo").write_text(
+                f"[nobara-kernel-{family}]\nname={family}\nbaseurl=https://mirror.example/{family}\nenabled=1\n")
+
+    def enabled_repos(self, installed):
+        base = RepositoryMigrationTests.base(self)
+        with patch.object(base_api, "Base", return_value=base), \
+             patch.object(repo_api.RepoSackWeakPtr, "load_repos"), \
+             patch.object(planner.subprocess, "run", return_value=Mock(stdout="".join(
+                 f"{name}\t{release}\n" for name, release in installed))):
+            base = planner.configure_base(self.job, "44")
+        self.addCleanup(base.unlock_system_repo)
+        return {repo.get_id() for repo in repo_api.RepoQuery(base)
+                if repo.get_config().get_enabled_option().get_value()}
+
+    def test_installed_family_is_inferred_only_from_one_nobara_family(self):
+        cases = {
+            "lts": ["201.lts.nobara.fc44", "202.lts.nobara.fc44"],
+            "mainline": ["202.nobara.fc44"],
+            None: ["201.lts.nobara.fc44", "202.nobara.fc44"],
+        }
+        for expected, releases in cases.items():
+            with self.subTest(releases=releases):
+                self.assertEqual(planner.selected_kernel_family(releases), expected)
+        self.assertIsNone(planner.selected_kernel_family(["1.cachyos.fc44"]))
+        self.assertIsNone(planner.selected_kernel_family([]))
+
+    def test_recorded_family_wins_over_installed_kernels(self):
+        self.state.write_text("lts\n")
+        self.assertEqual(planner.selected_kernel_family(["202.nobara.fc44"]), "lts")
+        self.state.write_text("unexpected\n")
+        self.assertEqual(planner.selected_kernel_family(["202.nobara.fc44"]), "mainline")
+
+    def test_other_family_repository_is_ignored_for_the_update(self):
+        lts = [("kernel-core", "201.lts.nobara.fc44"), ("bash", "1.fc44")]
+        self.assertEqual(self.enabled_repos(lts), {"nobara-kernel-lts"})
+        self.assertEqual(self.enabled_repos([("kernel-core", "202.nobara.fc44")]), {"nobara-kernel-mainline"})
+        # Repository files are not rewritten; nobara-repos restores them.
+        self.assertIn("enabled=1", (self.repos / "nobara-kernel-mainline.repo").read_text())
+
+    def test_unknown_family_leaves_repositories_unchanged(self):
+        mixed = [("kernel-core", "201.lts.nobara.fc44"), ("kernel-core", "202.nobara.fc44")]
+        self.assertEqual(self.enabled_repos(mixed), {"nobara-kernel-lts", "nobara-kernel-mainline"})
+        self.assertEqual(self.enabled_repos([]), {"nobara-kernel-lts", "nobara-kernel-mainline"})
+
+
 if __name__ == "__main__":
     unittest.main()

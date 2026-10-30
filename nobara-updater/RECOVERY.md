@@ -10,6 +10,13 @@ read the logs, or save a report for support. From a terminal, run:
 nobara-sync recovery-report
 ```
 
+The saved report and paste upload include bounded boot-journal excerpts as well
+as updater logs. Available previous boots are labeled with their boot IDs;
+rollback can hide the failed boot's journal, so `journalctl -b -1` may show the
+offline installation or an earlier recovery session instead. If support needs
+additional journals, first share `journalctl --list-boots` so the correct boot
+can be identified. Older updater versions may not have saved these excerpts.
+
 ## If automatic rollback restored your previous system
 
 For updates that require restarting, when automatic rollback is available:

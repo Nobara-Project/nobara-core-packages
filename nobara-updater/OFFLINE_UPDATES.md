@@ -659,6 +659,24 @@ successful confirmation, with the same retention period as LVM. Existing
 completed/recovered jobs also receive this cleanup at startup. Active recovered
 roots, referenced boot images, and snapshots owned by other tools are preserved.
 
+Boot backup tarballs under `/var/lib/nobara-updater/jobs/<id>/` have a separate
+cleanup pass. Older Btrfs cleanup removed snapshots and the `/boot` job archive
+but omitted `boot.tar` and `efi.tar`. After confirmation, and before a later
+preparation, obsolete tarballs are now removed, including leftovers from jobs
+whose `recovery_cleanup_complete` flag was already set. Later confirmed boots
+and live/no-change states also retry this pass. The pass requires terminal job
+state, no update/recovery trigger or root-layout journal, a mounted separate
+`/boot`, and a normal GRUB selection without an armed trial. It preserves any
+job whose boot archive directory, recovery/restored entry, or unfinished current
+recovery cleanup still references it. Unknown names, symlinks and mountpoints
+are not followed. Job metadata and diagnostics are retained.
+
+`sudo nobara-sync clean-update-cache` runs the same checks under the updater
+lock, removes eligible boot tarballs and obsolete download directories, and
+reports retained archives. It never starts an update, confirms startup, changes
+GRUB selection, or removes snapshots. A refused explicit cleanup returns failure
+without changing the update state; automatic cleanup errors only log a warning.
+
 Release `2.0.1-49` runs native DNF with umask `022` while retaining `077` for
 private updater state. This keeps DNF's system-state TOMLs readable by ordinary
 users. The RPM post-transaction script repairs the six known TOMLs written with
@@ -759,6 +777,24 @@ missing inventory record requires a fresh check. Release, selected kernel,
 running-kernel modules and display-manager checks still apply. The confirmation
 service allows up to 15 minutes for slow disks, checks and cleanup, instead of
 the former three-minute deadline. This is a limit, not a mandatory boot delay.
+
+Reports also include bounded system boot journal excerpts: kernel and system
+manager messages, updater services, initramfs services, and login managers.
+The offline boot is captured after installation validation, before restarting;
+the updated boot is captured when startup confirmation begins. These excerpts
+are saved beside the rollback diagnostics on separate `/boot` when recovery is
+available. Report publication adds the current boot and up to two previous
+boots still present in the system journal, identified by boot ID and timestamps.
+Each excerpt file is limited to 1 MiB and collection has short timeouts; missing
+journals never prevent an update or recovery. User-session journals are excluded.
+The excerpts are included in both the text upload and offline report bundle.
+
+Available journal history is not necessarily the actual sequence of boots.
+Restoring a root snapshot can hide the failed system's `/var/log/journal`, and
+volatile logging or a hard reset can leave no journal for the failed startup.
+The report labels this limitation rather than treating `journalctl -b -1` as
+proof of the failed boot. The saved excerpts do not guarantee evidence of a
+failure that occurs before the confirmation worker starts.
 
 Desktop login shows a notice once per recovered job per user. **System Update
 Recovery** in the application menu reopens its error, log viewer, offline Save
