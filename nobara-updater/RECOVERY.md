@@ -84,6 +84,26 @@ is needed to address that failure. Review the error, resolve the conflict,
 and run the updater again. Restart only if the updater asks you to after
 preparing the new update.
 
+### If GRUB's boot entries are turned off
+
+If preparation reports `GRUB_ENABLE_BLSCFG=false`, GRUB is not reading the
+boot entries of installed kernels (`/boot/loader/entries`). It boots from a
+fixed menu in `/boot/grub2/grub.cfg` instead, so newly installed kernels never
+appear and the computer keeps starting an older one. GRUB editors such as
+Grub Customizer can turn this setting off.
+
+1. Turn the entries back on and rebuild the menu:
+
+   ```
+   sudo sed -i "s/^GRUB_ENABLE_BLSCFG=.*/GRUB_ENABLE_BLSCFG=true/" /etc/default/grub
+   sudo grub2-mkconfig -o /boot/grub2/grub.cfg
+   ```
+
+2. Restart. The menu now lists every installed kernel.
+3. Run the updater again.
+
+Stop using the GRUB editor afterwards, or it may turn the setting off again.
+
 ### If a swapfile blocks a Btrfs recovery snapshot
 
 The updater names swapfiles that are active or listed in `/etc/fstab` and belong

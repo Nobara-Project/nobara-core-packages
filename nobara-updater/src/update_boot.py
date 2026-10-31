@@ -71,10 +71,28 @@ def output(command: list[str]) -> str:
     return result.stdout.strip()
 
 
+def bls_disabled() -> bool:
+    """Whether /etc/default/grub turns off GRUB's BLS entries (last setting wins)."""
+    try:
+        text = GRUB_DEFAULTS.read_text()
+    except OSError:
+        return False
+    values = re.findall(r"""(?m)^\s*GRUB_ENABLE_BLSCFG\s*=\s*["']?([A-Za-z]*)["']?\s*$""", text)
+    return bool(values) and values[-1].lower() == "false"
+
+
 def check_selection_support() -> None:
     """Fail during preparation, before changing RPMs, on unsupported layouts."""
     config = BOOT / "grub2/grub.cfg"
     if not config.is_file() or not re.search(r"(?m)^\s*blscfg(?:\s|$)", config.read_text()):
+        if bls_disabled():
+            # GRUB editors such as Grub Customizer turn this off. GRUB then
+            # boots a static menu that never lists newly installed kernels.
+            raise UpdateError(
+                "GRUB is set not to use the boot entries of installed kernels "
+                "(GRUB_ENABLE_BLSCFG=false in /etc/default/grub), so new kernels never reach the boot menu. "
+                "Set GRUB_ENABLE_BLSCFG=true in /etc/default/grub, run "
+                "'sudo grub2-mkconfig -o /boot/grub2/grub.cfg', restart, and update again.")
         raise UpdateError("Automatic kernel selection requires Nobara's GRUB/BLS boot configuration.")
     if not GRUB_DEFAULTS.is_file():
         raise UpdateError("The GRUB default configuration is missing.")

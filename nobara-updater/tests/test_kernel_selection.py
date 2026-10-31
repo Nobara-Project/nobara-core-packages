@@ -148,6 +148,18 @@ class BootTreeTests(unittest.TestCase):
         with self.assertRaisesRegex(state.UpdateError, "GRUB/BLS"):
             boot.check_selection_support()
 
+    def test_disabled_bls_explains_how_to_turn_it_back_on(self):
+        # Issue #153: a GRUB editor wrote GRUB_ENABLE_BLSCFG='false', so the
+        # static menu stopped listing new kernels.
+        self.config.write_text("### BEGIN /etc/grub.d/10_linux ###\nmenuentry 'Nobara Linux' {\n}\n")
+        self.defaults.write_text("GRUB_DEFAULT='saved'\nGRUB_ENABLE_BLSCFG='false'\nGRUB_TIMEOUT='5'\n")
+        with self.assertRaisesRegex(state.UpdateError, "GRUB_ENABLE_BLSCFG=true.*grub2-mkconfig"):
+            boot.check_selection_support()
+        # A later setting wins, and other layouts keep the generic message.
+        self.defaults.write_text("GRUB_ENABLE_BLSCFG=false\nGRUB_ENABLE_BLSCFG=true\n")
+        with self.assertRaisesRegex(state.UpdateError, "requires Nobara's GRUB/BLS"):
+            boot.check_selection_support()
+
     def test_uki_only_layout_is_rejected_before_installation(self):
         for entry in self.entries.glob("*.conf"):
             entry.unlink()
