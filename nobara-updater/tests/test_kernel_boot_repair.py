@@ -228,14 +228,31 @@ class BootRepairTests(unittest.TestCase):
             boot.validate_grub_initramfs(KERNEL, self.run_command)
         variables.assert_not_called()
 
-    def test_installer_and_grub_hook_errors_are_not_ignored(self):
-        for command, layout in (("kernel-install", "other"), ("env", "bls")):
-            with self.subTest(command=command):
-                self.layout = layout
-                self.fail = command
-                with self.assertRaisesRegex(UpdateError, "simulated"):
-                    self.validate()
-                self.assertFalse(self.initrd.exists())
+    def test_grub_hook_errors_are_not_ignored(self):
+        self.layout = "bls"
+        self.fail = "env"
+        with self.assertRaisesRegex(UpdateError, "simulated"):
+            self.validate()
+        self.assertFalse(self.initrd.exists())
+
+    def test_rejected_boot_path_falls_back_to_the_grub_hook(self):
+        # Issues #156/#159: systemd rejects --boot-path on a plain Linux
+        # filesystem /boot ("Partition has wrong PART_ENTRY_TYPE ... for
+        # XBOOTLDR partition"); the distribution hook must still repair it.
+        self.fail = "kernel-install"
+        with self.assertLogs(boot.LOG, "WARNING") as logs:
+            self.validate()
+        self.assertEqual([c[0] for c in self.commands], ["kernel-install", "env", "dracut", "lsinitrd"])
+        self.assertEqual(boot.kernel_entry(KERNEL), self.entry.stem)
+        self.assertEqual(self.initrd.read_text(), "new initramfs")
+        self.assertTrue(any("using the distribution GRUB hook" in line for line in logs.output))
+
+    def test_rejected_boot_path_and_noop_grub_hook_still_fail(self):
+        self.fail = "kernel-install"
+        self.hook_repairs = False
+        with self.assertRaisesRegex(UpdateError, "Could not restore GRUB boot files"):
+            self.validate()
+        self.assertFalse(self.initrd.exists())
 
     def test_successful_noop_grub_hook_still_fails_validation(self):
         self.layout = "bls"

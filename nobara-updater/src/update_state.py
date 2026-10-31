@@ -187,7 +187,11 @@ def rpm_fingerprint() -> str:
         ["rpm", "-qa", "--qf", "%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}|%{INSTALLTIME}\n"],
         capture_output=True, text=True, check=True,
     )
-    return inventory_digest(result.stdout)
+    # Signature checks import repository keys as gpg-pubkey entries, even in
+    # DNF test transactions. Keys are not installed software; counting them
+    # made a fresh install's first key import look like a package change.
+    return inventory_digest("\n".join(line for line in result.stdout.splitlines()
+                                      if not line.startswith("gpg-pubkey|")))
 
 
 def verify_files(job: Path, manifest: dict[str, str]) -> None:

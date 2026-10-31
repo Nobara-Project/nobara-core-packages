@@ -20,8 +20,10 @@ from nobara_updater import update_backend as backend
 from nobara_updater.update_migrations import add_codec_migration, plan_migrations
 from nobara_updater.update_plan import validate_removals
 from nobara_updater.update_recovery import replace_subvolume
+from nobara_updater import update_state
 from nobara_updater.update_state import (UpdateError, atomic_json, file_digest, inventory_digest,
-                                         os_release, read_state, update_lock, verify_files, write_state)
+                                         os_release, read_state, rpm_fingerprint, update_lock, verify_files,
+                                         write_state)
 
 
 def package(name, arch="x86_64", **fields):
@@ -124,6 +126,17 @@ class StateTests(unittest.TestCase):
     def test_inventory_fingerprint_ignores_order_but_not_version_changes(self):
         self.assertEqual(inventory_digest("a\nb\n"), inventory_digest("b\na\n"))
         self.assertNotEqual(inventory_digest("a-1\n"), inventory_digest("a-2\n"))
+
+    def test_rpm_fingerprint_ignores_imported_signing_keys(self):
+        # A fresh install imports Nobara's COPR keys during the first signature
+        # check; that must not look like an installed-package change.
+        packages = "bash|0|5.3|1.fc44|x86_64|100\nnobara-updater|0|2.0.1|76.fc44|noarch|100\n"
+        key = "gpg-pubkey|0|993095ef51c21d41aa732a6a392d4fb85053b10d|6a0e2cb1|(none)|200\n"
+        def fingerprint(output):
+            with patch.object(update_state.subprocess, "run", return_value=Mock(stdout=output)):
+                return rpm_fingerprint()
+        self.assertEqual(fingerprint(packages), fingerprint(packages + key))
+        self.assertNotEqual(fingerprint(packages), fingerprint(packages.replace("76.fc44", "82.fc44")))
 
     def test_integrity_rejects_tampering_and_path_escape(self):
         with tempfile.TemporaryDirectory() as directory:

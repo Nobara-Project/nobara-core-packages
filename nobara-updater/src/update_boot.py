@@ -210,11 +210,18 @@ def ensure_grub_kernel(kernel: str, run) -> str:
     if details.get("KernelImageType") == "uki":
         raise UpdateError(f"The packaged image for {kernel} is a UKI; automatic selection requires a split GRUB kernel.")
     if details.get("Layout") not in {"bls", "uki"}:
-        run(["kernel-install", "--boot-path=" + str(BOOT), "add", kernel, str(source)])
         try:
-            return selected_entry()
-        except UpdateError:
-            pass
+            run(["kernel-install", "--boot-path=" + str(BOOT), "add", kernel, str(source)])
+        except UpdateError as error:
+            # kernel-install only accepts an explicit --boot-path on an XBOOTLDR
+            # or EFI System partition. A Fedora-style /boot has the plain Linux
+            # filesystem type, so continue with the distribution GRUB hook.
+            LOG.warning("kernel-install could not repair %s; using the distribution GRUB hook: %s", kernel, error)
+        else:
+            try:
+                return selected_entry()
+            except UpdateError:
+                pass
 
     # Do not bypass an administrator's disabled/replaced GRUB plugin. Its
     # normal invocation during RPM installation already had the opportunity
