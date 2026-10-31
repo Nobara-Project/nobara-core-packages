@@ -275,7 +275,7 @@ def boot_payloads(entry: Path) -> list[Path]:
     return [source for key in ("linux", "initrd") for value in fields[key] for source in boot_files(key, value, variables)]
 
 
-def recovery_entry(entry: Path, job_id: str, subvolume: str) -> str:
+def recovery_entry(entry: Path, job_id: str, subvolume: str, *, recovery: dict) -> str:
     """Copy the entry's boot images into the job archive and return its recovery entry.
 
     GRUB variables are written resolved, so the entry depends only on the archive.
@@ -304,7 +304,7 @@ def recovery_entry(entry: Path, job_id: str, subvolume: str) -> str:
                 # A normal entry rebuilt from this one after a rollback must not
                 # pin TuneD's current values; synchronize_boot_root() restores this.
                 atomic_json(destination / "bls-source.json", {"options": value})
-            line = "options " + replace_subvolume(" ".join(expand_bls(key, value, variables)), subvolume)
+            line = "options " + recovery_options(" ".join(expand_bls(key, value, variables)), recovery)
         entry_lines.append(line)
     return "\n".join(entry_lines) + "\n"
 
@@ -624,9 +624,9 @@ def create_recovery(job: Path, layout: dict, *, boot_space: dict | None = None) 
         atomic_json(restored / "etc/nobara-updater-recovery.json", {"job": job_id, "original_subvolume": layout["fsroot"]})
     finally:
         subprocess.run(["umount", str(mountpoint)], check=True)
-    text = recovery_entry(Path(layout["entry"]), job_id, relative)
     entry_id = "nobara-recovery-" + job_id
     result = dict(layout, entry_id=entry_id, subvolume=relative, created=True)
+    text = recovery_entry(Path(layout["entry"]), job_id, relative, recovery=result)
     save_recovery_entry(result, text)
     os.sync()
     return result

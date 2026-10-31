@@ -129,14 +129,17 @@ class TunedBootEntryTests(unittest.TestCase):
         (self.boot / "tuned-initrd.img").write_text("overlay")
         self.grub_cfg(tuned_block(params="skew_tick=1 nohz=on", initrd="/tuned-initrd.img"))
         subvolume = ".nobara-updater/" + JOB + "/root"
-        text = recovery.recovery_entry(self.entry, JOB, subvolume)
+        text = recovery.recovery_entry(self.entry, JOB, subvolume,
+                                       recovery=dict(uuid=UUID, entry_id="nobara-recovery-" + JOB))
         fields = dict(line.split(" ", 1) for line in text.splitlines())
         archive = self.boot / "nobara-updater" / JOB
         self.assertEqual(fields["linux"], f"/nobara-updater/{JOB}/linux-0-vmlinuz-{KERNEL}")
         self.assertEqual(fields["initrd"].split(), [f"/nobara-updater/{JOB}/initrd-0-initramfs-{KERNEL}.img",
                                                     f"/nobara-updater/{JOB}/initrd-1-tuned-initrd.img"])
         self.assertEqual((archive / "initrd-1-tuned-initrd.img").read_text(), "overlay")
-        self.assertEqual(fields["options"].split()[-3:], ["skew_tick=1", "nohz=on", "rootflags=subvol=" + subvolume])
+        for token in ("skew_tick=1", "nohz=on", "root=UUID=" + UUID,
+                      "rootflags=subvol=" + subvolume):
+            self.assertIn(token, fields["options"].split())
         self.assertNotIn("$", fields["linux"] + fields["initrd"] + fields["options"])
         self.assertEqual(fields["grub_users"], "$grub_users")
         self.assertEqual(fields["title"], "Nobara — previous system (" + JOB[:8] + ")")
@@ -146,8 +149,61 @@ class TunedBootEntryTests(unittest.TestCase):
 
     def test_entries_without_tuned_params_write_no_options_record(self):
         self.entry.write_text(ENTRY.replace(" $tuned_params", ""))
-        recovery.recovery_entry(self.entry, JOB, ".nobara-updater/" + JOB + "/root")
+        recovery.recovery_entry(self.entry, JOB, ".nobara-updater/" + JOB + "/root",
+                                recovery=dict(uuid=UUID, entry_id="nobara-recovery-" + JOB))
         self.assertFalse((self.boot / "nobara-updater" / JOB / "bls-source.json").exists())
+
+
+    def test_btrfs_builder_normalizes_root_selectors_before_validation(self):
+        roots = (
+            "root=/dev/mapper/vg0-lv_root",
+            "root=/dev/vg0/lv_root",
+            "root=UUID=" + UUID,
+            "root=UUID=00000000-0000-0000-0000-000000000000",
+        )
+        for index, root in enumerate(roots):
+            with self.subTest(root=root):
+                job = f"{index:032x}"
+                subvolume = ".nobara-updater/" + job + "/root"
+                layout = dict(uuid=UUID, entry_id="nobara-recovery-" + job,
+                              subvolume=subvolume)
+                self.entry.write_text(
+                    ENTRY.replace("root=UUID=" + UUID, root).replace(
+                        "rootflags=subvol=@",
+                        "rootflags=subvol=@,subvolid=256,compress=zstd"))
+                text = recovery.recovery_entry(
+                    self.entry, job, subvolume, recovery=layout)
+                recovery.validate_recovery_entry(text, layout)
+                fields = dict(line.split(None, 1) for line in text.splitlines())
+                options = fields["options"].split()
+                self.assertEqual(
+                    [token for token in options if token.startswith("root=")],
+                    ["root=UUID=" + UUID])
+                self.assertEqual(
+                    [token for token in options if token.startswith("rootflags=")],
+                    ["rootflags=compress=zstd,subvol=" + subvolume])
+                for token in ("ro", "quiet", "splash",
+                              "rd.driver.blacklist=nouveau"):
+                    self.assertIn(token, options)
+
+    def test_generated_btrfs_entry_still_rejects_changed_root_selectors(self):
+        subvolume = ".nobara-updater/" + JOB + "/root"
+        layout = dict(uuid=UUID, entry_id="nobara-recovery-" + JOB,
+                      subvolume=subvolume)
+        text = recovery.recovery_entry(
+            self.entry, JOB, subvolume, recovery=layout)
+        recovery.validate_recovery_entry(text, layout)
+        corruptions = (
+            text.replace("root=UUID=" + UUID,
+                         "root=UUID=00000000-0000-0000-0000-000000000000"),
+            text.replace("subvol=" + subvolume, "subvol=@"),
+            text.replace("options ", "options root=/dev/wrong ", 1),
+        )
+        for corrupted in corruptions:
+            with self.subTest(entry=corrupted):
+                with self.assertRaisesRegex(UpdateError, "no longer selects"):
+                    recovery.validate_recovery_entry(corrupted, layout)
+
 
 
 if __name__ == "__main__":
