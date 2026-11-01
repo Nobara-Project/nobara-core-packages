@@ -1200,6 +1200,18 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
              patch.object(planner, "plan_migrations", side_effect=AssertionError("Too early for main fixups")):
             return planner.prepare_early_transaction(self.job, backend.EARLY_PACKAGES)
 
+    def test_early_upgrade_delivers_repository_definitions(self):
+        # Its scriptlet repairs the enabled kernel family and NVIDIA branch
+        # before the main plan resolves against them.
+        self.updater_fixture("3")
+        self.install_health_fixture("nobara-repos", "1")
+        shutil.copy2(self.build_rpm("nobara-repos", "2"), self.repo)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+        self.prepare_early()
+        saved = json.loads((self.job / "transaction.json").read_text())
+        payloads = {Path(p["package_path"]).name for p in saved["rpms"] if "package_path" in p}
+        self.assertEqual(payloads, {"nobara-updater-3-1.noarch.rpm", "nobara-repos-2-1.noarch.rpm"})
+
     def test_early_upgrade_selects_both_helpers_but_leaves_unrelated_updates(self):
         self.updater_fixture("3")
         self.install_health_fixture("drm-awaiter", "1")

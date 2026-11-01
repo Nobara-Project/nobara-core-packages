@@ -44,7 +44,7 @@ class EarlyUpgradeTests(unittest.TestCase):
             backend.upgrade_early(self.root)
         self.assertEqual(calls, [True, False])
         self.assertEqual(planner.prepare_early_transaction.call_args.args[1],
-                         ("nobara-updater", "drm-awaiter"))
+                         ("nobara-updater", "drm-awaiter", "nobara-repos"))
         prune.assert_not_called()
         self.assertEqual(read_state(self.root)["status"], "idle")
 
@@ -94,7 +94,7 @@ class EarlyUpgradeTests(unittest.TestCase):
         backend.maintain_btrfs_root.return_value = False
         backend.upgrade_early(self.root)
         self.assertEqual(planner.prepare_early_transaction.call_args.args[1],
-                         ("nobara-updater", "drm-awaiter"))
+                         ("nobara-updater", "drm-awaiter", "nobara-repos"))
         self.assertEqual(read_state(self.root)["status"], "idle")
 
     def test_installer_preserves_previous_kernel_confirmation(self):

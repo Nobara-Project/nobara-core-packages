@@ -25,7 +25,10 @@ from .update_state import (ACTIVE, STATE_DIR, TRIGGER, UpdateError, atomic_json,
 LOG = logging.getLogger(__name__)
 SPLASH = OfflineProgress()
 ENGINE_FILES = ("update_state.py", "update_migrations.py", "update_plan.py", "update_policy.py", "update_boot.py", "update_recovery.py", "update_lvm.py", "update_btrfs.py", "update_backend.py", "update_report.py", "update_origins.py", "update_codecs.py", "update_health.py", "update_repositories.py", "update_progress.py", "update_retention.py")
-EARLY_PACKAGES = ("nobara-updater", "drm-awaiter")
+# nobara-repos is early too: its scriptlet restores the user's kernel family and
+# NVIDIA branch, which the main plan must resolve against. A wrongly enabled
+# branch can make the main transaction fail, so it could never arrive there.
+EARLY_PACKAGES = ("nobara-updater", "drm-awaiter", "nobara-repos")
 
 
 def announce(message: str, *, percent: int | None = None) -> None:
@@ -212,7 +215,7 @@ def upgrade_early(root: Path = STATE_DIR, *, installer: bool = False) -> None:
         job.mkdir(parents=True, mode=0o700)
         write_state(root, state, "preparing")
         try:
-            LOG.info("Checking early upgrades for %s before preparing the system update.", " and ".join(EARLY_PACKAGES))
+            LOG.info("Checking early upgrades for %s before preparing the system update.", ", ".join(EARLY_PACKAGES))
             result = prepare_early_transaction(job, EARLY_PACKAGES)
             state["package_origins"] = result["package_origins"]
             if not result["empty"]:

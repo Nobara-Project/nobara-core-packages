@@ -11,13 +11,17 @@ welcome center's existing codec-wizard script.
 
 ## What happens
 
-Before a fresh preparation, the worker upgrades installed `nobara-updater` and
-`drm-awaiter` packages, plus required dependencies, in a separate live DNF5
-upgrade transaction. This ensures the current updater and initramfs helper are
-in place before main fixups, kernel cleanup, boot-space checks, or offline
-installation. In particular, the fixed `drm-awaiter` avoids the old helper's
-incorrect EFI initramfs destination on split-boot installations. This cannot
-create free space on a genuinely full filesystem.
+Before a fresh preparation, the worker upgrades installed `nobara-updater`,
+`drm-awaiter` and `nobara-repos` packages, plus required dependencies, in a
+separate live DNF5 upgrade transaction. This ensures the current updater and
+initramfs helper are in place before main fixups, kernel cleanup, boot-space
+checks, or offline installation. In particular, the fixed `drm-awaiter` avoids
+the old helper's incorrect EFI initramfs destination on split-boot
+installations. This cannot create free space on a genuinely full filesystem.
+`nobara-repos` restores the kernel family and NVIDIA driver branch the user
+chose, so the main plan resolves against the right repositories. If the wrong
+NVIDIA branch is enabled, the main transaction fails on driver conflicts, so a
+repository fix could never arrive with it.
 
 The early transaction uses fresh private metadata, repository priorities and
 excludes, signature verification, and native RPM replay
