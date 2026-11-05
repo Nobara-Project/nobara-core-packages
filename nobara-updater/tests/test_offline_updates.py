@@ -59,6 +59,14 @@ class MigrationTests(unittest.TestCase):
         self.assertIn("dkms-nvidia", result.install)
         self.assertIn("nvidia-closed", result.hooks)
 
+    def test_nvidia_migration_keeps_replacement_stack_dependencies(self):
+        installed = [package("akmod-nvidia", epoch="3"), package("nvidia-driver-libs", epoch="3"),
+                     package("libnvidia-gpucomp", epoch="3"), package("libnvidia-gpucomp", "i686", epoch="3")]
+        result = plan_migrations(installed)
+        self.assertIn("akmod-nvidia", result.remove)
+        self.assertNotIn("libnvidia-gpucomp", result.remove)
+        self.assertNotIn("libnvidia-gpucomp", result.install)
+
     def test_codec_transition_preserves_architecture_and_has_no_erase_reinstall_overlap(self):
         installed = [package("mesa-libgallium"), package("mesa-vulkan-drivers-git"), package("ffmpeg-libs", "i686")]
         plan = plan_migrations(installed)

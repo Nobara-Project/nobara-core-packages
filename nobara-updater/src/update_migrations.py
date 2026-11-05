@@ -43,6 +43,9 @@ NVIDIA = {
     "nvidia-modprobe", "nvidia-persistenced", "nvidia-settings", "nvidia-xconfig",
     "libva-nvidia-driver", "nvidia-gpu-firmware", "libnvidia-cfg",
 }
+# Required by the replacement stack (nvidia-driver-libs, nvidia-driver-cuda-libs)
+# but not available on every branch, so keep them without forcing an install.
+NVIDIA_DEPENDENCIES = {"libnvidia-gpucomp"}
 OLD_ROCM = {
     "comgr", "hip-devel", "hip-runtime-amd", "hipcc", "hsa-rocr", "hsa-rocr-devel",
     "hsakmt-roct-devel", "openmp-extras-runtime", "rocm-core", "rocm-device-libs",
@@ -84,6 +87,7 @@ def plan_migrations(installed: list[dict], *, product: str = "", nvidia_closed: 
         # Same-name packages are synchronized/downgraded rather than removed
         # and reinstalled in separate transactions.
         replacement_names = {spec.rsplit(".", 1)[0] if spec.endswith((".i686", ".x86_64")) else spec for spec in NVIDIA}
+        replacement_names |= NVIDIA_DEPENDENCIES
         plan.remove.update(name for name in names if "nvidia" in name and name not in replacement_names)
         plan.install.update(NVIDIA)
         plan.hooks.append("nvidia-closed" if nvidia_closed else "nvidia")
