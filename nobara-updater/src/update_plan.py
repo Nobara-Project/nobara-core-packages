@@ -18,7 +18,7 @@ import libdnf5.rpm as rpm_api
 import libdnf5.transaction as trans
 
 from .update_migrations import BGRT_FILES, add_codec_migration, add_plymouth_migration, machine_product, plan_migrations
-from .update_boot import changes_kernel, check_selection_support, boot_space_requirements, installed_boot_kernels
+from .update_boot import changes_kernel, check_selection_support, boot_space_requirements, eac_kernel, installed_boot_kernels
 from .update_policy import execution_policy, format_restart_reasons
 from .update_origins import PackageOriginError, collect_package_origins, annotate_failure
 from .update_state import UpdateError, atomic_json, file_digest, os_release, rpm_fingerprint
@@ -581,6 +581,12 @@ def add_kernel_development(base, goal, transaction, settings, hooks, origins):
             # installed. In a chroot it may not be one of the target's kernels;
             # keep all targets mandatory when we cannot identify the next boot.
             required.update({running} if running in retained else retained)
+    # DKMS and akmods don't build for EAC kernels (see eac_kernel()), so they
+    # need no development files, and lacking them never marks them preserved.
+    for kernel in sorted(k for k in targets if eac_kernel(k)):
+        LOG.info("Not requesting development files for Easy Anti-Cheat kernel %s: it only loads Nobara-signed modules.", kernel)
+    targets = {k for k in targets if not eac_kernel(k)}
+    required = {k for k in required if not eac_kernel(k)}
     for kernel in sorted(targets):
         spec = "kernel-devel-uname-r = " + kernel
         providers = rpm_api.PackageQuery(base)

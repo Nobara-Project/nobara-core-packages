@@ -1675,6 +1675,36 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertEqual(result["preserved_kernels"], [])
         self.assertEqual(len([p for p in result["packages"] if p["name"] == "kernel-lto-devel"]), 2)
 
+    def test_eac_kernel_needs_no_development_files(self):
+        # kernel-eac loads only Nobara-signed modules: no kernel-eac-devel is
+        # requested, and its absence neither stops the update nor preserves it
+        self.kernel_development_fixture()
+        installed = self.build_rpm("kernel-eac-core", "1", headers=(
+            "Provides: kernel-uname-r = 1-1.eac.noarch\nProvides: installonlypkg(kernel)"),
+            payload="/usr/lib/modules/1-1.eac.noarch/vmlinuz")
+        subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts",
+                        "--noplugins", "--ignoresize", "-i", str(installed)], check=True, capture_output=True)
+        self.set_origin("kernel-eac-core", "nobara-kernel-mainline")
+        shutil.copy2(self.build_rpm("kernel-eac-core", "2", headers=(
+            "Provides: kernel-uname-r = 2-1.eac.noarch\nProvides: installonlypkg(kernel)"),
+            payload="/usr/lib/modules/2-1.eac.noarch/vmlinuz"), self.repo)
+        subprocess.run(["createrepo_c", str(self.repo)], check=True, capture_output=True)
+        with patch.object(planner, "check_selection_support"):
+            result = self.prepare()
+        self.assertTrue(any(p["name"] == "kernel-eac-core" and p["action"] == "Install" for p in result["packages"]))
+        self.assertTrue(any(p["name"] == "kernel-lto-devel" for p in result["packages"]))
+        self.assertFalse(any("devel" in p["name"] and "eac" in p["name"] for p in result["packages"]))
+        self.assertEqual(result["preserved_kernels"], [])
+
+    def test_retained_eac_kernel_is_not_preserved_or_rebuilt(self):
+        self.kernel_rebuild_fixture()
+        eac = "1-1.eac.noarch"
+        self.retained_kernel_fixture(eac)
+        with patch.object(planner, "check_selection_support"), self.assertLogs(planner.LOG, level="INFO") as logs:
+            result = self.prepare()
+        self.assertEqual(result["preserved_kernels"], [])
+        self.assertTrue(any(eac in line and "Easy Anti-Cheat" in line for line in logs.output))
+
     def test_obsoletes_can_replace_local_package_under_a_different_name(self):
         self.local_desktop_fixture()
         replacement = self.build_rpm("replacement-desktop", "1", headers="Obsoletes: labwc < 99\nProvides: labwc = 6")

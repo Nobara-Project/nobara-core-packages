@@ -476,10 +476,16 @@ used only by those drivers. Shared dependencies required by protected media
 packages remain protected, as do Mesa's VA-API and Gallium codec packages.
 The Codec Wizard can still select its usual freeworld Vulkan variants.
 
+Applications that bundle private copies of system libraries are not
+protected either. Browsers such as Opera, Opera GX and Helium ship their own
+`libvulkan.so.1` or `libEGL.so` and advertise them as RPM provides. When a
+protected package needs a library that several packages provide, only the
+packages that install it where the dynamic linker looks (`/usr/lib64`,
+`/usr/lib`, `/lib64`, `/lib` and the directories listed in
+`/etc/ld.so.conf.d`) are protected, so these applications can be removed
+normally. If no provider has such a system copy, all of them stay protected.
 The optional `helium-bin` browser and its browser-only dependencies are also
-excluded. Its bundled graphics libraries do not make it a protected codec;
-users can remove the browser normally. Shared system codec dependencies
-remain protected.
+excluded by name. Shared system codec dependencies remain protected.
 
 Use the **Codec Wizard** or `nobara-sync install-codecs` to change the codec
 family. System updates through `nobara-sync cli` can also perform Nobara's

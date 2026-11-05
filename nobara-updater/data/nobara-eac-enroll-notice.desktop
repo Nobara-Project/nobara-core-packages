@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Nobara Secure Boot Key Setup Notice
+Comment=Offer to enroll the Nobara Secure Boot keys for the Easy Anti-Cheat kernel
+Exec=/usr/libexec/nobara-eac-enroll-notice --notify
+Icon=security-high
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

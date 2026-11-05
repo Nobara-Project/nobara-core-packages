@@ -407,6 +407,7 @@ class KernelWorkflowTests(unittest.TestCase):
         with patch.object(backend.os, "uname", return_value=Mock(release=KERNEL)), \
              patch.object(Path, "is_dir", return_value=True), patch.object(Path, "unlink"), \
              patch.object(Path, "exists", lambda p: str(p) == "/etc/systemd/system/display-manager.service"), \
+             patch.object(backend, "booting_graphical", return_value=True), \
              patch.object(backend, "check_installed_packages") as check, \
              patch.object(backend, "confirm_trial") as confirmed:
             backend.confirm_boot(self.root)
@@ -414,6 +415,30 @@ class KernelWorkflowTests(unittest.TestCase):
         backend.run.assert_called_once_with(["systemctl", "is-active", "--quiet", "display-manager.service"])
         confirmed.assert_called_once_with("normal")
         self.assertEqual(state.read_state(self.root)["status"], "complete")
+
+    def test_headless_boot_with_enabled_login_manager_is_confirmed(self):
+        state.write_state(self.root, dict(self.saved), "awaiting-boot", installed_fingerprint="fixture",
+                          boot_selection=dict(kernel=KERNEL), trial_entry="normal")
+        with patch.object(backend.os, "uname", return_value=Mock(release=KERNEL)), \
+             patch.object(Path, "is_dir", return_value=True), patch.object(Path, "unlink"), \
+             patch.object(Path, "exists", lambda p: str(p) == "/etc/systemd/system/display-manager.service"), \
+             patch.object(backend, "booting_graphical", return_value=False), \
+             patch.object(backend, "check_installed_packages"), \
+             patch.object(backend, "confirm_trial") as confirmed:
+            backend.confirm_boot(self.root)
+        backend.run.assert_not_called()
+        confirmed.assert_called_once_with("normal")
+        self.assertEqual(state.read_state(self.root)["status"], "complete")
+
+    def test_graphical_boot_detection_follows_graphical_target_state(self):
+        for active_state, expected in (("active", True), ("activating", True), ("inactive", False), ("", False)):
+            with self.subTest(active_state=active_state), \
+                 patch.object(backend.subprocess, "run", return_value=Mock(stdout=active_state + "\n")) as systemctl:
+                self.assertIs(backend.booting_graphical(), expected)
+            systemctl.assert_called_once_with(["systemctl", "show", "--value", "--property=ActiveState", "graphical.target"],
+                                              capture_output=True, text=True, check=True, timeout=30)
+        with patch.object(backend.subprocess, "run", side_effect=backend.subprocess.CalledProcessError(1, "systemctl")):
+            self.assertTrue(backend.booting_graphical())
 
     def test_changed_and_legacy_inventories_still_require_dependency_check(self):
         for fingerprint in ("different-packages", None):

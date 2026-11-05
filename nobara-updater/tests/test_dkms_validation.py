@@ -146,6 +146,44 @@ class DkmsValidationTests(unittest.TestCase):
         backend.run.assert_any_call(["dkms", "autoinstall", "-k", KERNEL])
         self.assertFalse(any(old in call.args[0] for call in backend.run.call_args_list))
 
+    def test_eac_kernel_gets_boot_validation_without_dkms(self):
+        eac = "7.2.4-201.eac.nobara.fc44.x86_64"
+        with patch.object(backend.os, "uname", return_value=Mock(machine=ARCH, release=eac)), \
+             patch.object(backend.subprocess, "run",
+                          side_effect=lambda command, **kwargs: Mock(stdout=eac + "\n", returncode=0)
+                          if command[:3] == ["rpm", "-q", "--qf"] else self.fail(command)):
+            with self.assertRaises(ReachedInitramfs):
+                backend.validate_boot([dict(name="kernel-eac-core", action="Install", nevra="kernel-eac-core-fixture")])
+        self.assertFalse(any(call.args[0][0] in {"dkms", "akmods", "modinfo"} for call in backend.run.call_args_list))
+        backend.ensure_grub_kernel.assert_called_with(eac, backend.run)
+
+    def test_eac_kernel_is_skipped_when_all_kernels_are_rebuilt(self):
+        eac = "7.2.4-201.eac.nobara.fc44.x86_64"
+        calls = []
+
+        def run(command):
+            calls.append(command)
+            if command[0] == "dracut" and KERNEL in command:
+                raise ReachedInitramfs()
+
+        # The EAC kernel sorts first: let its boot files through, stop at the normal one
+        with patch.object(backend, "installed_boot_kernels", return_value={eac, KERNEL}), \
+             patch.object(backend, "run", side_effect=run), \
+             patch.object(backend, "validate_grub_initramfs"), \
+             patch.object(backend.os, "replace"):
+            with self.assertRaises(ReachedInitramfs):
+                backend.validate_boot([dict(name="kernel-core", action="Install", nevra="kernel-core-fixture")],
+                                      rebuild_all=True)
+        self.assertIn(["dkms", "autoinstall", "-k", KERNEL], calls)
+        self.assertIn(eac, next(c for c in calls if c[0] == "dracut"))
+        self.assertFalse(any(eac in c for c in calls if c[0] in {"dkms", "akmods", "modinfo"}))
+
+    def test_eac_kernel_detection(self):
+        self.assertTrue(boot.eac_kernel("7.3.0-204.eac.nobara.fc44.x86_64"))
+        self.assertTrue(boot.eac_kernel("6.18.55-201.lts.eac.nobara.fc44.x86_64"))
+        self.assertFalse(boot.eac_kernel(KERNEL))
+        self.assertFalse(boot.eac_kernel("6.18.55-201.lts.nobara.fc44.x86_64"))
+
     def test_preservation_cannot_bypass_new_kernel_validation(self):
         with self.assertRaisesRegex(UpdateError, "Cannot skip module and boot validation"):
             backend.validate_boot([dict(name="kernel-core", action="Install", nevra="kernel-core-fixture")],

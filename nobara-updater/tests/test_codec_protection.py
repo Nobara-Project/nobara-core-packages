@@ -183,6 +183,46 @@ class CodecGuardIntegrationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Nobara manages", result.stdout + result.stderr)
 
+    def install_fixture(self, specs):
+        for name, headers, arch, payload in specs:
+            package = self.build_rpm(name, "1", headers=headers, arch=arch, payload=payload)
+            subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts", "--noplugins",
+                            "--ignoresize", "-i", str(package)], check=True, capture_output=True)
+
+    def test_private_bundled_libraries_do_not_protect_their_application(self):
+        vulkan = "Provides: libvulkan.so.1()(64bit)"
+        (self.root / "etc/ld.so.conf.d").mkdir(parents=True, exist_ok=True)
+        (self.root / "etc/ld.so.conf.d/media.conf").write_text("/usr/lib64/media\n")
+        self.install_fixture((
+            # Opera GX ships its own libvulkan.so.1 outside the linker path.
+            ("opera-gx-stable", vulkan + "\nRequires: opera-private", "x86_64", "/usr/lib64/opera-gx/libvulkan.so.1"),
+            ("opera-private", "", "noarch", None),
+            ("vulkan-loader", vulkan, "x86_64", "/usr/lib64/libvulkan.so.1"),
+            # A system library in an ld.so.conf.d directory is still a real provider.
+            ("bundled-media", "Provides: libmedia.so.2()(64bit)", "x86_64", "/opt/bundled/libmedia.so.2"),
+            ("system-media", "Provides: libmedia.so.2()(64bit)", "x86_64", "/usr/lib64/media/libmedia.so.2"),
+            # Without any system copy, protection keeps every provider.
+            ("first-private", "Provides: libonly.so.3()(64bit)", "x86_64", "/opt/first/libonly.so.3"),
+            ("second-private", "Provides: libonly.so.3()(64bit)", "x86_64", "/opt/second/libonly.so.3"),
+            ("libheif", "Requires: libvulkan.so.1()(64bit)\nRequires: libmedia.so.2()(64bit)\n"
+                        "Requires: libonly.so.3()(64bit)", "x86_64", None),
+        ))
+        base = fixtures.configure_fixture_base(self.root, self.repos, self.job)
+        self.addCleanup(base.unlock_system_repo)
+        protected = installed_codec_dependencies(base)
+        for identity in (("opera-gx-stable", "x86_64"), ("opera-private", "noarch"), ("bundled-media", "x86_64")):
+            self.assertNotIn(identity, protected)
+        for identity in (("vulkan-loader", "x86_64"), ("system-media", "x86_64"),
+                         ("first-private", "x86_64"), ("second-private", "x86_64")):
+            self.assertIn(identity, protected)
+        base.unlock_system_repo()
+
+        result = self.run_dnf("remove", "opera-gx-stable")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.run_dnf("remove", "vulkan-loader")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Nobara manages", result.stdout + result.stderr)
+
     def test_dnf_swaps_all_vulkan_variants_with_multilib_and_protection_enabled(self):
         self.install_vulkan_fixture()
         for target in ("mesa-vulkan-drivers-freeworld", "mesa-vulkan-drivers-git-freeworld",

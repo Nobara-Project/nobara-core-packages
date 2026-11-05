@@ -778,7 +778,11 @@ Startup confirmation compares the installed RPM inventory with the inventory
 saved after successful installation validation. An unchanged inventory reuses
 the dependency/duplicate check already completed before reboot; a changed or
 missing inventory record requires a fresh check. Release, selected kernel,
-running-kernel modules and display-manager checks still apply. The confirmation
+running-kernel modules and display-manager checks still apply. The
+display-manager check applies only when the boot is starting graphical.target:
+a headless install that boots multi-user.target (as its default or from the
+kernel command line) with a login manager still enabled is not failed, and
+rolled back, for a login manager systemd never starts. The confirmation
 service allows up to 15 minutes for slow disks, checks and cleanup, instead of
 the former three-minute deadline. This is a limit, not a mandatory boot delay.
 

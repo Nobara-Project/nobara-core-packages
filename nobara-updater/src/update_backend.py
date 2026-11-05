@@ -13,7 +13,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root, installed_boot_kernels, reconcile_recovered_kernels, ensure_grub_kernel, validate_grub_initramfs
+from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root, installed_boot_kernels, reconcile_recovered_kernels, ensure_grub_kernel, validate_grub_initramfs, eac_kernel
 from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment, check_recovery_space, check_snapshot_swapfiles, restore_recovery_entry
 from .update_report import arm_report, publish_recovery, publish_failure, resolve_notice
 from .update_origins import annotate_failure
@@ -741,12 +741,15 @@ def validate_boot(packages: list[dict], *, rebuild_all: bool = False, preserved_
     kernels = set()
     incoming_boot_kernels = set()
     for item in packages:
-        if item["action"] in {"Install", "Upgrade", "Reinstall", "Downgrade"} and item["name"] in {"kernel", "kernel-core", "kernel-modules", "kernel-modules-core"}:
+        if item["action"] in {"Install", "Upgrade", "Reinstall", "Downgrade"} and item["name"] in {
+                "kernel", "kernel-core", "kernel-modules", "kernel-modules-core",
+                "kernel-eac", "kernel-eac-core", "kernel-eac-modules"}:
             # Ask RPM for the installed package version rather than parsing a
             # possibly epoch-qualified NEVRA with ambiguous hyphens.
             query = subprocess.run(["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}.%{ARCH}\n", item["nevra"]],
                                    capture_output=True, text=True, check=True)
             kernels.update(query.stdout.splitlines())
+            # The EAC kernel is validated, but the update selects the normal one
             if item["name"] in {"kernel", "kernel-core"}:
                 incoming_boot_kernels.update(query.stdout.splitlines())
     preserved = set(preserved_kernels)
@@ -768,7 +771,11 @@ def validate_boot(packages: list[dict], *, rebuild_all: bool = False, preserved_
     for kernel in sorted(kernels):
         if not re.fullmatch(r"[A-Za-z0-9_.+~-]+", kernel):
             raise UpdateError("Invalid target kernel version.")
-        if shutil.which("dkms"):
+        # EAC kernels load only Nobara-signed modules: DKMS and akmods don't
+        # serve them (no development files), only the boot files are checked.
+        if eac_kernel(kernel):
+            LOG.info("Skipping DKMS and akmods for Easy Anti-Cheat kernel %s.", kernel)
+        elif shutil.which("dkms"):
             environment = dict(os.environ, LC_ALL="C.UTF-8")
             architecture = os.uname().machine
             before = subprocess.run(["dkms", "status"], capture_output=True, text=True,
@@ -792,9 +799,10 @@ def validate_boot(packages: list[dict], *, rebuild_all: bool = False, preserved_
             if expected - installed:
                 raise UpdateError(f"DKMS did not confirm a clean installed state for kernel {kernel}: "
                                   f"{', '.join(sorted(expected - installed))}\nReported DKMS status:\n{detail}")
-        if shutil.which("akmods"):
+        if not eac_kernel(kernel) and shutil.which("akmods"):
             run(["akmods", "--force", "--kernels", kernel])
-        if subprocess.run(["rpm", "-q", "dkms-nvidia"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+        if not eac_kernel(kernel) and subprocess.run(["rpm", "-q", "dkms-nvidia"], stdout=subprocess.DEVNULL,
+                                                     stderr=subprocess.DEVNULL).returncode == 0:
             run(["modinfo", "-k", kernel, "nvidia"])
         ensure_grub_kernel(kernel, run)
         temporary = Path("/boot") / (".nobara-initramfs-" + kernel + ".img")
@@ -1134,5 +1142,27 @@ def validate_running_update(state: dict) -> None:
     # A desktop install must at least reach its login manager before its
     # recovery protection is retired. This does not certify every GPU or
     # application workload; those still need normal release testing.
-    if Path("/etc/systemd/system/display-manager.service").exists():
+    if Path("/etc/systemd/system/display-manager.service").exists() and booting_graphical():
         run(["systemctl", "is-active", "--quiet", "display-manager.service"])
+
+
+def booting_graphical() -> bool:
+    """Whether this boot is starting graphical.target.
+
+    A headless install can keep its login manager enabled while booting
+    multi-user.target (set as default or chosen on the kernel command line).
+    systemd then never starts the login manager, which is not an update
+    failure. The confirmation service runs after display-manager.service, so
+    on a graphical boot the target is already active or activating here.
+    """
+    try:
+        result = subprocess.run(["systemctl", "show", "--value", "--property=ActiveState", "graphical.target"],
+                                capture_output=True, text=True, check=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as error:
+        LOG.warning("Could not read the boot target state; requiring the login manager: %s", error)
+        return True
+    state = result.stdout.strip()
+    if state in {"active", "activating", "reloading"}:
+        return True
+    LOG.info("This boot is not starting graphical.target (%s); the login manager check is skipped.", state or "unknown")
+    return False

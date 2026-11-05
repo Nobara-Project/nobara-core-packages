@@ -25,6 +25,15 @@ GRUB_INSTALL_OVERRIDE = Path("/etc/kernel/install.d/20-grub.install")
 INBOUND = {"Install", "Upgrade", "Downgrade", "Reinstall"}
 
 
+def eac_kernel(kernel: str) -> bool:
+    """Whether a kernel version is a Nobara Easy Anti-Cheat kernel (kernel-eac).
+
+    It loads only modules signed by Nobara: its kmod-*-signed packages, never
+    DKMS or akmods builds, so it needs no development files or DKMS checks.
+    """
+    return ".eac." in kernel
+
+
 def installed_boot_kernels(root: Path = Path("/")) -> set[str]:
     """Ignore leftover module directories which have no kernel image to boot."""
     modules = root / "usr/lib/modules"

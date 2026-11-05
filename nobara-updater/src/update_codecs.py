@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
+from pathlib import Path
 
 from .update_state import UpdateError
 
@@ -36,15 +38,37 @@ CODEC_PACKAGES = (frozenset(CODEC_REPLACEMENTS) | frozenset(CODEC_REPLACEMENTS.v
                   | CODEC_MULTILIB | CODEC_NATIVE) - CODEC_PROTECTION_EXEMPTIONS
 
 
+SONAME = re.compile(r"([^/()\s]+\.so(?:\.[^()\s]*)?)(?:\(.*\))?")
+
+
+def linker_directories(root: str) -> set[str]:
+    """Directories the dynamic linker searches in the target installation."""
+    directories = {"/lib", "/lib64", "/usr/lib", "/usr/lib64"}
+    for config in sorted(Path(root, "etc/ld.so.conf.d").glob("*.conf")):
+        try:
+            lines = config.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        directories.update(line.strip().rstrip("/") for line in lines if line.strip().startswith("/"))
+    return directories
+
+
 def installed_codec_dependencies(base) -> set[tuple[str, str]]:
     """Include installed providers of strong dependencies, transitively.
 
     Use libsolv's dependency matching, including versioned, file and rich RPM
     dependencies. Keep architecture identity so a remaining 64-bit package
     does not authorize removing its protected 32-bit counterpart.
+
+    Applications that bundle private libraries (Opera, Helium and other
+    browsers ship their own libvulkan.so.1 or libEGL.so) also advertise them
+    as soname provides. The dynamic linker never loads those copies for
+    another package, so when a library dependency has several providers,
+    only those that install it in a linker directory are followed.
     """
     import libdnf5.rpm as rpm
 
+    directories = linker_directories(base.get_config().get_installroot_option().get_value())
     installed = rpm.PackageQuery(base)
     installed.filter_installed()
     # Exclude optional providers before walking dependencies, so neither their
@@ -61,9 +85,21 @@ def installed_codec_dependencies(base) -> set[tuple[str, str]]:
         providers = rpm.PackageQuery(base)
         providers.clear()
         for package in pending:
-            dependencies = rpm.PackageQuery(installed)
-            dependencies.filter_provides(package.get_requires())
-            providers.update(dependencies)
+            for requirement in package.get_requires():
+                dependencies = rpm.PackageQuery(installed)
+                dependencies.filter_provides(requirement)
+                library = SONAME.fullmatch(requirement.get_name())
+                if library and len({p.get_name() for p in dependencies}) > 1:
+                    linkable = rpm.PackageQuery(dependencies)
+                    linkable.clear()
+                    for provider in dependencies:
+                        if any(path.rsplit("/", 1)[-1] == library[1] and path.rsplit("/", 1)[0] in directories
+                               for path in provider.get_files()):
+                            linkable.add(provider)
+                    # Without a recognizable system copy, keep every provider.
+                    if not linkable.empty():
+                        dependencies = linkable
+                providers.update(dependencies)
         providers.difference(seen)
         pending = providers
     return {(p.get_name(), p.get_arch()) for p in seen}
