@@ -68,7 +68,10 @@ NEVRA, including architecture, to be installed.
    DNF5 replay with every remote repository disabled. Installation is never
    retried automatically.
 6. A fresh Python interpreter runs the saved post-install worker. It performs
-   deferred configuration migrations, builds/checks kernel modules and boot
+   deferred configuration migrations (including the one-time move of standard
+   installs from the BGRT boot splash to the Nobara theme, see
+   [UPDATES.md](UPDATES.md); it is skipped, never failed, if the theme is not
+   installed), builds/checks kernel modules and boot
    images, checks installed inbound RPMs and dependencies, verifies the release,
    and selects the updated kernel for a trial boot. A startup service checks the
    release, dependencies, running kernel module directory, and exact selected

@@ -16,6 +16,19 @@ BGRT_FILES = {
     "plymouth-theme-spinner": "/usr/share/plymouth/themes/bgrt/bgrt.plymouth",
     "plymouth-plugin-two-step": "/usr/lib64/plymouth/two-step.so",
 }
+# Standard installs that still use Fedora's default splash move once to the
+# Nobara theme. nobara-logos >= 44.0.0-2 ships it and requires the script and
+# label plugins. Gaming (HTPC, handheld) installs keep their own policy.
+OLD_DEFAULT_THEME = "bgrt"
+NOBARA_THEME = "nobara"
+NOBARA_THEME_PACKAGE = "nobara-logos"
+NOBARA_THEME_VERSION = ("0", "44.0.0", "2")
+NOBARA_THEME_FILES = ("/usr/share/plymouth/themes/nobara/nobara.plymouth", "/usr/lib64/plymouth/script.so")
+# Written into the updater's state directory only after the switch and the
+# boot-image rebuild succeeded, so a later return to BGRT is respected.
+NOBARA_THEME_MARKER = "/var/lib/nobara-updater/plymouth-nobara-theme.json"
+PLYMOUTH_CONFIG = "/etc/plymouth/plymouthd.conf"
+PLYMOUTH_DEFAULTS = "/usr/share/plymouth/plymouthd.defaults"
 
 
 @dataclass
@@ -123,6 +136,63 @@ def machine_product() -> str:
     return " ".join(values)
 
 
+def read_plymouth_theme(filename: Path) -> str:
+    """Read Theme= like plymouth-set-default-theme does; empty when unset."""
+    try:
+        lines = filename.read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return ""
+    for line in lines:
+        key, separator, value = line.strip().partition("=")
+        if separator and not key.startswith("#") and key.strip() == "Theme":
+            return value.strip()
+    return ""
+
+
+def configured_plymouth_theme(root: Path = Path("/")) -> str:
+    """The administrator's choice, else the distribution default; empty if neither."""
+    for filename in (PLYMOUTH_CONFIG, PLYMOUTH_DEFAULTS):
+        theme = read_plymouth_theme(root / filename.lstrip("/"))
+        if theme:
+            return theme
+    return ""
+
+
+def nobara_theme_installed(root: Path = Path("/")) -> bool:
+    return all((root / filename.lstrip("/")).is_file() for filename in NOBARA_THEME_FILES)
+
+
+def nobara_theme_migrated(root: Path = Path("/")) -> bool:
+    return (root / NOBARA_THEME_MARKER.lstrip("/")).exists()
+
+
+def evr_at_least(package: dict, wanted: tuple[str, str, str]) -> bool:
+    import rpm
+    found = (str(package.get("epoch") or "0"), package["version"], package["release"])
+    return rpm.labelCompare(found, wanted) >= 0
+
+
+def settle_nobara_theme(plan: MigrationPlan, inbound: list[dict], *, root: Path = Path("/")) -> None:
+    """Keep plymouth-nobara only if the theme is installed or arrives now.
+
+    It is planned before resolution, when only the installed nobara-logos is
+    known. A repository without the new theme would otherwise force an offline
+    fixup and initramfs rebuild on every update.
+    """
+    if "plymouth-nobara" not in plan.hooks or nobara_theme_installed(root):
+        return
+    if any(package["name"] == NOBARA_THEME_PACKAGE and evr_at_least(package, NOBARA_THEME_VERSION)
+           for package in inbound):
+        return
+    LOG.info("Keeping the current boot splash: the Nobara Plymouth theme is not available yet.")
+    index = plan.hooks.index("plymouth-nobara")
+    if any(not (root / filename.lstrip("/")).is_file() for filename in BGRT_FILES.values()):
+        # The BGRT repair still needs its boot-image rebuild.
+        plan.hooks[index] = "plymouth-rebuild"
+    else:
+        del plan.hooks[index]
+
+
 def add_plymouth_migration(plan: MigrationPlan, installed: list[dict], *,
                           current_theme: str | None = None, root: Path = Path("/")) -> set[str]:
     """Restore the BGRT fallback before selecting themes or rebuilding initramfs.
@@ -130,6 +200,9 @@ def add_plymouth_migration(plan: MigrationPlan, installed: list[dict], *,
     Return installed packages that need their missing payload restored. A
     same-version install alone is a no-op, so the planner must either upgrade
     these packages or explicitly reinstall them within the saved transaction.
+
+    current_theme None means "not queried": standard installs then read the
+    Plymouth configuration below root. An empty theme means none is set.
     """
     names = {package["name"] for package in installed}
     gaming = names & {"gamescope-htpc-common", "gamescope-session-common"}
@@ -154,6 +227,14 @@ def add_plymouth_migration(plan: MigrationPlan, installed: list[dict], *,
             if provider not in names:
                 plan.install.add(provider)
             hook = "plymouth-" + wanted
+    elif not nobara_theme_migrated(root):
+        theme = configured_plymouth_theme(root) if current_theme is None else current_theme
+        # Only the old default (chosen or by default) moves, and only when the
+        # theme is installed or its package can bring it in this transaction;
+        # settle_nobara_theme() drops the hook after resolution otherwise.
+        # Selecting it also rebuilds boot images, which covers a BGRT repair.
+        if theme in {"", OLD_DEFAULT_THEME} and (nobara_theme_installed(root) or NOBARA_THEME_PACKAGE in names):
+            hook = "plymouth-nobara"
     if missing and hook is None:
         # Preserve a custom/current theme while restoring the default fallback.
         hook = "plymouth-rebuild"

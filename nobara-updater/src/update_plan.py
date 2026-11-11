@@ -17,7 +17,8 @@ import libdnf5.repo as repo_api
 import libdnf5.rpm as rpm_api
 import libdnf5.transaction as trans
 
-from .update_migrations import BGRT_FILES, add_codec_migration, add_plymouth_migration, machine_product, plan_migrations
+from .update_migrations import (BGRT_FILES, add_codec_migration, add_plymouth_migration, machine_product, plan_migrations,
+                                settle_nobara_theme)
 from .update_boot import changes_kernel, check_selection_support, boot_space_requirements, eac_kernel, installed_boot_kernels
 from .update_policy import execution_policy, format_restart_reasons
 from .update_origins import PackageOriginError, collect_package_origins, annotate_failure
@@ -524,6 +525,15 @@ def kernel_unames(package) -> set[str]:
             if str(p).startswith("kernel-uname-r = ")}
 
 
+def inbound_packages(transaction) -> list[dict]:
+    return [dict(name=package.get_name(), epoch=package.get_epoch(), version=package.get_version(),
+                 release=package.get_release())
+            for item in transaction.get_transaction_packages()
+            if item.get_action() in {trans.TransactionItemAction_INSTALL, trans.TransactionItemAction_UPGRADE,
+                                     trans.TransactionItemAction_DOWNGRADE, trans.TransactionItemAction_REINSTALL}
+            for package in (item.get_package(),)]
+
+
 def repair_plymouth_packages(goal, transaction, settings, repairs, origins):
     inbound = {item.get_package().get_name() for item in transaction.get_transaction_packages()
                if item.get_action() in {trans.TransactionItemAction_INSTALL, trans.TransactionItemAction_UPGRADE,
@@ -787,6 +797,10 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
         # desktop. New required Nobara packages belong in explicit migrations.
         transaction = goal.resolve()
         check_resolution(transaction, origins)
+        # Before anything else reads the hooks (kernel development packages,
+        # boot space, execution mode): the new theme must actually arrive.
+        settle_nobara_theme(migrations, inbound_packages(transaction),
+                            root=Path(base.get_config().get_installroot_option().get_value()))
         transaction = repair_plymouth_packages(goal, transaction, settings, plymouth_repairs, origins)
         transaction = resolve_obsolete_cleanup(base, goal, transaction, settings, origins, migrations)
         transaction, retired_kmods = repair_orphaned_kmods(base, goal, transaction, settings, origins, migrations)

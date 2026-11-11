@@ -687,7 +687,51 @@ def execute_live(root: Path = STATE_DIR) -> None:
         raise
 
 
-def apply_hooks(hooks: list[str]) -> None:
+def select_nobara_theme(root: Path = Path("/")) -> dict | None:
+    """Select the Nobara splash; return what restores the previous choice.
+
+    None means nothing changed and the one-time marker must not be written,
+    so a later update tries again. The boot images are rebuilt afterwards by
+    validate_boot(), like for every plymouth-* hook.
+    """
+    from .update_migrations import (NOBARA_THEME, NOBARA_THEME_FILES, OLD_DEFAULT_THEME, PLYMOUTH_CONFIG,
+                                    configured_plymouth_theme)
+    missing = [filename for filename in NOBARA_THEME_FILES if not (root / filename.lstrip("/")).is_file()]
+    if missing:
+        LOG.warning("Keeping the current boot splash; the Nobara theme needs %s. A later update tries again.",
+                    ", ".join(missing))
+        return None
+    theme = configured_plymouth_theme(root)
+    if theme not in {"", OLD_DEFAULT_THEME}:
+        LOG.info("Keeping the boot splash %s selected after preparation.", theme)
+        return None
+    config = root / PLYMOUTH_CONFIG.lstrip("/")
+    previous = config.read_bytes() if config.is_file() else None
+    try:
+        run(["plymouth-set-default-theme", NOBARA_THEME])
+        if configured_plymouth_theme(root) != NOBARA_THEME:
+            raise UpdateError("plymouth-set-default-theme did not select the Nobara theme.")
+    except Exception:
+        LOG.exception("Could not select the Nobara boot splash; keeping the previous one.")
+        restore_plymouth_config(config, previous)
+        return None
+    LOG.info("Selected the Nobara boot splash in place of %s.", theme or "the default")
+    return dict(config=config, previous=previous, theme=theme)
+
+
+def restore_plymouth_config(config: Path, previous: bytes | None) -> None:
+    try:
+        if previous is None:
+            config.unlink(missing_ok=True)
+        else:
+            config.write_bytes(previous)
+    except OSError:
+        LOG.exception("Could not restore %s.", config)
+
+
+def apply_hooks(hooks: list[str]) -> dict:
+    """Apply migration hooks; return undo data of the one-time theme switch."""
+    switched = {}
     for hook in hooks:
         if hook == "plasma-login":
             for source, target in ((Path("/etc/sddm.conf"), Path("/etc/plasmalogin.conf")),
@@ -724,8 +768,15 @@ def apply_hooks(hooks: list[str]) -> None:
             run(["plymouth-set-default-theme", hook.removeprefix("plymouth-")])
             # Preserve the administrator's GRUB menu policy. Hiding recovery
             # entries automatically would undermine the recovery mechanism.
+        elif hook == "plymouth-nobara":
+            # Never fails the update: without the theme, or if selecting it
+            # fails, the previous splash stays and finalize() rebuilds with it.
+            switch = select_nobara_theme()
+            if switch:
+                switched[hook] = switch
         elif hook != "rocm-transition":
             raise UpdateError(f"Unknown migration hook: {hook}")
+    return switched
 
 
 def dkms_status_records(text: str) -> list[dict]:
@@ -833,6 +884,7 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
         if live and (installer or state.get("execution", {}).get("mode") != "live"
                      or state["source_release"] != state["target_release"] or state["migrations"]["hooks"]):
             raise UpdateError("The saved transaction is not eligible for live installation.")
+        switched = {}
         try:
             job = job_directory(state, root)
             verify_files(job, state["files"])
@@ -845,7 +897,7 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
                 # Restore the display state without resetting it to zero.
                 SPLASH.start(release_upgrade=state["source_release"] != state["target_release"], percent=90)
                 announce("Checking the updated system and building boot files. Keep the computer powered on.")
-            apply_hooks(state["migrations"]["hooks"])
+            switched = apply_hooks(state["migrations"]["hooks"])
             normal_entry = None
             if not live:
                 if not installer:
@@ -891,7 +943,20 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
                 LOG.info("Target installation validated. Returning to the installer.")
             else:
                 announce("Installation and boot-file validation finished. Restarting…", percent=100)
+            if isinstance(switched, dict) and "plymouth-nobara" in switched:
+                # Last step: boot images now hold the theme. Never switch this
+                # system again, even if somebody selects BGRT later on purpose.
+                # A missing marker is harmless: the theme is no longer BGRT.
+                from .update_migrations import NOBARA_THEME_MARKER
+                try:
+                    atomic_json(root / Path(NOBARA_THEME_MARKER).name,
+                                dict(theme="nobara", previous=switched["plymouth-nobara"]["theme"] or "default"))
+                except OSError:
+                    LOG.warning("Could not record the boot splash migration.", exc_info=True)
         except Exception as error:
+            if isinstance(switched, dict) and "plymouth-nobara" in switched:
+                # Boot images may not have been rebuilt: return to the old theme.
+                restore_plymouth_config(switched["plymouth-nobara"]["config"], switched["plymouth-nobara"]["previous"])
             if live:
                 write_state(root, state, "failed", error=str(error))
             raise
