@@ -77,8 +77,11 @@ band.x[33] = 0; band.y[33] = 0;
 band.x[34] = 0; band.y[34] = 0;
 band.shown = -1;
 
-# At shutdown the eye is open from the start.
-closing = (mode == "shutdown" || mode == "reboot");
+# The eye opens only when the machine boots. At shutdown and reboot it is
+# open from the start, and so in the update modes: Plymouth starts the script
+# again on every "plymouth change-mode", and the eye must not close and open
+# again when an update begins.
+closing = (mode != "boot");
 band.first = 2.6;
 if (closing)
   band.first = 1;
@@ -118,10 +121,51 @@ fun show_band (index)
       }
   }
 
+# The clock. Plymouth calls refresh() at most fifty times a second, and less
+# often when drawing or the rest of the boot keeps it busy, so counting the
+# calls runs slow. The boot progress callback (about thirty times a second, in
+# every mode) passes the real time since Plymouth started; that time stands
+# still while a password or a question is asked, and then each call counts as
+# 1/30 s. Between two of its calls refresh() adds 1/50 s, once. Without
+# progress calls the clock counts refresh() calls, as before.
+clock.running = 0;
+clock.now = 0;
+clock.last = 0;
+clock.since = 0;
+
+fun progress_callback (duration, progress)
+  {
+    if (!clock.running)
+      {
+        global.clock.running = 1;
+        global.clock.now = tick / 50;
+      }
+    else
+      {
+        step = duration - clock.last;
+        if (step <= 0)
+          step = 1 / 30;
+        if (step > 1)
+          step = 1;
+        global.clock.now = clock.now + step;
+      }
+    global.clock.last = duration;
+    global.clock.since = 0;
+  }
+
+Plymouth.SetBootProgressFunction (progress_callback);
+
 fun refresh ()
   {
     global.tick = tick + 1;
     time = tick / 50;
+    if (clock.running)
+      {
+        time = clock.now;
+        if (clock.since >= 1)
+          time = time + 1 / 50;
+        global.clock.since = clock.since + 1;
+      }
 
     # The glow breathes.
     glow.sprite.SetOpacity (0.75 - 0.25 * Math.Cos (2 * Math.Pi * time / 5));
@@ -230,12 +274,18 @@ fun dialog_prompt (prompt)
       dialog_setup ();
     dialog_opacity (1);
     dialog.answer.SetOpacity (0);
+    # Plymouth calls this on every key; draw the text only when it changes
+    # (each Image.Text costs the label plugin a font load, and memory).
     if (prompt)
       {
-        image = text_image (prompt, font, 0.85);
-        dialog.prompt.SetImage (image);
-        dialog.prompt.SetPosition (center_x - image.GetWidth () / 2,
-                                   dialog.entry.y - image.GetHeight () - 12 * scale, 10001);
+        if (prompt != dialog.prompt_text)
+          {
+            image = text_image (prompt, font, 0.85);
+            dialog.prompt.SetImage (image);
+            dialog.prompt.SetPosition (center_x - image.GetWidth () / 2,
+                                       dialog.entry.y - image.GetHeight () - 12 * scale, 10001);
+            global.dialog.prompt_text = prompt;
+          }
       }
     else
       dialog.prompt.SetOpacity (0);
