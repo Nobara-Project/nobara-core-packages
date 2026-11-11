@@ -953,6 +953,13 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
                                 dict(theme="nobara", previous=switched["plymouth-nobara"]["theme"] or "default"))
                 except OSError:
                     LOG.warning("Could not record the boot splash migration.", exc_info=True)
+            if "plasma-login" in state["migrations"]["hooks"]:
+                # Never replace SDDM again once somebody reinstalls it.
+                from .update_migrations import PLASMA_LOGIN_MARKER
+                try:
+                    atomic_json(root / Path(PLASMA_LOGIN_MARKER).name, dict(display_manager="plasmalogin"))
+                except OSError:
+                    LOG.warning("Could not record the Plasma Login migration.", exc_info=True)
         except Exception as error:
             if isinstance(switched, dict) and "plymouth-nobara" in switched:
                 # Boot images may not have been rebuilt: return to the old theme.

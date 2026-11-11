@@ -29,6 +29,9 @@ NOBARA_THEME_FILES = ("/usr/share/plymouth/themes/nobara/nobara.plymouth", "/usr
 NOBARA_THEME_MARKER = "/var/lib/nobara-updater/plymouth-nobara-theme.json"
 PLYMOUTH_CONFIG = "/etc/plymouth/plymouthd.conf"
 PLYMOUTH_DEFAULTS = "/usr/share/plymouth/plymouthd.defaults"
+# SDDM moves to Plasma Login once. Written after a successful update, so a
+# later return to SDDM is respected even without plasma-login-manager.
+PLASMA_LOGIN_MARKER = "/var/lib/nobara-updater/plasma-login-migration.json"
 
 
 @dataclass
@@ -68,7 +71,8 @@ OLD_ROCM = {
 }
 
 
-def plan_migrations(installed: list[dict], *, product: str = "", nvidia_closed: bool = False) -> MigrationPlan:
+def plan_migrations(installed: list[dict], *, product: str = "", nvidia_closed: bool = False,
+                    login_migrated: bool = False) -> MigrationPlan:
     names = {pkg["name"] for pkg in installed}
     specs = {f'{pkg["name"]}.{pkg["arch"]}' for pkg in installed} | names
     plan = MigrationPlan(remove=RETIRED & specs)
@@ -78,11 +82,13 @@ def plan_migrations(installed: list[dict], *, product: str = "", nvidia_closed: 
     if "maliit-keyboard" in names:
         plan.remove.add("maliit-keyboard")
         plan.install.add("plasma-keyboard")
-    if "sddm" in names:
+    # SDDM next to Plasma Login, or after the migration, is a deliberate choice.
+    login_migration = "sddm" in names and "plasma-login-manager" not in names and not login_migrated
+    if login_migration:
         plan.remove.update(name for name in names if name == "sddm" or name.startswith("sddm-"))
         plan.install.add("plasma-login-manager")
         plan.hooks.append("plasma-login")
-    if names & {"sddm", "plasma-login-manager"}:
+    if login_migration or ("plasma-login-manager" in names and "sddm" not in names):
         # These settings require SDDM and otherwise prevent its replacement,
         # or pull it back in after a partially completed login migration.
         plan.remove.update(names & {"kde-settings-sddm"})
@@ -160,6 +166,10 @@ def configured_plymouth_theme(root: Path = Path("/")) -> str:
 
 def nobara_theme_installed(root: Path = Path("/")) -> bool:
     return all((root / filename.lstrip("/")).is_file() for filename in NOBARA_THEME_FILES)
+
+
+def plasma_login_migrated(root: Path = Path("/")) -> bool:
+    return (root / PLASMA_LOGIN_MARKER.lstrip("/")).exists()
 
 
 def nobara_theme_migrated(root: Path = Path("/")) -> bool:

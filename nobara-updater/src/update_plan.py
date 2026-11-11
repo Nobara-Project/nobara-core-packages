@@ -18,7 +18,7 @@ import libdnf5.rpm as rpm_api
 import libdnf5.transaction as trans
 
 from .update_migrations import (BGRT_FILES, add_codec_migration, add_plymouth_migration, machine_product, plan_migrations,
-                                settle_nobara_theme)
+                                plasma_login_migrated, settle_nobara_theme)
 from .update_boot import changes_kernel, check_selection_support, boot_space_requirements, eac_kernel, installed_boot_kernels
 from .update_policy import execution_policy, format_restart_reasons
 from .update_origins import PackageOriginError, collect_package_origins, annotate_failure
@@ -746,7 +746,9 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
             nvidia_closed = "MODULE_VARIANT=kernel\n" in Path("/etc/nvidia/kernel.conf").read_text()
         except OSError:
             nvidia_closed = False
-        migrations = plan_migrations(inventory, product=machine_product(), nvidia_closed=nvidia_closed)
+        migrations = plan_migrations(inventory, product=machine_product(), nvidia_closed=nvidia_closed,
+                                     login_migrated=plasma_login_migrated(
+                                         Path(base.get_config().get_installroot_option().get_value())))
         add_dnf_inhibitor_migration(base, migrations)
         if getattr(base, "nobara_migrate_media", False):
             migrations.hooks.append("migrate-media-repository")

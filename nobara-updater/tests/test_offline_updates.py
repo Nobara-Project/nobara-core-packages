@@ -47,6 +47,17 @@ class MigrationTests(unittest.TestCase):
         self.assertIn("kde-settings-sddm", result.remove)
         self.assertNotIn("plasma-login", result.hooks)
 
+    def test_sddm_kept_next_to_plasma_login_is_not_removed(self):
+        result = plan_migrations([package("sddm"), package("kde-settings-sddm"), package("plasma-login-manager")])
+        self.assertFalse({"sddm", "kde-settings-sddm"} & result.remove)
+        self.assertNotIn("plasma-login", result.hooks)
+
+    def test_sddm_reinstalled_after_login_migration_is_not_removed(self):
+        result = plan_migrations([package("sddm"), package("kde-settings-sddm")], login_migrated=True)
+        self.assertFalse({"sddm", "kde-settings-sddm"} & result.remove)
+        self.assertNotIn("plasma-login-manager", result.install)
+        self.assertNotIn("plasma-login", result.hooks)
+
     def test_sddm_settings_alone_do_not_trigger_login_migration(self):
         result = plan_migrations([package("kde-settings-sddm")])
         self.assertNotIn("kde-settings-sddm", result.remove)

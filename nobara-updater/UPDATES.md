@@ -115,6 +115,23 @@ repository is not silently disabled.
 The Plasma Login migration removes SDDM's `kde-settings-sddm` settings package
 alongside SDDM, so its dependency cannot block the replacement login manager.
 
+The migration from SDDM to Plasma Login runs once. It is skipped when
+`plasma-login-manager` is already installed, and after a successful migration
+the updater records it in `/var/lib/nobara-updater/plasma-login-migration.json`.
+To keep using SDDM afterwards, install it again and enable it:
+
+```
+sudo dnf install sddm kde-settings-sddm
+sudo systemctl enable --force sddm.service
+```
+
+Later updates leave SDDM, its settings and the enabled display manager alone.
+To keep SDDM without migrating at all, create the marker before updating:
+
+```
+echo '{}' | sudo tee /var/lib/nobara-updater/plasma-login-migration.json
+```
+
 Some installations have a newer `libdnf5-plugin-systemd-inhibit` package than
 the DNF build available from the rolling repositories. If that optional plugin
 has no available replacement and requires a library version the repositories

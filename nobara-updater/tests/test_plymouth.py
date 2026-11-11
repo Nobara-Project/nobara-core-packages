@@ -14,7 +14,7 @@ if "nobara_updater" not in sys.modules:
 
 from nobara_updater import update_backend as backend, update_state as state
 from nobara_updater.update_migrations import (BGRT_FILES, NOBARA_THEME_FILES, NOBARA_THEME_MARKER, PLYMOUTH_CONFIG,
-                                              PLYMOUTH_DEFAULTS, MigrationPlan, add_plymouth_migration,
+                                              PLASMA_LOGIN_MARKER, PLYMOUTH_DEFAULTS, MigrationPlan, add_plymouth_migration,
                                               configured_plymouth_theme, settle_nobara_theme)
 
 
@@ -440,6 +440,35 @@ class NobaraThemeFinalizeTests(Fixture):
         self.healthy_files()
         self.plan_for("plymouth", *BGRT_FILES, theme="bgrt")
         self.assertEqual(self.plan.hooks, [])
+
+
+class PlasmaLoginFinalizeTests(Fixture):
+    def setUp(self):
+        super().setUp()
+        job = self.root / "jobs" / ("a" * 32)
+        job.mkdir(parents=True)
+        (job / "transaction.json").write_text("{}")
+        ready = dict(job="a" * 32, installer=True, started=True, fingerprint="fixture", target_release="44",
+                     files={"transaction.json": state.file_digest(job / "transaction.json")},
+                     migrations={"hooks": ["plasma-login"]}, packages=[])
+        state.write_state(self.root, ready, "validating")
+        self.addCleanup(patch.stopall)
+        patch.object(backend, "in_installer_root", return_value=True).start()
+        patch.object(backend, "rpm_fingerprint", return_value="fixture").start()
+        patch.object(backend, "apply_hooks", return_value={}).start()
+        patch.object(backend, "os_release", return_value="44").start()
+        self.marker = self.root / Path(PLASMA_LOGIN_MARKER).name
+
+    def test_marker_is_written_after_a_successful_update(self):
+        with patch.object(backend, "validate_boot"):
+            backend.finalize(self.root, installer=True)
+        self.assertTrue(self.marker.is_file())
+
+    def test_failed_update_leaves_no_marker(self):
+        with patch.object(backend, "validate_boot", side_effect=state.UpdateError("dracut failed")):
+            with self.assertRaisesRegex(state.UpdateError, "dracut failed"):
+                backend.finalize(self.root, installer=True)
+        self.assertFalse(self.marker.exists())
 
 
 if __name__ == "__main__":
