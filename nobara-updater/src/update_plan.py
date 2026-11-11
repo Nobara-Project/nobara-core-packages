@@ -17,8 +17,8 @@ import libdnf5.repo as repo_api
 import libdnf5.rpm as rpm_api
 import libdnf5.transaction as trans
 
-from .update_migrations import (BGRT_FILES, add_codec_migration, add_plymouth_migration, machine_product, plan_migrations,
-                                plasma_login_migrated, settle_nobara_theme)
+from .update_migrations import (BGRT_FILES, add_codec_migration, add_plymouth_migration, is_htpc, machine_product,
+                                plan_migrations, plasma_login_migrated, settle_nobara_theme)
 from .update_boot import changes_kernel, check_selection_support, boot_space_requirements, eac_kernel, installed_boot_kernels
 from .update_policy import execution_policy, format_restart_reasons
 from .update_origins import PackageOriginError, collect_package_origins, annotate_failure
@@ -770,9 +770,9 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
             if not getattr(base, "nobara_enable_codecs", True):
                 migrations.hooks.remove("enable-codecs")
         module_builders = any(p["name"] in {"dkms", "akmods"} or p["name"].startswith(("dkms-", "akmod-")) for p in inventory)
-        gaming = {p["name"] for p in inventory} & {"gamescope-htpc-common", "gamescope-session-common"}
+        # Standard installs read the Plymouth configuration themselves.
         theme = None
-        if gaming:
+        if is_htpc({p["name"] for p in inventory}):
             theme = subprocess.run(["plymouth-set-default-theme"], capture_output=True, text=True, check=True).stdout.strip()
         plymouth_repairs = add_plymouth_migration(
             migrations, inventory, current_theme=theme, root=Path(base.get_config().get_installroot_option().get_value()))

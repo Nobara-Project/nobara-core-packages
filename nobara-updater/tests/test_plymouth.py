@@ -14,7 +14,7 @@ if "nobara_updater" not in sys.modules:
 
 from nobara_updater import update_backend as backend, update_state as state
 from nobara_updater.update_migrations import (BGRT_FILES, NOBARA_THEME_FILES, NOBARA_THEME_MARKER, PLYMOUTH_CONFIG,
-                                              PLASMA_LOGIN_MARKER, PLYMOUTH_DEFAULTS, MigrationPlan, add_plymouth_migration,
+                                              PLASMA_LOGIN_MARKER, PLYMOUTH_DEFAULTS, PLYMOUTH_THEMES, MigrationPlan, add_plymouth_migration,
                                               configured_plymouth_theme, settle_nobara_theme)
 
 
@@ -35,10 +35,10 @@ class PlymouthMigrationTests(unittest.TestCase):
         return add_plymouth_migration(self.plan, [dict(name=name) for name in names],
                                      current_theme=theme, root=self.root)
 
-    def test_missing_packages_are_installed_before_selecting_bgrt(self):
-        repairs = self.plan_for("plymouth", "gamescope-htpc-common", theme="text")
+    def test_missing_packages_are_installed_and_the_chosen_theme_stays(self):
+        repairs = self.plan_for("plymouth", "gamescope-session-common", theme="text")
         self.assertEqual(self.plan.install, set(BGRT_FILES))
-        self.assertEqual(self.plan.hooks, ["plymouth-bgrt"])
+        self.assertEqual(self.plan.hooks, ["plymouth-rebuild"])
         self.assertEqual(repairs, set())
 
     def test_missing_payload_of_installed_package_requires_repair(self):
@@ -96,42 +96,33 @@ class Fixture(unittest.TestCase):
         for filename in (*BGRT_FILES.values(), *(NOBARA_THEME_FILES if nobara else ())):
             self.write(filename)
 
+    def install_theme(self, name):
+        return self.write(f"{PLYMOUTH_THEMES}/{name}/{name}.plymouth")
+
     def plan_for(self, *names, theme=None):
         return add_plymouth_migration(self.plan, [dict(name=name) for name in names],
                                      current_theme=theme, root=self.root)
 
 
-class GamingPlymouthPolicyTests(Fixture):
+class HtpcPlymouthPolicyTests(Fixture):
     """HTPC and handheld installs keep exactly the policy they had before."""
-    GAMING = {
-        "both": ("gamescope-htpc-common", "gamescope-session-common"),
-        "htpc": ("gamescope-htpc-common",),
-        "session": ("gamescope-session-common",),
-    }
-    # (packages, current theme) -> (installs, hooks), as before the Nobara theme.
+    HTPC = ("gamescope-htpc-common", "gamescope-session-common")
+    # current theme -> (installs, hooks), as before the Nobara theme.
     EXPECTED = {
-        ("both", "steamos"): (set(), []),
-        ("both", "bgrt"): ({"plymouth-plugin-script"}, ["plymouth-steamos"]),
-        ("both", "spinner"): ({"plymouth-plugin-script"}, ["plymouth-steamos"]),
-        ("both", "nobara"): ({"plymouth-plugin-script"}, ["plymouth-steamos"]),
-        ("htpc", "steamos"): (set(), ["plymouth-bgrt"]),
-        ("htpc", "bgrt"): (set(), []),
-        ("htpc", "spinner"): (set(), ["plymouth-bgrt"]),
-        ("htpc", "nobara"): (set(), ["plymouth-bgrt"]),
-        ("session", "steamos"): (set(), ["plymouth-bgrt"]),
-        ("session", "bgrt"): (set(), []),
-        ("session", "spinner"): (set(), ["plymouth-bgrt"]),
-        ("session", "nobara"): (set(), ["plymouth-bgrt"]),
+        "steamos": (set(), []),
+        "bgrt": ({"plymouth-plugin-script"}, ["plymouth-steamos"]),
+        "spinner": ({"plymouth-plugin-script"}, ["plymouth-steamos"]),
+        "nobara": ({"plymouth-plugin-script"}, ["plymouth-steamos"]),
     }
 
-    def test_gaming_installs_never_get_the_nobara_theme(self):
-        for (kind, theme), (install, hooks) in self.EXPECTED.items():
+    def test_htpc_installs_never_get_the_nobara_theme(self):
+        for theme, (install, hooks) in self.EXPECTED.items():
             # Everything a standard install would migrate with is present.
             for nobara_on_disk in (True, False):
-                with self.subTest(kind=kind, theme=theme, nobara_on_disk=nobara_on_disk):
+                with self.subTest(theme=theme, nobara_on_disk=nobara_on_disk):
                     self.setUp()
                     self.healthy_files(nobara=nobara_on_disk)
-                    repairs = self.plan_for("plymouth", "nobara-logos", *BGRT_FILES, *self.GAMING[kind], theme=theme)
+                    repairs = self.plan_for("plymouth", "nobara-logos", *BGRT_FILES, *self.HTPC, theme=theme)
                     self.assertEqual(repairs, set())
                     self.assertEqual(self.plan.install, install)
                     self.assertEqual(self.plan.hooks, hooks)
@@ -139,26 +130,23 @@ class GamingPlymouthPolicyTests(Fixture):
                                                          release="2.fc44")], root=self.root)
                     self.assertEqual(self.plan.hooks, hooks)
 
-    def test_gaming_policy_with_missing_bgrt_files_is_unchanged(self):
-        for kind, theme, install, hooks in [
-            ("both", "steamos", set(BGRT_FILES), ["plymouth-rebuild"]),
-            ("both", "bgrt", set(BGRT_FILES) | {"plymouth-plugin-script"}, ["plymouth-steamos"]),
-            ("htpc", "bgrt", set(BGRT_FILES), ["plymouth-bgrt"]),
-            ("session", "spinner", set(BGRT_FILES), ["plymouth-bgrt"]),
-            ("session", "steamos", set(BGRT_FILES), ["plymouth-bgrt"]),
+    def test_htpc_policy_with_missing_bgrt_files_is_unchanged(self):
+        for theme, install, hooks in [
+            ("steamos", set(BGRT_FILES), ["plymouth-rebuild"]),
+            ("bgrt", set(BGRT_FILES) | {"plymouth-plugin-script"}, ["plymouth-steamos"]),
         ]:
-            with self.subTest(kind=kind, theme=theme):
+            with self.subTest(theme=theme):
                 self.setUp()
                 for filename in NOBARA_THEME_FILES:
                     self.write(filename)
-                self.plan_for("plymouth", "nobara-logos", *self.GAMING[kind], theme=theme)
+                self.plan_for("plymouth", "nobara-logos", *self.HTPC, theme=theme)
                 self.assertEqual(self.plan.install, install)
                 self.assertEqual(self.plan.hooks, hooks)
 
-    def test_gaming_installs_ignore_the_migration_marker(self):
+    def test_htpc_installs_ignore_the_migration_marker(self):
         self.healthy_files()
         self.write(NOBARA_THEME_MARKER, "{}")
-        self.plan_for("plymouth", *BGRT_FILES, *self.GAMING["both"], theme="bgrt")
+        self.plan_for("plymouth", *BGRT_FILES, *self.HTPC, theme="bgrt")
         self.assertEqual(self.plan.hooks, ["plymouth-steamos"])
 
     def test_gaming_hooks_still_select_their_theme(self):
@@ -168,6 +156,79 @@ class GamingPlymouthPolicyTests(Fixture):
                 self.assertEqual(backend.apply_hooks([hook]), {})
                 run.assert_called_once_with(["plymouth-set-default-theme", theme])
                 select.assert_not_called()
+
+
+class GamescopeSessionIsStandardTests(Fixture):
+    """Every standard install has gamescope-session-common for the Steam
+    session. One gamescope package alone does not make an HTPC."""
+    SINGLE = ("gamescope-session-common", "gamescope-htpc-common")
+
+    def test_old_default_moves_to_the_nobara_theme(self):
+        for package in self.SINGLE:
+            for theme in ("bgrt", "", None):
+                with self.subTest(package=package, theme=theme):
+                    self.setUp()
+                    self.healthy_files()
+                    self.write(PLYMOUTH_DEFAULTS, "[Daemon]\nTheme=bgrt\n")
+                    self.assertEqual(self.plan_for("plymouth", "nobara-logos", *BGRT_FILES, package, theme=theme), set())
+                    self.assertEqual(self.plan.install, set())
+                    self.assertEqual(self.plan.hooks, ["plymouth-nobara"])
+
+    def test_the_nobara_theme_is_never_reverted(self):
+        # A new installation arrives with it selected by the installer.
+        for package in self.SINGLE:
+            for marker in (False, True):
+                with self.subTest(package=package, marker=marker):
+                    self.setUp()
+                    self.healthy_files()
+                    if marker:
+                        self.write(NOBARA_THEME_MARKER, "{}")
+                    self.plan_for("plymouth", "nobara-logos", *BGRT_FILES, package, theme="nobara")
+                    self.assertEqual(self.plan.install, set())
+                    self.assertEqual(self.plan.hooks, [])
+
+    def test_a_chosen_theme_is_left_alone(self):
+        for theme in ("spinner", "details", "my-custom-theme", "steamos"):
+            with self.subTest(theme=theme):
+                self.setUp()
+                self.healthy_files()
+                self.plan_for("plymouth", "nobara-logos", *BGRT_FILES, "gamescope-session-common", theme=theme)
+                self.assertEqual(self.plan.hooks, [])
+
+    def test_a_return_to_bgrt_is_kept(self):
+        self.healthy_files()
+        self.write(NOBARA_THEME_MARKER, "{}")
+        self.plan_for("plymouth", "nobara-logos", *BGRT_FILES, "gamescope-session-common", theme="bgrt")
+        self.assertEqual(self.plan.hooks, [])
+
+    def test_missing_bgrt_files_are_repaired_without_selecting_bgrt(self):
+        for theme, hooks in (("bgrt", ["plymouth-nobara"]), ("spinner", ["plymouth-rebuild"]),
+                             ("nobara", ["plymouth-rebuild"])):
+            with self.subTest(theme=theme):
+                self.setUp()
+                for filename in NOBARA_THEME_FILES:
+                    self.write(filename)
+                self.plan_for("plymouth", "nobara-logos", "gamescope-session-common", theme=theme)
+                self.assertEqual(self.plan.install, set(BGRT_FILES))
+                self.assertEqual(self.plan.hooks, hooks)
+
+    def test_theme_line_left_by_a_removed_htpc_package_shows_the_default(self):
+        # A former HTPC: Theme=steamos stays in plymouthd.conf, the theme is
+        # gone with gamescope-htpc-common, and Plymouth shows BGRT.
+        self.healthy_files()
+        self.write(PLYMOUTH_DEFAULTS, "[Daemon]\nTheme=bgrt\nShowDelay=0\n")
+        self.write(PLYMOUTH_CONFIG, "[Daemon]\nTheme=steamos\n")
+        self.assertEqual(configured_plymouth_theme(self.root), "bgrt")
+        self.plan_for("plymouth", "nobara-logos", *BGRT_FILES, "gamescope-session-common")
+        self.assertEqual(self.plan.hooks, ["plymouth-nobara"])
+
+        def run(command):
+            self.write(PLYMOUTH_CONFIG, "[Daemon]\nTheme=nobara\n")
+        with patch.object(backend, "run", side_effect=run):
+            switch = backend.select_nobara_theme(self.root)
+        self.assertEqual(switch["theme"], "bgrt")
+        self.assertEqual(switch["previous"], b"[Daemon]\nTheme=steamos\n")
+        self.assertEqual(configured_plymouth_theme(self.root), "nobara")
 
 
 class StandardNobaraThemePlanningTests(Fixture):
@@ -207,6 +268,8 @@ class StandardNobaraThemePlanningTests(Fixture):
             with self.subTest(theme=theme):
                 self.plan = MigrationPlan()
                 self.write(PLYMOUTH_CONFIG, f"[Daemon]\nTheme={theme}\n")
+                self.install_theme(theme)
+                self.assertEqual(configured_plymouth_theme(self.root), theme)
                 self.plan_for("plymouth", "nobara-logos", *BGRT_FILES)
                 self.assertEqual(self.plan.hooks, [])
                 self.plan = MigrationPlan()
@@ -344,6 +407,7 @@ class SelectNobaraThemeTests(Fixture):
     def test_theme_chosen_after_preparation_is_kept(self):
         self.healthy_files()
         self.write(PLYMOUTH_CONFIG, "[Daemon]\nTheme=spinner\n")
+        self.install_theme("spinner")
         with patch.object(backend, "run") as run:
             self.assertIsNone(backend.select_nobara_theme(self.root))
         run.assert_not_called()

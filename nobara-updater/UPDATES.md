@@ -207,7 +207,7 @@ and its `two-step` plugin. It installs missing packages or restores deleted
 files from installed packages using an upgrade or reinstall. These RPMs are
 prepared and verified before theme selection and initramfs rebuilding; a bad
 repository payload stops preparation. Restoring the BGRT fallback preserves
-custom theme selection and the existing SteamOS/BGRT session-selection policy.
+the selected theme, whichever it is.
 
 Standard installs that still show Fedora's default boot splash (`bgrt`, chosen
 in `/etc/plymouth/plymouthd.conf` or by default from
@@ -216,9 +216,16 @@ in `/etc/plymouth/plymouthd.conf` or by default from
 is installed, or when this update brings that `nobara-logos`; it makes the
 update an offline one and shares the single initramfs rebuild with any BGRT
 repair. Any other selected theme, including one chosen later, is left alone.
-HTPC and handheld installs (with `gamescope-htpc-common` or
-`gamescope-session-common`) keep their SteamOS/BGRT policy and never get the
-Nobara splash automatically.
+As Plymouth does, the updater ignores a selected theme that is not installed:
+a `Theme=steamos` line left in `plymouthd.conf` by a removed
+`gamescope-htpc-common` counts as the default.
+
+HTPC and handheld installs are those with both `gamescope-htpc-common` and
+`gamescope-session-common`. They are kept on the SteamOS splash and never get
+the Nobara one. `gamescope-session-common` alone does not make one: every
+standard install has it for the Steam session on the login screen, and is
+treated as described above. (Up to 2.0.1-98 such an install was put back on
+BGRT at every update, whatever was selected.)
 
 After the installation, the theme is selected only if
 `/usr/share/plymouth/themes/nobara/nobara.plymouth` and Plymouth's script

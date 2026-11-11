@@ -18,7 +18,10 @@ BGRT_FILES = {
 }
 # Standard installs that still use Fedora's default splash move once to the
 # Nobara theme. nobara-logos >= 44.0.0-2 ships it and requires the script and
-# label plugins. Gaming (HTPC, handheld) installs keep their own policy.
+# label plugins. HTPC and handheld installs keep the SteamOS splash.
+# gamescope-session-common alone is not one of those: every standard install
+# has it, for the Steam session offered on the login screen.
+HTPC_PACKAGES = frozenset({"gamescope-htpc-common", "gamescope-session-common"})
 OLD_DEFAULT_THEME = "bgrt"
 NOBARA_THEME = "nobara"
 NOBARA_THEME_PACKAGE = "nobara-logos"
@@ -29,6 +32,7 @@ NOBARA_THEME_FILES = ("/usr/share/plymouth/themes/nobara/nobara.plymouth", "/usr
 NOBARA_THEME_MARKER = "/var/lib/nobara-updater/plymouth-nobara-theme.json"
 PLYMOUTH_CONFIG = "/etc/plymouth/plymouthd.conf"
 PLYMOUTH_DEFAULTS = "/usr/share/plymouth/plymouthd.defaults"
+PLYMOUTH_THEMES = "/usr/share/plymouth/themes"
 # SDDM moves to Plasma Login once. Written after a successful update, so a
 # later return to SDDM is respected even without plasma-login-manager.
 PLASMA_LOGIN_MARKER = "/var/lib/nobara-updater/plasma-login-migration.json"
@@ -155,11 +159,21 @@ def read_plymouth_theme(filename: Path) -> str:
     return ""
 
 
+def is_htpc(names: set[str]) -> bool:
+    """HTPC and handheld installs: the only ones with both packages."""
+    return HTPC_PACKAGES <= names
+
+
 def configured_plymouth_theme(root: Path = Path("/")) -> str:
-    """The administrator's choice, else the distribution default; empty if neither."""
+    """The administrator's choice, else the distribution default; empty if neither.
+
+    Like plymouth-set-default-theme and plymouthd, a selected theme that is
+    not installed does not count: a Theme=steamos line left behind by a
+    removed gamescope-htpc-common shows the distribution default.
+    """
     for filename in (PLYMOUTH_CONFIG, PLYMOUTH_DEFAULTS):
         theme = read_plymouth_theme(root / filename.lstrip("/"))
-        if theme:
+        if theme and (root / PLYMOUTH_THEMES.lstrip("/") / theme / f"{theme}.plymouth").is_file():
             return theme
     return ""
 
@@ -215,8 +229,7 @@ def add_plymouth_migration(plan: MigrationPlan, installed: list[dict], *,
     Plymouth configuration below root. An empty theme means none is set.
     """
     names = {package["name"] for package in installed}
-    gaming = names & {"gamescope-htpc-common", "gamescope-session-common"}
-    if "plymouth" not in names and not gaming:
+    if "plymouth" not in names and not names & HTPC_PACKAGES:
         return set()
     repairs = set()
     missing = False
@@ -229,14 +242,11 @@ def add_plymouth_migration(plan: MigrationPlan, installed: list[dict], *,
             else:
                 plan.install.add(package)
     hook = None
-    if gaming:
-        wanted = "steamos" if len(gaming) == 2 else "bgrt"
-        if current_theme != wanted or (wanted == "bgrt" and missing):
-            # BGRT belongs to the spinner package and uses two-step, not script.
-            provider = "plymouth-plugin-script" if wanted == "steamos" else "plymouth-theme-spinner"
-            if provider not in names:
-                plan.install.add(provider)
-            hook = "plymouth-" + wanted
+    if is_htpc(names):
+        if current_theme != "steamos":
+            if "plymouth-plugin-script" not in names:
+                plan.install.add("plymouth-plugin-script")
+            hook = "plymouth-steamos"
     elif not nobara_theme_migrated(root):
         theme = configured_plymouth_theme(root) if current_theme is None else current_theme
         # Only the old default (chosen or by default) moves, and only when the
