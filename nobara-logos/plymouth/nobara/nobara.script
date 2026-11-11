@@ -1,0 +1,355 @@
+# The Nobara boot splash. Written by bootanim.py; change it there.
+
+Window.SetBackgroundTopColor (0, 0, 0);
+Window.SetBackgroundBottomColor (0, 0, 0);
+
+scale = 1;
+if (Window.GetHeight () >= 1700)
+  scale = 2;
+size = scale + "x";
+font = "Sans " + (11 * scale);
+small_font = "Sans " + (9 * scale);
+mode = Plymouth.GetMode ();
+status = "normal";
+tick = 0;
+
+center_x = Window.GetX () + Window.GetWidth () / 2;
+center_y = Window.GetY () + Window.GetHeight () / 2;
+# The top left corner of the canvas all the pictures are placed on.
+origin_x = Math.Int (center_x - 734 * scale / 2);
+origin_y = Math.Int (center_y - 300 * scale / 2);
+
+glow.sprite = Sprite (Image ("glow-" + size + ".png"));
+glow.sprite.SetPosition (origin_x, origin_y, 0);
+eye.sprite = Sprite ();
+eye.sprite.SetPosition (origin_x + 103 * scale, origin_y + 136 * scale, 1);
+letters.sprite = Sprite (Image ("letters-" + size + ".png"));
+letters.sprite.SetPosition (origin_x + 84 * scale, origin_y + 84 * scale, 2);
+band.sprite = Sprite ();
+band.sprite.SetOpacity (0);
+
+eye.count = 73;
+for (index = 0; index < eye.count; index++)
+  {
+    eye.image[index] = Image ("eye-" + size + "-" + index + ".png");
+  }
+eye.shown = -1;
+
+band.count = 35;
+for (index = 0; index < band.count; index++)
+  {
+    band.image[index] = Image ("band-" + size + "-" + index + ".png");
+  }
+band.x[0] = 0; band.y[0] = 0;
+band.x[1] = 0; band.y[1] = 0;
+band.x[2] = 0; band.y[2] = 0;
+band.x[3] = 0; band.y[3] = 0;
+band.x[4] = 0; band.y[4] = 0;
+band.x[5] = 0; band.y[5] = 0;
+band.x[6] = 82; band.y[6] = 115;
+band.x[7] = 82; band.y[7] = 115;
+band.x[8] = 82; band.y[8] = 115;
+band.x[9] = 82; band.y[9] = 115;
+band.x[10] = 82; band.y[10] = 115;
+band.x[11] = 82; band.y[11] = 115;
+band.x[12] = 89; band.y[12] = 82;
+band.x[13] = 129; band.y[13] = 82;
+band.x[14] = 157; band.y[14] = 82;
+band.x[15] = 200; band.y[15] = 82;
+band.x[16] = 227; band.y[16] = 106;
+band.x[17] = 289; band.y[17] = 115;
+band.x[18] = 306; band.y[18] = 115;
+band.x[19] = 335; band.y[19] = 115;
+band.x[20] = 392; band.y[20] = 116;
+band.x[21] = 410; band.y[21] = 116;
+band.x[22] = 438; band.y[22] = 115;
+band.x[23] = 470; band.y[23] = 115;
+band.x[24] = 501; band.y[24] = 115;
+band.x[25] = 553; band.y[25] = 116;
+band.x[26] = 566; band.y[26] = 124;
+band.x[27] = 582; band.y[27] = 138;
+band.x[28] = 601; band.y[28] = 156;
+band.x[29] = 624; band.y[29] = 178;
+band.x[30] = 635; band.y[30] = 198;
+band.x[31] = 0; band.y[31] = 0;
+band.x[32] = 0; band.y[32] = 0;
+band.x[33] = 0; band.y[33] = 0;
+band.x[34] = 0; band.y[34] = 0;
+band.shown = -1;
+
+# At shutdown the eye is open from the start.
+closing = (mode == "shutdown" || mode == "reboot");
+band.first = 2.6;
+if (closing)
+  band.first = 1;
+
+fun show_eye (index)
+  {
+    if (index != eye.shown)
+      {
+        global.eye.shown = index;
+        if (index < 0)
+          {
+            eye.sprite.SetOpacity (0);
+          }
+        else
+          {
+            eye.sprite.SetImage (eye.image[index]);
+            eye.sprite.SetOpacity (1);
+          }
+      }
+  }
+
+fun show_band (index)
+  {
+    if (index != band.shown)
+      {
+        global.band.shown = index;
+        if (index < 0)
+          {
+            band.sprite.SetOpacity (0);
+          }
+        else
+          {
+            band.sprite.SetImage (band.image[index]);
+            band.sprite.SetPosition (origin_x + band.x[index] * scale, origin_y + band.y[index] * scale, 3);
+            band.sprite.SetOpacity (1);
+          }
+      }
+  }
+
+fun refresh ()
+  {
+    global.tick = tick + 1;
+    time = tick / 50;
+
+    # The glow breathes.
+    glow.sprite.SetOpacity (0.75 - 0.25 * Math.Cos (2 * Math.Pi * time / 5));
+
+    # The eye opens once and stays open.
+    index = Math.Int ((time - 0.25) / 0.04);
+    if (closing || index >= eye.count)
+      index = eye.count - 1;
+    if (time < 0.25 && !closing)
+      index = -1;
+    show_eye (index);
+
+    # The band of light crosses, then again every few seconds.
+    index = -1;
+    since = time - band.first;
+    if (since >= 0)
+      {
+        since = since - Math.Int (since / 4) * 4;
+        index = Math.Int (since / 0.04);
+        if (index >= band.count)
+          index = -1;
+      }
+    show_band (index);
+
+    if (status == "password")
+      caps_lock_warning ();
+  }
+
+Plymouth.SetRefreshFunction (refresh);
+
+#----------------------------------------- Text ----------------------------------------
+
+fun text_image (text, which_font, brightness)
+  {
+    return Image.Text (text, brightness, brightness, brightness, 1, which_font);
+  }
+
+# Put a line of text on a sprite, centered on the screen at a height given as
+# a part of the screen's height.
+fun center_text (sprite, image, height_part, layer)
+  {
+    sprite.SetImage (image);
+    sprite.SetPosition (center_x - image.GetWidth () / 2,
+                        Window.GetY () + Window.GetHeight () * height_part - image.GetHeight () / 2, layer);
+    sprite.SetOpacity (1);
+  }
+
+#----------------------------------------- Password and questions ----------------------
+
+fun scaled (name)
+  {
+    image = Image (name);
+    if (scale > 1)
+      image = image.Scale (image.GetWidth () * scale, image.GetHeight () * scale);
+    return image;
+  }
+
+fun dialog_setup ()
+  {
+    local.lock;
+    local.entry;
+
+    lock.image = scaled ("lock.png");
+    entry.image = scaled ("entry.png");
+    middle = Window.GetY () + Window.GetHeight () * 0.78;
+
+    lock.sprite = Sprite (lock.image);
+    lock.x = center_x - (lock.image.GetWidth () + entry.image.GetWidth ()) / 2;
+    lock.y = middle - lock.image.GetHeight () / 2;
+    lock.sprite.SetPosition (lock.x, lock.y, 10001);
+
+    entry.sprite = Sprite (entry.image);
+    entry.x = lock.x + lock.image.GetWidth ();
+    entry.y = middle - entry.image.GetHeight () / 2;
+    entry.sprite.SetPosition (entry.x, entry.y, 10001);
+
+    global.dialog.lock = lock;
+    global.dialog.entry = entry;
+    global.dialog.bullet_image = scaled ("bullet.png");
+    global.dialog.prompt = Sprite ();
+    global.dialog.answer = Sprite ();
+    global.dialog.caps = Sprite ();
+    global.dialog.caps_shown = 0;
+  }
+
+fun dialog_opacity (opacity)
+  {
+    dialog.lock.sprite.SetOpacity (opacity);
+    dialog.entry.sprite.SetOpacity (opacity);
+    dialog.prompt.SetOpacity (opacity);
+    dialog.answer.SetOpacity (opacity);
+    if (opacity == 0)
+      {
+        dialog.caps.SetOpacity (0);
+        global.dialog.caps_shown = 0;
+      }
+    for (index = 0; dialog.bullet[index]; index++)
+      {
+        dialog.bullet[index].sprite.SetOpacity (opacity);
+      }
+  }
+
+fun dialog_prompt (prompt)
+  {
+    if (!global.dialog)
+      dialog_setup ();
+    dialog_opacity (1);
+    dialog.answer.SetOpacity (0);
+    if (prompt)
+      {
+        image = text_image (prompt, font, 0.85);
+        dialog.prompt.SetImage (image);
+        dialog.prompt.SetPosition (center_x - image.GetWidth () / 2,
+                                   dialog.entry.y - image.GetHeight () - 12 * scale, 10001);
+      }
+    else
+      dialog.prompt.SetOpacity (0);
+  }
+
+fun caps_lock_warning ()
+  {
+    on = Plymouth.GetCapslockState ();
+    if (on && !dialog.caps_shown)
+      {
+        image = text_image ("Caps Lock is on", small_font, 0.7);
+        dialog.caps.SetImage (image);
+        dialog.caps.SetPosition (center_x - image.GetWidth () / 2,
+                                 dialog.entry.y + dialog.entry.image.GetHeight () + 12 * scale, 10001);
+        dialog.caps.SetOpacity (1);
+        global.dialog.caps_shown = 1;
+      }
+    if (!on && dialog.caps_shown)
+      {
+        dialog.caps.SetOpacity (0);
+        global.dialog.caps_shown = 0;
+      }
+  }
+
+fun display_normal_callback ()
+  {
+    global.status = "normal";
+    if (global.dialog)
+      dialog_opacity (0);
+  }
+
+fun display_password_callback (prompt, bullets)
+  {
+    global.status = "password";
+    dialog_prompt (prompt);
+    for (index = 0; dialog.bullet[index] || index < bullets; index++)
+      {
+        if (!dialog.bullet[index])
+          {
+            dialog.bullet[index].sprite = Sprite (dialog.bullet_image);
+            dialog.bullet[index].x = dialog.entry.x + 8 * scale + index * dialog.bullet_image.GetWidth ();
+            dialog.bullet[index].y = dialog.entry.y + dialog.entry.image.GetHeight () / 2 - dialog.bullet_image.GetHeight () / 2;
+            dialog.bullet[index].sprite.SetPosition (dialog.bullet[index].x, dialog.bullet[index].y, 10002);
+          }
+        # No more dots than the box can hold.
+        if (index < bullets && dialog.bullet[index].x + dialog.bullet_image.GetWidth () < dialog.entry.x + dialog.entry.image.GetWidth ())
+          dialog.bullet[index].sprite.SetOpacity (1);
+        else
+          dialog.bullet[index].sprite.SetOpacity (0);
+      }
+  }
+
+fun display_question_callback (prompt, entry)
+  {
+    global.status = "question";
+    dialog_prompt (prompt);
+    for (index = 0; dialog.bullet[index]; index++)
+      {
+        dialog.bullet[index].sprite.SetOpacity (0);
+      }
+    image = text_image (entry, font, 1);
+    dialog.answer.SetImage (image);
+    dialog.answer.SetPosition (dialog.entry.x + 8 * scale,
+                               dialog.entry.y + dialog.entry.image.GetHeight () / 2 - image.GetHeight () / 2, 10002);
+    dialog.answer.SetOpacity (1);
+  }
+
+Plymouth.SetDisplayNormalFunction (display_normal_callback);
+Plymouth.SetDisplayPasswordFunction (display_password_callback);
+Plymouth.SetDisplayQuestionFunction (display_question_callback);
+
+#----------------------------------------- Messages ------------------------------------
+
+message.sprite = Sprite ();
+
+fun display_message_callback (text)
+  {
+    center_text (message.sprite, text_image (text, small_font, 0.75), 0.9, 10000);
+  }
+
+fun hide_message_callback (text)
+  {
+    message.sprite.SetOpacity (0);
+  }
+
+Plymouth.SetDisplayMessageFunction (display_message_callback);
+Plymouth.SetHideMessageFunction (hide_message_callback);
+
+#----------------------------------------- Updates -------------------------------------
+# No bar: one line that says what is happening and how far it has got, and
+# one that says not to switch off.
+
+update.title = "";
+if (mode == "updates")
+  update.title = "Installing updates";
+if (mode == "system-upgrade")
+  update.title = "Upgrading system";
+if (mode == "firmware-upgrade")
+  update.title = "Upgrading firmware";
+if (mode == "system-reset")
+  update.title = "Resetting system";
+
+if (update.title != "")
+  {
+    update.sprite = Sprite ();
+    update.warning = Sprite ();
+    center_text (update.sprite, text_image (update.title + "...", font, 0.9), 0.66, 10000);
+    center_text (update.warning, text_image ("Do not turn off your computer", small_font, 0.65), 0.70, 10000);
+  }
+
+fun system_update_callback (progress)
+  {
+    if (update.title != "")
+      center_text (update.sprite, text_image (update.title + "... " + progress + "%", font, 0.9), 0.66, 10000);
+  }
+
+Plymouth.SetSystemUpdateFunction (system_update_callback);

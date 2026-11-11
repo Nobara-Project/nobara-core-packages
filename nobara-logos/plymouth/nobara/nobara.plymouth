@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Nobara
+Description=The Nobara wordmark; the penguin's eye opens.
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/nobara
+ScriptFile=/usr/share/plymouth/themes/nobara/nobara.script
