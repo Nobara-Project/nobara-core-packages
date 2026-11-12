@@ -33,6 +33,10 @@ for (index = 0; index < eye.count; index++)
   {
     eye.image[index] = Image ("eye-" + size + "-" + index + ".png");
   }
+# At shutdown and reboot also the closing: they follow the open eye.
+if (mode == "shutdown" || mode == "reboot")
+  for (index = 0; index < 55; index++)
+    eye.image[eye.count + index] = Image ("close-" + size + "-" + index + ".png");
 eye.shown = -1;
 
 band.count = 35;
@@ -78,7 +82,8 @@ band.x[34] = 0; band.y[34] = 0;
 band.shown = -1;
 
 # The eye opens only when the machine boots. At shutdown and reboot it is
-# open, and after a moment closes: the opening played backwards. Then it stays
+# open, and after a moment closes, as the moon wanes: the dark comes in from the
+# right, where the light first appeared, so boot and shutdown make one turn. It stays
 # closed, with no more bands of light; the glow goes on breathing. In the
 # update modes it is open from the start and stays open: Plymouth starts the
 # script again on every "plymouth change-mode", and the eye must not close and
@@ -199,7 +204,7 @@ fun refresh ()
         time = time - 0.7;
       }
     if (closing)
-      fade = 1 - ease ((time - 3.67) / 0.7);
+      fade = 1 - ease ((time - 2.99) / 0.7);
     if (fade != logo_fade)
       {
         global.logo_fade = fade;
@@ -218,7 +223,11 @@ fun refresh ()
     if (time < 0.25 && opening)
       index = -1;
     if (closing && time >= 0.5)
-      index = eye.count - 1 - Math.Int ((time - 0.5) / 0.04);
+      {
+        index = eye.count - 1 + Math.Int ((time - 0.5) / 0.04);
+        if (index >= eye.count + 55)
+          index = -1;
+      }
     show_eye (index);
 
     # The band of light crosses, then again every few seconds; not while the
