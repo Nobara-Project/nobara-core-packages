@@ -78,13 +78,36 @@ band.x[34] = 0; band.y[34] = 0;
 band.shown = -1;
 
 # The eye opens only when the machine boots. At shutdown and reboot it is
-# open from the start, and so in the update modes: Plymouth starts the script
-# again on every "plymouth change-mode", and the eye must not close and open
-# again when an update begins.
-closing = (mode != "boot");
+# open, and after a moment closes: the opening played backwards. Then it stays
+# closed, with no more bands of light; the glow goes on breathing. In the
+# update modes it is open from the start and stays open: Plymouth starts the
+# script again on every "plymouth change-mode", and the eye must not close and
+# open again when an update begins.
+opening = (mode == "boot");
+closing = (mode == "shutdown" || mode == "reboot");
 band.first = 2.6;
-if (closing)
+if (!opening)
   band.first = 1;
+
+# At boot the whole logo fades in from black before the eye opens; at
+# shutdown and reboot it fades out after the eye has closed (the eye is not
+# shown during either fade). Not in the update modes: the script starts again
+# on every change-mode, and the logo would blink.
+fun ease (part)
+  {
+    if (part <= 0)
+      return 0;
+    if (part >= 1)
+      return 1;
+    return 0.5 - 0.5 * Math.Cos (Math.Pi * part);
+  }
+logo_fade = 1;
+if (opening)
+  {
+    logo_fade = 0;
+    letters.sprite.SetOpacity (0);
+    glow.sprite.SetOpacity (0);
+  }
 
 fun show_eye (index)
   {
@@ -167,21 +190,42 @@ fun refresh ()
         global.clock.since = clock.since + 1;
       }
 
-    # The glow breathes.
-    glow.sprite.SetOpacity (0.75 - 0.25 * Math.Cos (2 * Math.Pi * time / 5));
+    # At boot the logo fades in first and the rest starts after it; at
+    # shutdown and reboot it fades out once the eye has closed.
+    fade = 1;
+    if (opening)
+      {
+        fade = ease (time / 0.7);
+        time = time - 0.7;
+      }
+    if (closing)
+      fade = 1 - ease ((time - 3.67) / 0.7);
+    if (fade != logo_fade)
+      {
+        global.logo_fade = fade;
+        letters.sprite.SetOpacity (fade);
+        if (opening && hint.sprite)
+          hint.sprite.SetOpacity (fade);
+      }
 
-    # The eye opens once and stays open.
+    # The glow breathes.
+    glow.sprite.SetOpacity (fade * (0.75 - 0.25 * Math.Cos (2 * Math.Pi * time / 5)));
+
+    # The eye opens once and stays open; at shutdown it closes once.
     index = Math.Int ((time - 0.25) / 0.04);
-    if (closing || index >= eye.count)
+    if (!opening || index >= eye.count)
       index = eye.count - 1;
-    if (time < 0.25 && !closing)
+    if (time < 0.25 && opening)
       index = -1;
+    if (closing && time >= 0.5)
+      index = eye.count - 1 - Math.Int ((time - 0.5) / 0.04);
     show_eye (index);
 
-    # The band of light crosses, then again every few seconds.
+    # The band of light crosses, then again every few seconds; not while the
+    # eye closes, nor after.
     index = -1;
     since = time - band.first;
-    if (since >= 0)
+    if (since >= 0 && !closing)
       {
         since = since - Math.Int (since / 4) * 4;
         index = Math.Int (since / 0.04);
@@ -198,9 +242,101 @@ Plymouth.SetRefreshFunction (refresh);
 
 #----------------------------------------- Text ----------------------------------------
 
+# Plymouth's text plugin turns a character into a glyph only when plymouthd
+# runs with a UTF-8 locale. In the initramfs it does not: dracut puts in no
+# locale data, and plymouthd calls setlocale there only when its translations
+# are installed (it does after switching to the real root). Until then every
+# non-ASCII character is drawn as a box. So the usual punctuation becomes
+# ASCII, and any other non-ASCII character becomes one "?" unless this
+# plymouthd can draw it. Script strings are bytes: Length, CharAt and
+# SubString count bytes.
+
+ascii["…"] = "...";
+ascii["‘"] = "'";
+ascii["’"] = "'";
+ascii["‚"] = "'";
+ascii["′"] = "'";
+ascii["“"] = "\"";
+ascii["”"] = "\"";
+ascii["„"] = "\"";
+ascii["″"] = "\"";
+ascii["«"] = "\"";
+ascii["»"] = "\"";
+ascii["‐"] = "-";
+ascii["‑"] = "-";
+ascii["‒"] = "-";
+ascii["–"] = "-";
+ascii["—"] = "-";
+ascii["−"] = "-";
+ascii[" "] = " ";
+ascii[" "] = " ";
+ascii[" "] = " ";
+ascii[" "] = " ";
+ascii["•"] = "*";
+
+# How many bytes a character has, by its first byte; 1 for a byte that only
+# continues one. Each byte is taken from a character that starts with it.
+fun byte_table (characters, size, at)
+  {
+    for (index = at; index < characters.Length (); index += size)
+      global.utf8_size[characters.CharAt (index)] = size;
+  }
+byte_table ("ĀāĂăĄąĆćĈĉĊċČčĎďĐđĒēĔĕĖėĘęĚěĜĝĞğĠġĢģĤĥĦħĨĩĪīĬĭĮįİıĲĳĴĵĶķĸĹĺĻļĽľĿ", 2, 1);
+byte_table (" ÀĀŀƀǀȀɀʀˀ̀̀΀πЀрҀӀԀՀր׀؀ـڀۀ܀݀ހ߀", 2, 0);
+byte_table ("ࠀက 　䀀倀怀瀀耀退ꀀ뀀쀀퀀", 3, 0);
+byte_table ("𐀀񀀀򀀀󀀀􀀀", 4, 0);
+
+# Whether this plymouthd draws non-ASCII text: an e with an accent is as wide
+# as a plain e, a box is not. Asked only when a text has such a character,
+# so it holds also after plymouthd has switched to the real root.
+fun draws_utf8 ()
+  {
+    return Image.Text ("éééééééééééééééééééé", 1, 1, 1, 1, font).GetWidth ()
+        == Image.Text ("eeeeeeeeeeeeeeeeeeee", 1, 1, 1, 1, font).GetWidth ();
+  }
+
+fun plain_text (text)
+  {
+    plain = "";
+    kept = "";
+    unknown = 0;
+    length = text.Length ();
+    index = 0;
+    while (index < length)
+      {
+        byte = text.CharAt (index);
+        size = utf8_size[byte];
+        if (!size)
+          {
+            plain += byte;
+            kept += byte;
+            index++;
+          }
+        else
+          {
+            character = text.SubString (index, index + size);
+            if (ascii[character])
+              {
+                plain += ascii[character];
+                kept += ascii[character];
+              }
+            else
+              {
+                plain += "?";
+                kept += character;
+                unknown = 1;
+              }
+            index += size;
+          }
+      }
+    if (unknown && !draws_utf8 ())
+      return plain;
+    return kept;
+  }
+
 fun text_image (text, which_font, brightness)
   {
-    return Image.Text (text, brightness, brightness, brightness, 1, which_font);
+    return Image.Text (plain_text (text), brightness, brightness, brightness, 1, which_font);
   }
 
 # Put a line of text on a sprite, centered on the screen at a height given as
@@ -360,10 +496,14 @@ Plymouth.SetDisplayQuestionFunction (display_question_callback);
 #----------------------------------------- Messages ------------------------------------
 
 message.sprite = Sprite ();
+# The update modes show only their own two lines (below), not the updater's
+# stage messages.
+message.shown = !(mode == "updates" || mode == "system-upgrade" || mode == "firmware-upgrade" || mode == "system-reset");
 
 fun display_message_callback (text)
   {
-    center_text (message.sprite, text_image (text, small_font, 0.75), 0.9, 10000);
+    if (message.shown)
+      center_text (message.sprite, text_image (text, small_font, 0.75), 0.9, 10000);
   }
 
 fun hide_message_callback (text)
@@ -403,3 +543,25 @@ fun system_update_callback (progress)
   }
 
 Plymouth.SetSystemUpdateFunction (system_update_callback);
+
+#----------------------------------------- The hint ------------------------------------
+# One dim line at the bottom of every screen: what is happening, and that Esc
+# shows the text output. Esc works in every mode, also while a password is
+# asked (the prompt then shows in the text view). Below the messages, which
+# are at 0.9. At boot it fades in with the logo; at shutdown it stays after
+# the logo has gone, so a slow shutdown is not a black screen.
+
+hint.status["boot"] = "Starting up";
+hint.status["updates"] = "Updating";
+hint.status["system-upgrade"] = "Upgrading";
+hint.status["firmware-upgrade"] = "Upgrading firmware";
+hint.status["system-reset"] = "Resetting";
+hint.status["shutdown"] = "Shutting down";
+hint.status["reboot"] = "Restarting";
+if (hint.status[mode])
+  {
+    hint.sprite = Sprite ();
+    center_text (hint.sprite, text_image (hint.status[mode] + ". Press [Esc] to view status output.", small_font, 0.45), 0.95, 10000);
+    if (opening)
+      hint.sprite.SetOpacity (logo_fade);
+  }
