@@ -18,7 +18,8 @@ import libdnf5.rpm as rpm_api
 import libdnf5.transaction as trans
 
 from .update_migrations import (BGRT_FILES, add_codec_migration, add_plymouth_migration, is_htpc, machine_product,
-                                plan_migrations, plasma_login_migrated, settle_nobara_theme)
+                                plan_migrations, plasma_login_migrated, settle_nobara_theme,
+                                keep_rsyslog, rsyslog_removed)
 from .update_boot import changes_kernel, check_selection_support, boot_space_requirements, eac_kernel, installed_boot_kernels
 from .update_policy import execution_policy, format_restart_reasons
 from .update_origins import PackageOriginError, collect_package_origins, annotate_failure
@@ -370,6 +371,20 @@ def validate_kmod_cleanup(base, transaction, candidates):
             raise UpdateError(f"Cannot safely remove {package.get_full_nevra()}: kernel {kernel} "
                               "or its module package is required by the final update. Repair that kernel's "
                               "packages before retrying.")
+
+
+def rsyslog_dependents(base) -> set[str]:
+    """Installed packages, other than rsyslog's own, that require rsyslog."""
+    own = rpm_api.PackageQuery(base)
+    own.filter_installed()
+    own.filter_name(["rsyslog", "rsyslog-*"], common.QueryCmp_GLOB)
+    if own.empty():
+        return set()
+    dependents = rpm_api.PackageQuery(base)
+    dependents.filter_installed()
+    dependents.filter_requires(own)
+    dependents.difference(own)
+    return {package.get_name() for package in dependents}
 
 
 def add_dnf_inhibitor_migration(base, migrations):
@@ -746,9 +761,11 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
             nvidia_closed = "MODULE_VARIANT=kernel\n" in Path("/etc/nvidia/kernel.conf").read_text()
         except OSError:
             nvidia_closed = False
+        installroot = Path(base.get_config().get_installroot_option().get_value())
         migrations = plan_migrations(inventory, product=machine_product(), nvidia_closed=nvidia_closed,
-                                     login_migrated=plasma_login_migrated(
-                                         Path(base.get_config().get_installroot_option().get_value())))
+                                     login_migrated=plasma_login_migrated(installroot),
+                                     rsyslog_removed=rsyslog_removed(installroot))
+        keep_rsyslog(migrations, rsyslog_dependents(base))
         add_dnf_inhibitor_migration(base, migrations)
         if getattr(base, "nobara_migrate_media", False):
             migrations.hooks.append("migrate-media-repository")

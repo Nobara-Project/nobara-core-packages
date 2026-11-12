@@ -20,7 +20,7 @@ LOG = logging.getLogger("nobara-sync")
 RESULT_PREFIX = "NOBARA_UPDATE_RESULT "
 COMMANDS = {"cli", "prepare-update", "install-updates", "install-fixups", "install-codecs",
             "repair", "check-updates", "check-repos", "update-status", "schedule-update",
-            "cancel-update", "reboot", "recovery-report", "retry-update", "retry-recovery", "confirm-update", "clean-update-cache"}
+            "cancel-update", "reboot", "recovery-report", "retry-update", "retry-recovery", "confirm-update", "abandon-recovery", "clean-update-cache"}
 
 
 def parse_args(argv=None):
@@ -44,6 +44,7 @@ def parse_args(argv=None):
         "retry-update": "After manual repairs without rollback, validate and prepare a fresh update.",
         "retry-recovery": "Validate and select the saved recovery system for your next restart.",
         "confirm-update": "Revalidate a finished installation after boot confirmation failed.",
+        "abandon-recovery": "Keep the running system after an interrupted update whose recovery cannot boot.",
         "clean-update-cache": "Remove obsolete downloads and boot archives after updates finish; keep recovery data and reports.",
         "reboot": "Restart now and install the prepared update.",
     }.items():
@@ -140,7 +141,7 @@ def dispatch(args):
         if in_installer_root():
             raise UpdateError("Update cache cleanup is only available on an installed system.")
         return worker_action("clean-cache", LOG)
-    if args.command in {"retry-recovery", "confirm-update"}:
+    if args.command in {"retry-recovery", "confirm-update", "abandon-recovery"}:
         if in_installer_root():
             raise UpdateError("Recovery and confirmation are only available on an installed system.")
         if not worker_action(args.command, LOG):

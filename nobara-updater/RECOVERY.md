@@ -218,6 +218,29 @@ Share the report or use `retry-recovery` when appropriate; do not edit
 every application or hardware workload, and GRUB's `boot_success=1` alone is
 not proof that the updater completed.
 
+## If the recovery system cannot boot
+
+Sometimes the saved recovery entry is selected but the computer keeps starting
+the normal system, so recovery can never be confirmed. If that normal system
+works and you want to keep it, run:
+
+```sh
+sudo nobara-sync abandon-recovery
+```
+
+The command refuses to run from the recovery system, while an offline update is
+scheduled, or while another update's recovery is armed. It checks the saved
+transaction and recovery, the RPM database and installed dependencies, then
+rebuilds the modules and boot images of every installed kernel, because the
+interrupted update never validated them. It checks the running kernel's normal
+boot entry, selects it in GRUB and disarms the fallback. Only then does it
+mark the update complete and retire the snapshot through normal cleanup. The
+failure report and saved state are kept.
+
+If a check fails, nothing changes and recovery stays armed. Afterwards, run
+`sudo nobara-sync cli` to finish updating the kept system. Use this command only
+when you have decided against the previous system: the snapshot is removed.
+
 ## If installation failed without automatic rollback
 
 Reaching the desktop does not confirm that installation completed. Some

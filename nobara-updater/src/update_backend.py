@@ -583,6 +583,70 @@ def confirm_update(root: Path = STATE_DIR) -> None:
         cleanup_confirmed_update(root, state)
 
 
+def abandon_recovery(root: Path = STATE_DIR) -> None:
+    """Keep the running system after a failed update; retire its recovery.
+
+    For an interrupted update whose recovery cannot boot. Nothing changes until
+    the running system passes the RPM and boot checks; its boot files are then
+    rebuilt for every kernel, because the interrupted job never validated them.
+    """
+    from .update_recovery import validate_saved_recovery
+    from .update_boot import validate_running_entry
+    from .update_report import capture_boot_diagnostics
+    if in_installer_root():
+        raise UpdateError("Abandoning recovery is only available on an installed system.")
+    with update_lock(root):
+        state = read_state(root)
+        if (state.get("status") not in {"failed", "interrupted"} or not state.get("started")
+                or state.get("installer") or state.get("execution", {}).get("mode") == "live"
+                or not state.get("recovery", {}).get("created")):
+            raise UpdateError("There is no interrupted installation with a saved recovery system to abandon.")
+        if any(path.exists() or path.is_symlink() for path in (TRIGGER, Path("/etc/system-update"),
+                                                              Path("/run/nobara-updater-offline"))):
+            raise UpdateError("An offline update is scheduled or running. Abandoning recovery is not available.")
+        if (Path("/etc/nobara-updater-recovery.json").exists()
+                or "nobara.rollback=" in Path("/proc/cmdline").read_text()):
+            raise UpdateError("This is the recovery system. Let its restore finish instead.")
+        job = job_directory(state, root)
+        capture_boot_diagnostics(state, "abandon-recovery-before")
+        try:
+            verify_files(job, state["files"])
+            validate_saved_recovery(state["recovery"], state["job"])
+            environment = grub_environment()
+            if environment.get("nobara_fallback") not in {None, "", state["recovery"]["entry_id"]}:
+                raise UpdateError("Another update's recovery is armed.")
+            before = rpm_fingerprint()
+            check_installed_system()
+            normal_entry = synchronize_boot_root()
+            validate_boot([], rebuild_all=True, preserved_kernels=state.get("preserved_kernels", []))
+            kernel = os.uname().release
+            entry = normal_entry or kernel_entry(kernel)
+            validate_running_entry(kernel, entry)
+            if rpm_fingerprint() != before:
+                raise UpdateError("Installed packages changed while abandoning recovery. Retry after package operations finish.")
+            saved = job / "abandon-recovery-state.json"
+            if not saved.exists():
+                atomic_json(saved, state)
+            # Cleanup can retire the private /boot archive. Publish the
+            # original failure before permitting that.
+            publish_failure(state)
+            confirm_trial(entry)
+        except Exception as error:
+            capture_boot_diagnostics(state, "abandon-recovery-after", note=f"Abandoning recovery refused: {error}")
+            try:
+                publish_failure(state)
+            except Exception:
+                LOG.exception("Could not refresh the update failure report.")
+            raise UpdateError(f"Cannot safely abandon recovery: {error}") from error
+        selection = {"kernel": kernel, "entry": entry, "loader": "grub"}
+        write_state(root, state, "complete", recovery_blocked=False, recovery_retry_ready=False,
+                    abandoned_recovery=True, boot_selection=selection, normal_boot_entry=entry, trial_entry=entry)
+        capture_boot_diagnostics(state, "abandon-recovery-after")
+        Path("/etc/nobara/newinstall").unlink(missing_ok=True)
+        LOG.info("Kept the running system and rebuilt its boot files. Run nobara-sync cli to finish updating it.")
+        cleanup_confirmed_update(root, state)
+
+
 def replay(job: Path, *, test: bool = False) -> None:
     # Every payload is local. Keep native DNF5 in its own process so a Python
     # or libdnf5 upgrade cannot replace modules used by an in-flight binding.
@@ -729,6 +793,31 @@ def restore_plymouth_config(config: Path, previous: bytes | None) -> None:
         LOG.exception("Could not restore %s.", config)
 
 
+def remove_rsyslog_logs(log_dir: Path = Path("/var/log"), state_dir: Path = Path("/var/lib/rsyslog")) -> None:
+    """Delete the text logs rsyslog wrote, once it is removed; never fails the update.
+
+    The journal holds the same messages. Only regular files with the names
+    from Fedora's rsyslog.conf are deleted, never links or other logs.
+    """
+    from .update_migrations import RSYSLOG_LOGS
+    if subprocess.run(["rpm", "-q", "--quiet", "rsyslog"]).returncode == 0:
+        LOG.warning("rsyslog is still installed; keeping its logs.")
+        return
+    pattern = re.compile("(" + "|".join(map(re.escape, RSYSLOG_LOGS)) + r")(-\d{8}|\.\d+)?(\.(gz|xz|bz2|zst))?")
+    freed = 0
+    for path in sorted(log_dir.iterdir()) if log_dir.is_dir() else ():
+        try:
+            if pattern.fullmatch(path.name) and path.is_file() and not path.is_symlink():
+                freed += path.stat().st_size
+                path.unlink()
+        except OSError:
+            LOG.warning("Could not remove %s.", path, exc_info=True)
+    # imjournal's read position; the package leaves it behind.
+    if state_dir.is_dir() and not state_dir.is_symlink():
+        shutil.rmtree(state_dir, ignore_errors=True)
+    LOG.info("Removed rsyslog's logs from %s (%.1f MiB); the journal keeps the same messages.", log_dir, freed / 1024**2)
+
+
 def apply_hooks(hooks: list[str]) -> dict:
     """Apply migration hooks; return undo data of the one-time theme switch."""
     switched = {}
@@ -744,6 +833,8 @@ def apply_hooks(hooks: list[str]) -> dict:
                 elif source.is_file() and not target.exists():
                     shutil.copy2(source, target)
             run(["systemctl", "--root=/", "enable", "--force", "plasmalogin.service"])
+        elif hook == "rsyslog-logs":
+            remove_rsyslog_logs()
         elif hook == "enable-falcond":
             run(["systemctl", "--root=/", "enable", "falcond.service"])
         elif hook == "enable-codecs":
@@ -953,6 +1044,13 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
                                 dict(theme="nobara", previous=switched["plymouth-nobara"]["theme"] or "default"))
                 except OSError:
                     LOG.warning("Could not record the boot splash migration.", exc_info=True)
+            if "rsyslog-logs" in state["migrations"]["hooks"]:
+                # Never remove rsyslog again once somebody reinstalls it.
+                from .update_migrations import RSYSLOG_MARKER
+                try:
+                    atomic_json(root / Path(RSYSLOG_MARKER).name, dict(rsyslog="removed"))
+                except OSError:
+                    LOG.warning("Could not record the rsyslog removal.", exc_info=True)
             if "plasma-login" in state["migrations"]["hooks"]:
                 # Never replace SDDM again once somebody reinstalls it.
                 from .update_migrations import PLASMA_LOGIN_MARKER

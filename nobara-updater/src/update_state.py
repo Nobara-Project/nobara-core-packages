@@ -234,7 +234,8 @@ def status_message(state: dict) -> str:
         "installing-live": "Installing application updates. Please keep the computer powered on.",
         "validating-live": "Checking the installed application updates…",
         "live-complete": "Updates installed. Restart updated applications to use their new versions.",
-        "complete": "System update completed and startup checks passed.",
+        "complete": ("Recovery was abandoned and the running system kept. Run nobara-sync cli to finish updating it."
+                     if state.get("abandoned_recovery") else "System update completed and startup checks passed."),
         "unchanged": "System packages are up to date.",
         "failed": "System update failed: " + state.get("error", "See the update log."),
         "interrupted": ("A system update was interrupted. Boot recovery before another update."

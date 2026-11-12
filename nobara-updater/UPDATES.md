@@ -132,6 +132,31 @@ To keep SDDM without migrating at all, create the marker before updating:
 echo '{}' | sudo tee /var/lib/nobara-updater/plasma-login-migration.json
 ```
 
+rsyslog is removed once, with its `rsyslog-*` modules. Nobara no longer installs
+it: the systemd journal keeps every message (`journalctl`), and rsyslog's
+plain-text copies in `/var/log` grew without a size limit. After the update the
+updater deletes the logs rsyslog wrote with Fedora's settings (`messages`,
+`secure`, `maillog`, `cron` and `spooler` in `/var/log`, and their rotated
+copies) and its state in `/var/lib/rsyslog`. Other logs, symbolic links and
+`boot.log` are left alone. Changed rsyslog settings are kept by RPM as
+`.rpmsave` files. If another installed package requires rsyslog, it stays and
+nothing is deleted.
+
+After a successful removal the updater records it in
+`/var/lib/nobara-updater/rsyslog-removal.json`, and later updates leave a
+reinstalled rsyslog alone:
+
+```
+sudo dnf install rsyslog
+sudo systemctl enable --now rsyslog
+```
+
+To keep rsyslog without removing it at all, create the marker before updating:
+
+```
+echo '{}' | sudo tee /var/lib/nobara-updater/rsyslog-removal.json
+```
+
 Some installations have a newer `libdnf5-plugin-systemd-inhibit` package than
 the DNF build available from the rolling repositories. If that optional plugin
 has no available replacement and requires a library version the repositories

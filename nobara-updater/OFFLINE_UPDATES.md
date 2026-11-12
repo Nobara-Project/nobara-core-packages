@@ -851,6 +851,9 @@ Include `update_policy.py`, `update_boot.py`, and `nobara-updater-live.service` 
 (the Makefile and wildcard file lists include them). Package upgrades must
 reload systemd units. The offline unit is pulled in by
 system-update.target; the confirmation unit is pulled in by multi-user.target.
+While it runs, the offline unit masks `ctrl-alt-del.target` for the rest of that
+boot, so a Ctrl+Alt+Del press cannot reboot in the middle of installation or
+boot-file validation. A burst of presses still forces a reboot.
 Drop-ins prevent native DNF4/DNF5/PackageKit offline services and DNF cleanup
 services from competing for
 Nobara's trigger while allowing their own offline jobs to continue working.

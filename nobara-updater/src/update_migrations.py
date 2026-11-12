@@ -36,6 +36,14 @@ PLYMOUTH_THEMES = "/usr/share/plymouth/themes"
 # SDDM moves to Plasma Login once. Written after a successful update, so a
 # later return to SDDM is respected even without plasma-login-manager.
 PLASMA_LOGIN_MARKER = "/var/lib/nobara-updater/plasma-login-migration.json"
+# rsyslog is removed once: the journal already keeps every message, and the
+# plain-text copies in /var/log grew without a size limit. Written after a
+# successful update, so reinstalling rsyslog afterwards is respected.
+RSYSLOG_MARKER = "/var/lib/nobara-updater/rsyslog-removal.json"
+# The files Fedora's /etc/rsyslog.conf writes, with their logrotate copies
+# (messages-20261108, or messages.1.gz with other logrotate settings).
+# boot.log is left alone: Plymouth writes it too.
+RSYSLOG_LOGS = ("messages", "secure", "maillog", "cron", "spooler")
 
 
 @dataclass
@@ -76,7 +84,7 @@ OLD_ROCM = {
 
 
 def plan_migrations(installed: list[dict], *, product: str = "", nvidia_closed: bool = False,
-                    login_migrated: bool = False) -> MigrationPlan:
+                    login_migrated: bool = False, rsyslog_removed: bool = False) -> MigrationPlan:
     names = {pkg["name"] for pkg in installed}
     specs = {f'{pkg["name"]}.{pkg["arch"]}' for pkg in installed} | names
     plan = MigrationPlan(remove=RETIRED & specs)
@@ -96,6 +104,10 @@ def plan_migrations(installed: list[dict], *, product: str = "", nvidia_closed: 
         # These settings require SDDM and otherwise prevent its replacement,
         # or pull it back in after a partially completed login migration.
         plan.remove.update(names & {"kde-settings-sddm"})
+    # rsyslog reinstalled after the removal is a deliberate choice.
+    if "rsyslog" in names and not rsyslog_removed:
+        plan.remove.update(name for name in names if name == "rsyslog" or name.startswith("rsyslog-"))
+        plan.hooks.append("rsyslog-logs")
     if {"tigervnc-license", "tigervnc-server-minimal"} <= names:
         plan.install.update({"tigervnc-x11-server", "tigervnc-selinux"} - names)
     for old, new in (("rubberband.i686", "rubberband-libs"), ("tesseract.i686", "tesseract-libs")):
@@ -184,6 +196,23 @@ def nobara_theme_installed(root: Path = Path("/")) -> bool:
 
 def plasma_login_migrated(root: Path = Path("/")) -> bool:
     return (root / PLASMA_LOGIN_MARKER.lstrip("/")).exists()
+
+
+def rsyslog_removed(root: Path = Path("/")) -> bool:
+    return (root / RSYSLOG_MARKER.lstrip("/")).exists()
+
+
+def keep_rsyslog(plan: MigrationPlan, dependents: set[str]) -> None:
+    """Leave rsyslog installed while another package requires it.
+
+    Removing it would remove that package too, which the removal check
+    rejects: the whole update would fail instead of skipping this cleanup.
+    """
+    if "rsyslog-logs" not in plan.hooks or not dependents:
+        return
+    LOG.info("Keeping rsyslog: %s requires it.", ", ".join(sorted(dependents)))
+    plan.hooks.remove("rsyslog-logs")
+    plan.remove.difference_update({name for name in plan.remove if name == "rsyslog" or name.startswith("rsyslog-")})
 
 
 def nobara_theme_migrated(root: Path = Path("/")) -> bool:

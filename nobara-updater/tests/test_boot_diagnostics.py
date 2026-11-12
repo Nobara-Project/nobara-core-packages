@@ -116,6 +116,22 @@ class BootDiagnosticsTests(unittest.TestCase):
         self.assertLessEqual(len(text), 65537)
         self.assertNotIn("SYMLINK_SECRET", text)
 
+    def test_grub_config_selection_lines_are_reported_after_long_menus(self):
+        config = self.boot / "grub2/grub.cfg"
+        config.parent.mkdir(parents=True)
+        config.write_text('load_env -f ${config_directory}/grubenv\nif [ "${next_entry}" ] ; then\n'
+                          '   set default="${next_entry}"\nelse\n   set default="${saved_entry}"\nfi\n'
+                          "set superusers=root\npassword_pbkdf2 root GRUB_SECRET\n" + "# padding\n" * 4000
+                          + "blscfg\n# Nobara update fallback v1\nif [ -n \"${nobara_fallback}\" ]; then\n"
+                          '    set default="${nobara_fallback}"\n    set timeout=5\nfi\n')
+        reports.capture_boot_diagnostics(self.state, "failure")
+        text = (self.archive / "failure-boot.log").read_text()
+        for expected in ('set default="${saved_entry}"', "blscfg", "# Nobara update fallback v1",
+                         'set default="${nobara_fallback}"', "set timeout=5", "load_env -f"):
+            self.assertIn(expected, text)
+        self.assertNotIn("GRUB_SECRET", text)
+        self.assertNotIn("padding", text)
+
 
 if __name__ == "__main__":
     unittest.main()

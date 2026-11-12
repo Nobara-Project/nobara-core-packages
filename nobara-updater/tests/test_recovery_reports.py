@@ -384,6 +384,10 @@ class ServiceOrderingTests(unittest.TestCase):
         self.assertNotIn("FailureAction", fallback["Unit"])
         self.assertEqual(fallback["Service"]["ExecStart"], "/usr/libexec/nobara-update-reboot")
 
+    def test_offline_installation_ignores_ctrl_alt_del_for_this_boot(self):
+        self.assertEqual(self.unit("offline")["Service"]["ExecStartPre"],
+                         "-/usr/bin/systemctl mask --runtime ctrl-alt-del.target")
+
     def test_confirmation_failure_without_backup_keeps_failed_state_but_allows_desktop(self):
         spec = importlib.util.spec_from_file_location("report_worker_test", SOURCE / "update_worker.py")
         worker = importlib.util.module_from_spec(spec)

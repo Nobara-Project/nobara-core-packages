@@ -709,6 +709,31 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
         self.check_fixture_health()
 
+    def rsyslog_fixture(self, *extra):
+        names = ["rsyslog", "rsyslog-gnutls", "dnf-app-center", "inputplumber", "falcond", "mesa-vulkan-drivers"]
+        for name in names:
+            self.install_health_fixture(name, headers="Requires: rsyslog" if name == "rsyslog-gnutls" else "")
+        for name, headers in extra:
+            self.install_health_fixture(name, headers=headers)
+        self.migrations = plan_migrations([dict(name=name, arch="noarch") for name in names])
+
+    def test_rsyslog_and_its_modules_retire_in_one_transaction(self):
+        self.rsyslog_fixture()
+        result = self.prepare()
+        self.assertEqual({p["name"] for p in result["packages"] if p["action"] == "Remove"},
+                         {"rsyslog", "rsyslog-gnutls"})
+        self.assertIn("rsyslog-logs", result["migrations"]["hooks"])
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        self.check_fixture_health()
+
+    def test_rsyslog_required_by_another_package_stays(self):
+        # Removing rsyslog would remove this package too and fail the update.
+        self.rsyslog_fixture(("syslog-reader", "Requires: rsyslog"))
+        result = self.prepare()
+        self.assertFalse(any(p["action"] == "Remove" for p in result.get("packages", [])))
+        self.assertNotIn("rsyslog-logs", result.get("migrations", {}).get("hooks", []))
+
     def test_redundant_noarch_copy_is_removed_when_native_package_remains(self):
         for arch in ("noarch", "x86_64"):
             self.install_health_fixture("emacs-filesystem", arch=arch)

@@ -370,19 +370,19 @@ def capture_boot_diagnostics(state: dict, phase: str, *, note: str | None = None
         directory = report_directory(state)
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         destination = directory / (phase + "-boot.log")
-        if phase in {"recovery-retry-before", "confirmation-retry-before"} and destination.exists():
+        if phase in {"recovery-retry-before", "confirmation-retry-before", "abandon-recovery-before"} and destination.exists():
             return  # Keep the original broken selection across repeated requests.
         boot = BOOT_REPORTS.parent
         notes = ["Boot diagnostics (only boot-selection fields are included)"]
         if note:
             notes.append(note)
 
-        def read(path):
+        def read(path, limit=16384):
             try:
                 if path.is_symlink() or not path.is_file():
                     return "[missing or symlink]"
                 with path.open("r", errors="replace") as stream:
-                    return stream.read(16384)
+                    return stream.read(limit)
             except OSError as error:
                 return f"[unavailable: {error}]"
 
@@ -441,6 +441,12 @@ def capture_boot_diagnostics(state: dict, phase: str, *, note: str | None = None
             for line in read(path).splitlines():
                 if re.match(r"\s*(search\s|configfile\s|set\s+(?:prefix|root)=|\[)", line):
                     notes.append(line)
+        # Whether GRUB honors saved_entry and the recovery fallback at all;
+        # the fallback fragment comes late in a configuration of any length.
+        notes.append("grub2/grub.cfg:")
+        for line in read(boot / "grub2/grub.cfg", 1024**2).splitlines():
+            if re.match(r"\s*(set\s+(?:default|timeout)=|blscfg\b|load_env\b|if \[ -n \"\$\{nobara_|# Nobara update fallback|\[)", line):
+                notes.append(line.strip())
         notes.append("EFI boot selection:\n" + command(["efibootmgr"]))
         contents = redact("\n".join(notes))[:65536]
         destination.write_text(contents + "\n")

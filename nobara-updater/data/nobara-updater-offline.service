@@ -10,6 +10,10 @@ RefuseManualStop=yes
 [Service]
 Type=oneshot
 ExecCondition=/usr/libexec/nobara-update-worker own-trigger
+# Ctrl+Alt+Del would reboot in the middle of installation or boot-file
+# validation. The runtime mask ends with this boot; a burst of presses still
+# forces a reboot (CtrlAltDelBurstAction).
+ExecStartPre=-/usr/bin/systemctl mask --runtime ctrl-alt-del.target
 ExecStart=/usr/libexec/nobara-update-worker execute
 ExecStartPost=/usr/bin/systemctl --no-block reboot
 ExecStopPost=-/usr/libexec/nobara-update-worker offline-stopped
