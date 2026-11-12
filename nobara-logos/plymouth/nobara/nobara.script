@@ -512,7 +512,7 @@ message.shown = !(mode == "updates" || mode == "system-upgrade" || mode == "firm
 fun display_message_callback (text)
   {
     if (message.shown)
-      center_text (message.sprite, text_image (text, small_font, 0.75), 0.9, 10000);
+      center_text (message.sprite, text_image (text, small_font, 0.75), 0.875, 10000);
   }
 
 fun hide_message_callback (text)
@@ -556,8 +556,8 @@ Plymouth.SetSystemUpdateFunction (system_update_callback);
 #----------------------------------------- The hint ------------------------------------
 # One dim line at the bottom of every screen: what is happening, and that Esc
 # shows the text output. Esc works in every mode, also while a password is
-# asked (the prompt then shows in the text view). Below the messages, which
-# are at 0.9. At boot it fades in with the logo; at shutdown it stays after
+# asked (the prompt then shows in the text view). Below the messages, in the
+# regular font so it is noticed. At boot it fades in with the logo; at shutdown it stays after
 # the logo has gone, so a slow shutdown is not a black screen.
 
 hint.status["boot"] = "Starting up";
@@ -570,7 +570,7 @@ hint.status["reboot"] = "Restarting";
 if (hint.status[mode])
   {
     hint.sprite = Sprite ();
-    center_text (hint.sprite, text_image (hint.status[mode] + ". Press [Esc] to view status output.", small_font, 0.45), 0.95, 10000);
+    center_text (hint.sprite, text_image (hint.status[mode] + ". Press [Esc] to view status output.", font, 0.72), 0.93, 10000);
     if (opening)
       hint.sprite.SetOpacity (logo_fade);
   }
