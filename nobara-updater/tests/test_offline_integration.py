@@ -331,14 +331,62 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         query.filter_version([version])
         return next(iter(query))
 
-    def test_retention_removes_oldest_complete_kernel_set_with_rpm_version_order(self):
+    def test_retention_keeps_two_newest_complete_kernel_sets_with_rpm_version_order(self):
+        # DNF's default installonly_limit is 3; Nobara keeps two standard kernels.
         base = self.retention_base()
         with patch.object(rpm_api.PackageSackWeakPtr, "get_running_kernel", return_value=self.running_fixture(base)):
             transaction = retention.plan_cleanup(base)
         removed = {(item.get_package().get_name(), item.get_package().get_version())
                    for item in transaction.get_transaction_packages()}
-        self.assertEqual(removed, {(name, "7.2.3") for name in
+        self.assertEqual(removed, {(name, version) for version in ("7.2.3", "7.2.4") for name in
                                   ("kernel", "kernel-core", "kernel-modules", "kernel-devel")})
+
+    def install_eac_fixtures(self, *versions):
+        for version in versions:
+            kernel = f"{version}-1.eac.noarch"
+            for name in ("kernel-eac-core", "kernel-eac-modules"):
+                headers = f"Provides: kernel-uname-r = {kernel}\nProvides: installonlypkg(kernel)"
+                if name != "kernel-eac-core":
+                    headers += f"\nRequires: kernel-eac-core = {version}-1.eac"
+                rpm = self.build_rpm(name, version, headers=headers, payload=f"/usr/share/retention/{name}/{version}")
+                subprocess.run(["rpm", "--root", str(self.root), "--justdb", "--nodeps", "--noscripts",
+                                "--noplugins", "--ignoresize", "-i", str(rpm)], check=True, capture_output=True)
+
+    def eac_cleanup(self, booted, *, running_rpm="7.2.10"):
+        base = self.retention_base()
+        with patch.object(retention.os, "uname", return_value=Mock(release=booted)), \
+             patch.object(rpm_api.PackageSackWeakPtr, "get_running_kernel",
+                          return_value=self.running_fixture(base, running_rpm)):
+            transaction = retention.plan_cleanup(base)
+        return {(item.get_package().get_name(), item.get_package().get_version())
+                for item in transaction.get_transaction_packages()} if transaction else set()
+
+    def test_retention_keeps_only_the_eac_build_of_the_booted_kernel(self):
+        self.install_eac_fixtures("7.2.8", "7.2.10")
+        removed = self.eac_cleanup("7.2.8-1.noarch", running_rpm="7.2.8")
+        eac = {p for p in removed if "eac" in p[0]}
+        self.assertEqual(eac, {("kernel-eac-core", "7.2.10"), ("kernel-eac-modules", "7.2.10")})
+        # The booted standard kernel is kept beside the two newest ones.
+        self.assertNotIn(("kernel-core", "7.2.8"), removed)
+
+    def test_retention_after_booting_the_new_kernel_removes_the_previous_eac_kernel(self):
+        self.install_eac_fixtures("7.2.8", "7.2.10")
+        removed = self.eac_cleanup("7.2.10-1.noarch")
+        self.assertEqual({p for p in removed if "eac" in p[0]},
+                         {("kernel-eac-core", "7.2.8"), ("kernel-eac-modules", "7.2.8")})
+
+    def test_retention_keeps_newest_eac_kernel_without_a_booted_match(self):
+        # Fixture releases are all "1"; avoid versions of the standard fixtures.
+        self.install_eac_fixtures("7.2.5", "7.2.6")
+        removed = self.eac_cleanup("7.2.10-1.noarch")
+        self.assertEqual({p for p in removed if "eac" in p[0]},
+                         {("kernel-eac-core", "7.2.5"), ("kernel-eac-modules", "7.2.5")})
+
+    def test_retention_never_removes_the_booted_eac_kernel(self):
+        self.install_eac_fixtures("7.2.8", "7.2.10")
+        removed = self.eac_cleanup("7.2.8-1.eac.noarch", running_rpm="7.2.8")
+        self.assertEqual({p for p in removed if "eac" in p[0]},
+                         {("kernel-eac-core", "7.2.10"), ("kernel-eac-modules", "7.2.10")})
 
     def test_retention_respects_custom_limits_and_preserves_entire_running_kernel_set(self):
         base = self.retention_base(2)

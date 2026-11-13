@@ -10,7 +10,7 @@ import subprocess
 import threading
 import time
 
-from nobara_updater.update_report import latest_report, upload_report
+from nobara_updater.update_report import dkms_notice, latest_report, upload_report
 
 
 def notify(report: dict) -> bool:
@@ -30,6 +30,29 @@ def notify(report: dict) -> bool:
     cache.mkdir(parents=True, exist_ok=True)
     seen.write_text(report["job"] + "\n")
     return result.stdout.strip() == "details"
+
+
+def notify_dkms(notice: dict) -> None:
+    """Once per update: name the hand-installed DKMS modules it skipped."""
+    cache = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "nobara-updater"
+    seen = cache / "dkms-notified"
+    if seen.exists() and seen.read_text().strip() == notice["job"]:
+        return
+    modules = {}
+    for module in notice["modules"]:
+        modules.setdefault((module["name"], module["version"]), []).append(module["kernel"])
+    lines = [f"{name} {version} (kernel {', '.join(sorted(kernels))})" for (name, version), kernels in sorted(modules.items())]
+    commands = [f"sudo dkms remove {name}/{version} --all" for name, version in sorted(modules)]
+    result = subprocess.run([
+        "notify-send", "--app-name=Nobara System Update", "--icon=dialog-information", "--expire-time=0",
+        "Some driver modules were not built for the new kernel",
+        "The update finished, but these modules, which were installed outside the package manager, "
+        "did not build for the new kernel:\n" + "\n".join(lines) + "\n\n"
+        "They still work on the kernels they were built for. Install a packaged version if there is one, "
+        "or remove them in a terminal:\n" + "\n".join(commands)], capture_output=True, text=True)
+    if not result.returncode:
+        cache.mkdir(parents=True, exist_ok=True)
+        seen.write_text(notice["job"] + "\n")
 
 
 def show_report(report: dict | None) -> None:
@@ -172,6 +195,12 @@ def main():
     report = latest_report()
     if args.notify:
         if not report or not report.get("active"):
+            notice = dkms_notice()
+            if notice:
+                try:
+                    notify_dkms(notice)
+                except OSError:
+                    pass
             return
         try:
             if not notify(report):

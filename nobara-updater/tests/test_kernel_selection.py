@@ -225,7 +225,7 @@ class KernelWorkflowTests(unittest.TestCase):
 
     def test_finalization_passes_preserved_kernel_plan_to_validation(self):
         state.write_state(self.root, dict(self.saved), "validating", preserved_kernels=["old-kernel"])
-        with patch.object(backend, "validate_boot") as validate, \
+        with patch.object(backend, "validate_boot", return_value=[]) as validate, \
              patch.object(backend, "newest_updated_kernel", return_value=KERNEL), \
              patch.object(backend, "pin_kernel", return_value=dict(kernel=KERNEL, entry="normal", loader="grub")):
             backend.finalize(self.root)
@@ -235,7 +235,7 @@ class KernelWorkflowTests(unittest.TestCase):
         packages = [dict(name="dkms", action="Upgrade", nevra="dkms-1-1.noarch")]
         state.write_state(self.root, dict(self.saved), "validating", packages=packages, preserved_kernels=["old-kernel"])
         selection = dict(kernel=KERNEL, entry="normal", loader="grub")
-        with patch.object(backend, "validate_boot"), \
+        with patch.object(backend, "validate_boot", return_value=[]), \
              patch.object(backend, "newest_updated_kernel", return_value=None), \
              patch.object(backend.os, "uname", return_value=Mock(release=KERNEL)), \
              patch.object(backend, "pin_kernel", return_value=selection) as pin:
@@ -247,7 +247,7 @@ class KernelWorkflowTests(unittest.TestCase):
         recovery = dict(created=True, entry="/boot/loader/entries/nobara-recovery-old.conf")
         state.write_state(self.root, dict(self.saved), "validating", packages=[], recovery=recovery)
         with patch.object(backend, "synchronize_boot_root", return_value="normal") as sync, \
-             patch.object(backend, "validate_boot"), patch.object(backend, "newest_updated_kernel", return_value=None), \
+             patch.object(backend, "validate_boot", return_value=[]), patch.object(backend, "newest_updated_kernel", return_value=None), \
              patch.object(backend.os, "uname", return_value=Mock(release=KERNEL)), \
              patch.object(backend, "kernel_entry", return_value="normal"), \
              patch.object(backend, "trial_boot") as trial:
@@ -347,7 +347,7 @@ class KernelWorkflowTests(unittest.TestCase):
         self.assertTrue(state.read_state(self.root)["recovery_cleanup_complete"])
 
     def test_failed_pin_never_reports_ready_to_boot(self):
-        with patch.object(backend, "validate_boot"), patch.object(backend, "newest_updated_kernel", return_value=KERNEL), \
+        with patch.object(backend, "validate_boot", return_value=[]), patch.object(backend, "newest_updated_kernel", return_value=KERNEL), \
              patch.object(backend, "pin_kernel", side_effect=state.UpdateError("GRUB failed")):
             with self.assertRaisesRegex(state.UpdateError, "GRUB failed"):
                 backend.finalize(self.root)
@@ -393,7 +393,7 @@ class KernelWorkflowTests(unittest.TestCase):
 
     def test_installer_pins_in_target_and_records_expectation_for_first_boot(self):
         state.write_state(self.root, dict(self.saved), "validating", installer=True)
-        with patch.object(backend, "in_installer_root", return_value=True), patch.object(backend, "validate_boot"), \
+        with patch.object(backend, "in_installer_root", return_value=True), patch.object(backend, "validate_boot", return_value=[]), \
              patch.object(backend, "newest_updated_kernel", return_value=KERNEL), \
              patch.object(backend, "pin_kernel", return_value=dict(kernel=KERNEL)) as pin:
             backend.finalize(self.root, installer=True)
@@ -475,7 +475,7 @@ class KernelWorkflowTests(unittest.TestCase):
         backend.prune_recovery.assert_not_called()
 
     def test_failed_installation_check_never_saves_validated_inventory(self):
-        with patch.object(backend, "validate_boot"), \
+        with patch.object(backend, "validate_boot", return_value=[]), \
              patch.object(backend, "check_installed_packages", side_effect=state.UpdateError("broken dependency")):
             with self.assertRaisesRegex(state.UpdateError, "broken dependency"):
                 backend.finalize(self.root)
@@ -508,7 +508,7 @@ class KernelWorkflowTests(unittest.TestCase):
         self.assertEqual(prepared["boot_selection"], selection)
         self.assertEqual(prepared["status"], "ready")
         state.write_state(self.root, prepared, "validating", started=True)
-        with patch.object(backend, "in_installer_root", return_value=True), patch.object(backend, "validate_boot"), \
+        with patch.object(backend, "in_installer_root", return_value=True), patch.object(backend, "validate_boot", return_value=[]), \
              patch.object(backend, "pin_kernel") as pin:
             backend.finalize(self.root, installer=True)
         pin.assert_not_called()

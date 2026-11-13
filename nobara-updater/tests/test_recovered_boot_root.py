@@ -255,5 +255,35 @@ class RecoveredBootRootTests(unittest.TestCase):
             boot.reconcile_recovered_kernels(JOB, stale.stem)
 
 
+    def test_recovery_kernel_without_modules_accepts_the_kernel_that_booted_the_recovered_root(self):
+        # The recovery entry pinned a kernel an earlier rollback had left
+        # without modules; the recovered root reached the desktop on another
+        # installed kernel through its own normal entry.
+        broken = "7.2.10-200.nobara.fc44.x86_64"
+        self.recovery.write_text(self.recovery.read_text().replace(KERNEL, broken))
+        (self.archive / ("linux-0-vmlinuz-" + broken)).write_bytes(b"recovery kernel")
+        stale = self.entry(MACHINE + "-" + broken, version=broken)
+        image = (self.boot / ("vmlinuz-" + KERNEL)).read_bytes()
+        selected = boot.synchronize_boot_root(recovery_entry=self.recovery.stem)
+        self.assertEqual(selected, self.canonical.stem)
+        # The running kernel's own images stay; nothing is copied from the archive.
+        self.assertEqual((self.boot / ("vmlinuz-" + KERNEL)).read_bytes(), image)
+        self.assertFalse((self.boot / ("vmlinuz-" + broken)).exists())
+        self.assertIn("subvol=" + SUBVOL, self.canonical.read_text())
+        boot.reconcile_recovered_kernels(JOB, selected)
+        self.assertFalse(stale.exists())
+        self.assertTrue(self.canonical.exists())
+
+    def test_other_running_kernel_without_modules_or_normal_entry_is_still_refused(self):
+        self.recovery.write_text(self.recovery.read_text().replace(KERNEL, "7.2.10-200.nobara.fc44.x86_64"))
+        (self.modules / KERNEL / "modules.dep").unlink()
+        with self.assertRaisesRegex(UpdateError, "does not match the running kernel"):
+            boot.synchronize_boot_root(recovery_entry=self.recovery.stem)
+        (self.modules / KERNEL / "modules.dep").write_text("kernel/example.ko:\n")
+        self.canonical.unlink()
+        with self.assertRaisesRegex(UpdateError, "does not match the running kernel"):
+            boot.synchronize_boot_root(recovery_entry=self.recovery.stem)
+
+
 if __name__ == "__main__":
     unittest.main()

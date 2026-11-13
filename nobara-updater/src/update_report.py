@@ -625,6 +625,27 @@ def latest_report() -> dict | None:
     return dict(report, log=str(directory / "update.log"), bundle=str(directory / "nobara-update-report.tar.gz"))
 
 
+DKMS_NOTICE = "dkms-skipped.json"
+
+
+def publish_dkms_notice(job: str, modules: list[dict]) -> None:
+    """Tell the desktop which hand-installed DKMS modules a confirmed update skipped."""
+    REPORTS.mkdir(mode=0o755, parents=True, exist_ok=True)
+    os.chmod(REPORTS, 0o755)
+    atomic_json(REPORTS / DKMS_NOTICE, dict(job=valid_job(job), modules=[
+        {key: str(module[key]) for key in ("name", "version", "kernel")} for module in modules]))
+    os.chmod(REPORTS / DKMS_NOTICE, 0o644)
+
+
+def dkms_notice() -> dict | None:
+    try:
+        notice = json.loads((REPORTS / DKMS_NOTICE).read_text())
+        valid_job(notice["job"])
+        return notice if notice.get("modules") else None
+    except (OSError, ValueError, KeyError, TypeError, UpdateError):
+        return None
+
+
 def resolve_notice() -> None:
     report = latest_report()
     if report and report.get("active"):

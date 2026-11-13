@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root, installed_boot_kernels, reconcile_recovered_kernels, ensure_grub_kernel, validate_grub_initramfs, eac_kernel
 from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment, check_recovery_space, check_snapshot_swapfiles, restore_recovery_entry
-from .update_report import arm_report, publish_recovery, publish_failure, resolve_notice
+from .update_report import arm_report, publish_recovery, publish_failure, resolve_notice, publish_dkms_notice
 from .update_origins import annotate_failure
 from .update_progress import OfflineProgress, PackageProgress
 from .update_state import (ACTIVE, STATE_DIR, TRIGGER, UpdateError, atomic_json, file_digest,
@@ -879,7 +879,35 @@ def dkms_status_records(text: str) -> list[dict]:
             if (match := pattern.fullmatch(line.strip()))]
 
 
-def validate_boot(packages: list[dict], *, rebuild_all: bool = False, preserved_kernels=()) -> None:
+DKMS_TREE = Path("/var/lib/dkms")
+DKMS_SOURCES = Path("/usr/src")
+
+
+def dkms_package_owned(name: str, version: str) -> bool:
+    """Whether an RPM package supplies this DKMS module's source.
+
+    Modules added by hand (an upstream install.sh, dkms add on a git
+    checkout) aren't, and nothing updates them for new kernels.
+    """
+    paths = []
+    for path in (DKMS_TREE / name / version / "source", DKMS_SOURCES / f"{name}-{version}"):
+        try:
+            if path.exists():
+                paths.append(path.resolve())
+        except OSError:
+            continue
+    return any(subprocess.run(["rpm", "-qf", "--quiet", str(path)], stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0 for path in dict.fromkeys(paths))
+
+
+def validate_boot(packages: list[dict], *, rebuild_all: bool = False, preserved_kernels=()) -> list[dict]:
+    """Rebuild and check modules and boot files; return the skipped DKMS modules.
+
+    A DKMS module that no package owns and that fails to build for a kernel
+    is skipped for that kernel instead of failing the update: it keeps
+    working on the kernels it already built for.
+    """
+    skipped = []
     kernels = set()
     incoming_boot_kernels = set()
     for item in packages:
@@ -922,10 +950,17 @@ def validate_boot(packages: list[dict], *, rebuild_all: bool = False, preserved_
             architecture = os.uname().machine
             before = subprocess.run(["dkms", "status"], capture_output=True, text=True,
                                     check=True, env=environment).stdout
-            expected = {record["name"] for record in dkms_status_records(before)}
+            records = dkms_status_records(before)
+            expected = {record["name"] for record in records}
             if expected and not (Path("/usr/lib/modules") / kernel / "build/Makefile").is_file():
                 raise UpdateError(f"Kernel development files are missing for {kernel}.")
-            run(["dkms", "autoinstall", "-k", kernel])
+            failure = None
+            try:
+                run(["dkms", "autoinstall", "-k", kernel])
+            except UpdateError as error:
+                # DKMS builds every module before reporting; decide below
+                # whether the modules that failed may be skipped.
+                failure = error
             after = subprocess.run(["dkms", "status", "-k", kernel, "-a", architecture],
                                    capture_output=True, text=True, check=True, env=environment).stdout
             detail = after.strip() or "No DKMS status entries were returned."
@@ -938,9 +973,21 @@ def validate_boot(packages: list[dict], *, rebuild_all: bool = False, preserved_
             installed = {record["name"] for record in dkms_status_records(after)
                          if record["kernel"] == kernel and record["arch"] == architecture
                          and record["status"] in {"installed", "installed (Original modules exist)"}}
-            if expected - installed:
+            missing = expected - installed
+            versions = {name: sorted({record["version"] for record in records if record["name"] == name})
+                        for name in missing}
+            unowned = {name for name in missing
+                       if not any(dkms_package_owned(name, version) for version in versions[name])}
+            if missing - unowned:
                 raise UpdateError(f"DKMS did not confirm a clean installed state for kernel {kernel}: "
                                   f"{', '.join(sorted(expected - installed))}\nReported DKMS status:\n{detail}")
+            if failure and not missing:
+                raise failure
+            for name in sorted(missing):
+                LOG.warning("Skipping DKMS module %s %s for kernel %s: it did not build, and no package "
+                            "provides it, so nothing would update it. It keeps working on the kernels it "
+                            "already built for.", name, ", ".join(versions[name]), kernel)
+                skipped.extend(dict(name=name, version=version, kernel=kernel) for version in versions[name])
         if not eac_kernel(kernel) and shutil.which("akmods"):
             run(["akmods", "--force", "--kernels", kernel])
         if not eac_kernel(kernel) and subprocess.run(["rpm", "-q", "dkms-nvidia"], stdout=subprocess.DEVNULL,
@@ -961,6 +1008,7 @@ def validate_boot(packages: list[dict], *, rebuild_all: bool = False, preserved_
                 LOG.warning("Could not remove temporary initramfs %s.", temporary, exc_info=True)
         validate_grub_initramfs(kernel, run)
     os.sync()
+    return skipped
 
 
 def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = False) -> None:
@@ -995,8 +1043,10 @@ def finalize(root: Path = STATE_DIR, *, installer: bool = False, live: bool = Fa
                     # Feed the active root to dracut/kernel-install, including
                     # when this transaction runs from a prior recovery clone.
                     normal_entry = synchronize_boot_root()
-                validate_boot(state["packages"], rebuild_all=any(hook.startswith("plymouth-") for hook in state["migrations"]["hooks"]),
-                              preserved_kernels=state.get("preserved_kernels", []))
+                skipped = validate_boot(state["packages"], rebuild_all=any(hook.startswith("plymouth-") for hook in state["migrations"]["hooks"]),
+                                        preserved_kernels=state.get("preserved_kernels", []))
+                # Shown at the desktop once the updated system is confirmed.
+                state["dkms_skipped"] = skipped
             # A successful DNF exit must actually have installed every planned
             # inbound RPM (including ordinary updates within the same release).
             for item in state["packages"]:
@@ -1170,8 +1220,16 @@ def prune_kernel_packages(*, obsolete_kernels=()) -> None:
 
 
 def cleanup_kernel_retention(state: dict) -> None:
-    """Keep installation/recovery protected; cleanup never invalidates a boot."""
-    if state.get("status") not in {"complete", "unchanged", "live-complete"}:
+    """Keep installation/recovery protected; cleanup never invalidates a boot.
+
+    Besides confirmed boots, this runs before every preparation, so systems
+    that never completed an update with this policy (idle, or a preparation
+    that failed before changing packages, e.g. for lack of /boot space)
+    are brought to the retention policy before anything is planned.
+    """
+    status = state.get("status")
+    if status not in {"complete", "unchanged", "live-complete", "idle"} and not (
+            status == "failed" and not state.get("started")):
         return
     if state.get("recovery", {}).get("created") and not state.get("recovery_cleanup_complete"):
         return
@@ -1284,6 +1342,11 @@ def confirm_boot(root: Path = STATE_DIR) -> None:
             confirm_trial(state["trial_entry"])
         write_state(root, state, "complete")
         Path("/etc/nobara/newinstall").unlink(missing_ok=True)
+        if state.get("dkms_skipped"):
+            try:
+                publish_dkms_notice(state["job"], state["dkms_skipped"])
+            except OSError:
+                LOG.warning("Could not save the notice about skipped DKMS modules.", exc_info=True)
         LOG.info("%s", status_message(state))
         cleanup_confirmed_update(root, state)
 

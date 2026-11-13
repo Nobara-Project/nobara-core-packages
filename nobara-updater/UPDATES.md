@@ -502,14 +502,26 @@ The temporary **previous system** entries are separate from ordinary kernel
 entries and the generic rescue-kernel entry. Those entries are not rollback
 snapshots and are not removed by snapshot cleanup.
 
-Ordinary kernel packages have a separate cleanup step after a successful boot
-and retirement of recovery data. It honors DNF's configured kernel retention
-limit (normally three versions; zero means unlimited), including the matching
-kernel development and module packages. The running kernel and its matching
-packages are always retained, so an older running kernel can temporarily put
-the total above the limit. Cleanup also catches up on the next updater run,
-even if there are no new updates. If cleanup is unsafe or cannot finish, it is
-logged and retried later without marking the successful update as failed.
+Ordinary kernel packages have a separate cleanup step. Nobara keeps the two
+newest standard kernels and one Easy Anti-Cheat (EAC) kernel: the EAC build of
+the booted kernel's version, or the newest EAC kernel when there is no matching
+build. /boot then holds three kernels plus the rescue image. Removing a kernel
+also removes its matching development and module packages, including
+generated kmod packages. The running kernel and its matching packages are always
+retained, so booting an older kernel can temporarily put the total above this.
+Setting DNF's `installonly_limit=0` keeps every kernel.
+
+Cleanup runs before every update is prepared, against the booted kernel, so
+systems with more kernels than this are trimmed before anything is planned.
+That includes systems where an earlier preparation failed, for example for lack
+of /boot space. Kernels are never removed inside an update transaction. After
+the update's restart, once the new kernel has booted and the boot is confirmed
+(including its DKMS, akmods and kmod modules), cleanup runs again against the
+new kernel. The previously booted kernel becomes the second standard kernel, the
+oldest standard kernel is removed, and the new EAC kernel replaces the previous
+one. Cleanup waits until recovery data has been retired. If cleanup is unsafe or
+cannot finish, it is logged and retried later without marking the successful
+update as failed.
 
 After successful boot confirmation, the updater also removes obsolete fallback
 kernels that it could not rebuild because their matching development packages

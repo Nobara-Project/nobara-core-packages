@@ -467,6 +467,16 @@ def write_boot_file(path: Path, *, text: str | None = None, source: Path | None 
         Path(temporary).unlink(missing_ok=True)
 
 
+def complete_module_tree(version: str) -> bool:
+    """Whether this root has the kernel's in-tree modules.
+
+    A leftover directory containing only external DKMS/akmods modules is not
+    the complete in-tree module set of that kernel.
+    """
+    directory = MODULES / version
+    return directory.is_dir() and (directory / "kernel").is_dir() and (directory / "modules.dep").is_file()
+
+
 def synchronize_boot_root(*, recovery_entry: str | None = None) -> str | None:
     """Make a recovered Btrfs root the normal system, without moving subvolumes.
 
@@ -509,7 +519,19 @@ def synchronize_boot_root(*, recovery_entry: str | None = None) -> str | None:
         recovery_path = BOOT / "loader/entries" / (recovery_entry + ".conf")
         lines = recovery_path.read_text().splitlines()
         if not re.search(r"(?m)^version\s+" + re.escape(kernel) + r"\s*$", "\n".join(lines)):
-            raise UpdateError("The recovery boot entry does not match the running kernel.")
+            # The recovered root started with another installed kernel through
+            # its own normal entry, for example because the recovery entry's
+            # kernel was itself left without modules by an earlier rollback.
+            # That kernel has reached the desktop on this root, so it can
+            # become the normal boot; without its modules, nothing can.
+            if not complete_module_tree(kernel) or not canonical.is_file() or canonical.is_symlink():
+                raise UpdateError("The recovery boot entry does not match the running kernel.")
+            saved = re.findall(r"(?m)^version\s+(.+)$", "\n".join(lines))
+            LOG.warning("The recovered system started kernel %s instead of the recovery entry's kernel %s; "
+                        "keeping %s, which has a complete module tree in the recovered root.",
+                        kernel, saved[0] if saved else "unknown", kernel)
+            recovery_entry = None
+    if recovery_entry:
         linux = re.findall(r"(?m)^linux\s+(\S+)\s*$", "\n".join(lines))
         if len(linux) != 1 or not any(line.startswith("initrd ") for line in lines):
             raise UpdateError("The recovery boot entry has incomplete boot images.")
@@ -596,12 +618,7 @@ def reconcile_recovered_kernels(job: str, selected: str) -> None:
     if not re.fullmatch(r"[A-Za-z0-9_.+~-]+", kernel):
         raise UpdateError("Invalid running kernel version.")
 
-    def has_modules(version):
-        # A leftover directory containing only external DKMS/akmods modules is
-        # not the complete in-tree module set of the restored kernel.
-        directory = MODULES / version
-        return directory.is_dir() and (directory / "kernel").is_dir() and (directory / "modules.dep").is_file()
-
+    has_modules = complete_module_tree
     if not has_modules(kernel):
         raise UpdateError(f"The recovered root has no complete module tree for running kernel {kernel}. "
                           "Boot its saved previous-system kernel before confirming recovery.")

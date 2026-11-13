@@ -18,6 +18,7 @@ if "nobara_updater" not in sys.modules:
 from nobara_updater import update_backend as backend, update_boot as boot
 from nobara_updater.update_state import UpdateError
 
+OWNED = backend.dkms_package_owned
 KERNEL = "7.2.4-201.nobara.fc44.x86_64"
 ARCH = "x86_64"
 
@@ -32,6 +33,7 @@ class DkmsValidationTests(unittest.TestCase):
         self.after = f"new-lg4ff/0.5.0, {KERNEL}, {ARCH}: installed\n"
         self.status_calls = []
         self.autoinstall_error = None
+        self.unowned = set()
         self.native_run = subprocess.run
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -60,6 +62,7 @@ class DkmsValidationTests(unittest.TestCase):
             patch.object(backend.subprocess, "run", side_effect=subprocess_run),
             patch.object(backend, "run", side_effect=run),
             patch.object(backend, "ensure_grub_kernel"),
+            patch.object(backend, "dkms_package_owned", side_effect=lambda name, version: name not in self.unowned),
             patch.object(backend, "Path", side_effect=lambda value: boot_directory if value == "/boot" else Path(value)),
             patch.object(backend.shutil, "which", side_effect=lambda name: "/usr/bin/dkms" if name == "dkms" else None),
             patch.object(backend.os, "uname", return_value=Mock(machine=ARCH)),
@@ -70,6 +73,9 @@ class DkmsValidationTests(unittest.TestCase):
 
     def validate(self):
         backend.validate_boot([dict(name="kernel-core", action="Install", nevra="kernel-core-fixture")])
+
+    def validate_result(self):
+        return backend.validate_boot([dict(name="kernel-core", action="Install", nevra="kernel-core-fixture")])
 
     def test_original_modules_annotation_passes_for_any_driver_name(self):
         for name in ("new-lg4ff", "another-driver"):
@@ -127,7 +133,57 @@ class DkmsValidationTests(unittest.TestCase):
         self.autoinstall_error = UpdateError("module build failed")
         with self.assertRaisesRegex(UpdateError, "module build failed"):
             self.validate()
-        self.assertEqual(len(self.status_calls), 1)
+        self.assertEqual(self.status_calls[-1][0], ["dkms", "status", "-k", KERNEL, "-a", ARCH])
+
+    def test_hand_installed_module_that_fails_to_build_is_skipped(self):
+        # As reported: xone and xpad-noone from upstream install.sh no longer
+        # build for 7.2; the packaged nvidia module did.
+        self.before = ("nvidia/595.104.02, 7.2.10-200.nobara.fc44.x86_64, x86_64: installed\n"
+                       "xone/v0.3-58-g28df566, 7.2.10-200.nobara.fc44.x86_64, x86_64: installed\n"
+                       "xpad-noone/1.0, 7.2.10-200.nobara.fc44.x86_64, x86_64: installed\n")
+        self.after = f"nvidia/595.104.02, {KERNEL}, {ARCH}: installed\n"
+        self.unowned = {"xone", "xpad-noone"}
+        self.autoinstall_error = UpdateError("dkms failed with exit code 11")
+        with self.assertLogs(backend.LOG, "WARNING") as logs, self.assertRaises(ReachedInitramfs):
+            self.validate()
+        text = "\n".join(logs.output)
+        self.assertIn("xone v0.3-58-g28df566", text)
+        self.assertIn("xpad-noone 1.0", text)
+
+    def test_skipped_modules_are_returned(self):
+        self.after = ""
+        self.unowned = {"new-lg4ff"}
+        self.autoinstall_error = UpdateError("dkms failed with exit code 11")
+        with patch.object(backend, "validate_grub_initramfs"), patch.object(backend.os, "replace"), \
+             patch.object(backend, "run", side_effect=lambda command: None if command[0] != "dkms"
+                          else (_ for _ in ()).throw(self.autoinstall_error)):
+            skipped = self.validate_result()
+        self.assertEqual(skipped, [dict(name="new-lg4ff", version="0.5.0", kernel=KERNEL)])
+
+    def test_packaged_module_failure_still_stops_the_update(self):
+        self.before += "xone/v0.3-58-g28df566: added\n"
+        self.after = ""
+        self.unowned = {"xone"}
+        self.autoinstall_error = UpdateError("dkms failed with exit code 11")
+        with self.assertRaisesRegex(UpdateError, "new-lg4ff"):
+            self.validate()
+
+    def test_package_ownership_checks_the_dkms_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree, sources = Path(directory) / "dkms", Path(directory) / "src"
+            (sources / "xone-0.5.8.3").mkdir(parents=True)
+            (tree / "xone/0.5.8.3").mkdir(parents=True)
+            (tree / "xone/0.5.8.3/source").symlink_to(sources / "xone-0.5.8.3")
+            queried = []
+
+            def rpm(command, **kwargs):
+                queried.append(command[-1])
+                return Mock(returncode=0 if command[-1].endswith("xone-0.5.8.3") else 1)
+            with patch.object(backend, "DKMS_TREE", tree), patch.object(backend, "DKMS_SOURCES", sources), \
+                 patch.object(backend.subprocess, "run", side_effect=rpm):
+                self.assertTrue(OWNED("xone", "0.5.8.3"))
+                self.assertFalse(OWNED("xpad-noone", "1.0"))
+            self.assertEqual(queried, [str((sources / "xone-0.5.8.3").resolve())])
 
     def test_status_checks_use_stable_locale_and_target_architecture(self):
         with self.assertRaises(ReachedInitramfs):

@@ -1,6 +1,18 @@
-"""Apply installonly retention after startup and recovery have been confirmed."""
+"""Apply Nobara's kernel retention policy while no update is pending.
+
+Nobara keeps the two newest standard kernels and one Easy Anti-Cheat kernel:
+the EAC build of the booted kernel's version, or the newest EAC kernel when
+there is none. /boot then holds three kernels plus the rescue image. The
+running kernel is always kept as well.
+
+The policy runs before every preparation, against the booted kernel, and
+again after an update's boot has been confirmed, against the new kernel. It
+never runs inside an update transaction: until the new kernel has booted
+(including its DKMS/akmods/kmod modules), the old ones remain the fallback.
+"""
 from __future__ import annotations
 
+from functools import cmp_to_key
 import logging
 import os
 from pathlib import Path
@@ -11,9 +23,13 @@ import libdnf5.repo as repo_api
 import libdnf5.rpm as rpm_api
 import libdnf5.transaction as trans
 
+from .update_boot import eac_kernel
 from .update_state import UpdateError
 
 LOG = logging.getLogger(__name__)
+
+KERNEL_LIMIT = 2
+EAC_KERNEL_LIMIT = 1
 
 
 def kernel_evr(package):
@@ -40,19 +56,63 @@ def versioned_kmod_kernel(package) -> str | None:
     return match[1] if match else None
 
 
-def plan_cleanup(base, *, obsolete_kernels=()):
-    """Remove obsolete kernel sets and excess versions after a confirmed boot."""
-    limit = base.get_config().get_installonly_limit_option().get_value()
-    installed = rpm_api.PackageQuery(base)
-    installed.filter_installed()
-    installonly = rpm_api.PackageQuery(installed)
-    installonly.filter_installonly()
-    installonly_ids = {p.get_id().id for p in installonly}
-    candidates = rpm_api.PackageQuery(installonly)
-    # libdnf sorts RPM EVRs per name/architecture, including epochs/releases.
-    if limit:
-        candidates.filter_latest_evr(-limit)
-    candidates = {p.get_id().id: p for p in candidates} if limit else {}
+def core_kernel(package) -> bool:
+    """Whether this RPM provides a kernel's boot image (kernel-core, kernel-eac-core...)."""
+    name = package.get_name()
+    if name == "kernel":
+        # Older layouts can put the image in kernel itself instead of
+        # kernel-core. The modern kernel metapackage has no image.
+        versions = uname_provides(package) | {package_kernel(package)}
+        return any(path in {f"/boot/vmlinuz-{k}", f"/usr/lib/modules/{k}/vmlinuz"}
+                   for k in versions for path in package.get_files())
+    return name.startswith("kernel-") and name.endswith("-core") and "modules" not in name
+
+
+def core_uname(package) -> str:
+    """The kernel release a core RPM boots: its kernel-uname-r, else its EVRA."""
+    provided = uname_provides(package)
+    return next(iter(provided)) if len(provided) == 1 else package_kernel(package)
+
+
+def compare_kernels(first, second) -> int:
+    return (int(first.get_epoch() or 0) - int(second.get_epoch() or 0)
+            or rpm_api.rpmvercmp(first.get_version(), second.get_version())
+            or rpm_api.rpmvercmp(first.get_release(), second.get_release()))
+
+
+def same_build(first: str, second: str) -> bool:
+    """7.3.1-202.eac.nobara.fc44.x86_64 is the EAC build of 7.3.1-202.nobara.fc44.x86_64."""
+    return first.replace(".eac.", ".") == second.replace(".eac.", ".")
+
+
+def excess_kernels(cores, *, running: str, keep=()) -> set[str]:
+    """Kernel versions beyond the two newest standard kernels and one EAC kernel.
+
+    cores maps each kernel version to its core RPM. Each kernel package name
+    and architecture is counted separately, so LTS or other variants never
+    displace each other. The running kernel and versions in keep are never
+    excess.
+    """
+    groups = {}
+    for kernel, package in cores.items():
+        name = "kernel-core" if package.get_name() == "kernel" else package.get_name()
+        groups.setdefault((name, package.get_arch(), eac_kernel(kernel)), []).append((kernel, package))
+    excess = set()
+    for (_, _, eac), members in groups.items():
+        members.sort(key=cmp_to_key(lambda a, b: compare_kernels(b[1], a[1])))
+        kernels = [kernel for kernel, _ in members]
+        if eac:
+            # Follow the booted kernel, so an update's new EAC kernel only
+            # replaces the old one after the new kernel has booted.
+            kept = [k for k in kernels if same_build(k, running)][:EAC_KERNEL_LIMIT] or kernels[:EAC_KERNEL_LIMIT]
+        else:
+            kept = kernels[:KERNEL_LIMIT]
+        excess.update(set(kernels) - set(kept))
+    return excess - {running, *keep}
+
+
+def kernel_sets(installed, installonly_ids):
+    """Group installed kernel RPMs and generated kmod RPMs by kernel version."""
     kernel_packages = {}
     core_packages = set()
     core_versions = set()
@@ -73,17 +133,36 @@ def plan_cleanup(base, *, obsolete_kernels=()):
             continue
         versions.add(package_kernel(package))
         kernel_packages[identifier] = (package, versions)
-        core = name.endswith("-core") and "modules" not in name
-        if name == "kernel":
-            # Older layouts can put the image in kernel itself instead of
-            # kernel-core. The modern kernel metapackage has no image.
-            core = any(path in {f"/boot/vmlinuz-{k}", f"/usr/lib/modules/{k}/vmlinuz"}
-                       for k in versions for path in package.get_files())
+        core = core_kernel(package)
         if core:
             core_packages.add(identifier)
             core_versions.update(versions)
         if core or "modules" in name or name == "kernel":
             runtime_versions.update(versions)
+    return kernel_packages, kmods, core_packages, core_versions, runtime_versions
+
+
+def plan_cleanup(base, *, obsolete_kernels=()):
+    """Remove obsolete kernel sets and excess versions while no update is pending."""
+    limit = base.get_config().get_installonly_limit_option().get_value()
+    installed = rpm_api.PackageQuery(base)
+    installed.filter_installed()
+    installonly = rpm_api.PackageQuery(installed)
+    installonly.filter_installonly()
+    installonly_ids = {p.get_id().id for p in installonly}
+    candidates = rpm_api.PackageQuery(installonly)
+    # libdnf sorts RPM EVRs per name/architecture, including epochs/releases.
+    if limit:
+        candidates.filter_latest_evr(-limit)
+    candidates = {p.get_id().id: p for p in candidates} if limit else {}
+    kernel_packages, kmods, core_packages, core_versions, runtime_versions = kernel_sets(installed, installonly_ids)
+    # installonly_limit=0 keeps every kernel; otherwise Nobara's per-flavor
+    # limits apply, which are stricter than DNF's default of three per name.
+    # Explicitly obsolete kernels are removed anyway; they never take one of
+    # the policy's slots from a kernel that is kept.
+    cores = {core_uname(kernel_packages[i][0]): kernel_packages[i][0] for i in core_packages}
+    policy = excess_kernels({k: v for k, v in cores.items() if k not in set(obsolete_kernels)},
+                            running=os.uname().release) if limit else set()
     root = Path(base.get_config().get_installroot_option().get_value())
     # Missing repo metadata alone is never grounds for removal. Explicit
     # obsolete versions come from the successfully validated update plan.
@@ -93,7 +172,7 @@ def plan_cleanup(base, *, obsolete_kernels=()):
     orphans = {kernel for kernel in orphans
                if not (root / "boot" / ("vmlinuz-" + kernel)).is_file()
                and not (root / "usr/lib/modules" / kernel / "vmlinuz").is_file()}
-    if not candidates and not obsolete_kernels and not orphans:
+    if not candidates and not obsolete_kernels and not orphans and not policy:
         return None
     running = base.get_rpm_package_sack().get_running_kernel()
     if running.get_id().id <= 0:
@@ -101,8 +180,8 @@ def plan_cleanup(base, *, obsolete_kernels=()):
     running_evr = kernel_evr(running)
     protected = uname_provides(running) | {package_kernel(running), os.uname().release}
     # Never interpret a package preinstalled for a newer kernel as old debris.
-    obsolete = set(obsolete_kernels) | {kernel for kernel in orphans
-                                       if rpm_api.rpmvercmp(kernel, package_kernel(running)) < 0}
+    obsolete = set(obsolete_kernels) | policy | {kernel for kernel in orphans
+                                                if rpm_api.rpmvercmp(kernel, package_kernel(running)) < 0}
     for identifier, (package, versions) in kernel_packages.items():
         if versions & obsolete:
             candidates[identifier] = package

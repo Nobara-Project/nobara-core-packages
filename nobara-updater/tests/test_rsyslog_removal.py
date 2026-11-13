@@ -116,7 +116,7 @@ class FinalizeTests(unittest.TestCase):
         self.marker = self.root / Path(RSYSLOG_MARKER).name
 
     def test_marker_is_written_after_a_successful_update(self):
-        with patch.object(backend, "validate_boot"):
+        with patch.object(backend, "validate_boot", return_value=[]):
             backend.finalize(self.root, installer=True)
         self.assertTrue(self.marker.is_file())
 

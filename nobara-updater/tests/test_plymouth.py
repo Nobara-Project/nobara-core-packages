@@ -469,7 +469,7 @@ class NobaraThemeFinalizeTests(Fixture):
 
     def test_marker_is_written_after_one_rebuild(self):
         with patch.object(backend, "select_nobara_theme", return_value=self.switch()), \
-             patch.object(backend, "validate_boot") as validate:
+             patch.object(backend, "validate_boot", return_value=[]) as validate:
             backend.finalize(self.root, installer=True)
         validate.assert_called_once_with([], rebuild_all=True, preserved_kernels=[])
         self.assertTrue(self.marker.is_file())
@@ -478,7 +478,7 @@ class NobaraThemeFinalizeTests(Fixture):
 
     def test_skipped_switch_rebuilds_but_leaves_no_marker(self):
         with patch.object(backend, "select_nobara_theme", return_value=None), \
-             patch.object(backend, "validate_boot") as validate:
+             patch.object(backend, "validate_boot", return_value=[]) as validate:
             backend.finalize(self.root, installer=True)
         validate.assert_called_once_with([], rebuild_all=True, preserved_kernels=[])
         self.assertFalse(self.marker.exists())
@@ -493,7 +493,7 @@ class NobaraThemeFinalizeTests(Fixture):
 
     def test_marker_blocks_the_next_plan(self):
         with patch.object(backend, "select_nobara_theme", return_value=self.switch()), \
-             patch.object(backend, "validate_boot"):
+             patch.object(backend, "validate_boot", return_value=[]):
             backend.finalize(self.root, installer=True)
         # The planner looks for the marker below the installation root.
         system = self.root / "system"
@@ -524,7 +524,7 @@ class PlasmaLoginFinalizeTests(Fixture):
         self.marker = self.root / Path(PLASMA_LOGIN_MARKER).name
 
     def test_marker_is_written_after_a_successful_update(self):
-        with patch.object(backend, "validate_boot"):
+        with patch.object(backend, "validate_boot", return_value=[]):
             backend.finalize(self.root, installer=True)
         self.assertTrue(self.marker.is_file())
 

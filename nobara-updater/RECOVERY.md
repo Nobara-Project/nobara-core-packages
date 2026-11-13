@@ -299,6 +299,15 @@ Use **Save logs** to save the `.tar.gz` report, including when offline. The
 bundle contains `README.txt` and `update.log` and can be attached to a support
 request or issue.
 
+A DKMS module that no package provides (one added by an upstream
+`install.sh` or `dkms add` on a source checkout) doesn't stop the update when
+it fails to build for the new kernel: nothing would ever update it, so it
+would block every kernel update. The update skips it for that kernel, logs a
+warning, and after the updated system is confirmed, the desktop names it with
+the command to remove it (`sudo dkms remove <name>/<version> --all`). It keeps
+working on the kernels it was already built for. A packaged DKMS module that
+fails to build still stops the update and restores the previous system.
+
 When a driver build fails, the updater also tries to preserve the referenced
 DKMS `make.log` before rollback restores the filesystem. Its bounded contents
 are included in the report's `update.log`. Later confirmation or recovery

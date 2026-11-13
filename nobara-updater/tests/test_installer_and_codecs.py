@@ -128,7 +128,7 @@ class InstallerTargetTests(unittest.TestCase):
     def test_target_validation_returns_to_installer_and_allows_second_codec_command(self):
         state.write_state(self.root, dict(self.ready), "validating", started=True)
         with patch.object(backend, "run") as run, patch.object(backend, "apply_hooks"), \
-             patch.object(backend, "validate_boot"), patch.object(backend, "os_release", return_value="44"), \
+             patch.object(backend, "validate_boot", return_value=[]), patch.object(backend, "os_release", return_value="44"), \
              patch.object(backend, "announce") as announce, patch.object(backend, "SPLASH") as splash:
             backend.finalize(self.root, installer=True)
         self.assertEqual(state.read_state(self.root)["status"], "installer-complete")
@@ -156,7 +156,7 @@ class InstallerTargetTests(unittest.TestCase):
         ready = dict(self.ready, migrations={"hooks": ["plymouth-rebuild"]})
         state.write_state(self.root, ready, "validating", started=True)
         with patch.object(backend, "run"), patch.object(backend, "os_release", return_value="44"), \
-             patch.object(backend, "validate_boot") as validate:
+             patch.object(backend, "validate_boot", return_value=[]) as validate:
             backend.finalize(self.root, installer=True)
         validate.assert_called_once_with([], rebuild_all=True, preserved_kernels=[])
 
