@@ -436,8 +436,27 @@ fun dialog_prompt (prompt)
       dialog.prompt.SetOpacity (0);
   }
 
+# Plymouth.GetCapslockState () aborts plymouthd when the splash started
+# before there was a keyboard (plymouth 24.004.60: the script library keeps
+# the keyboard it had at the start, and asserts it is not NULL). That happens
+# with LUKS when the GPU driver loads after the initramfs (NVIDIA with
+# drm-awaiter): plymouthd waits for a DRM device instead of using SimpleDRM,
+# the splash starts first, and the passphrase prompt disappears in a crash.
+# Plymouth only sends keystrokes to the script when it has that keyboard, so
+# ask for the Caps Lock state only once a key has arrived.
+keyboard_seen = 0;
+
+fun keyboard_input_callback (key)
+  {
+    global.keyboard_seen = 1;
+  }
+
+Plymouth.SetKeyboardInputFunction (keyboard_input_callback);
+
 fun caps_lock_warning ()
   {
+    if (!keyboard_seen)
+      return;
     on = Plymouth.GetCapslockState ();
     if (on && !dialog.caps_shown)
       {
