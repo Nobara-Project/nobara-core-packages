@@ -1778,6 +1778,64 @@ cp {shlex.quote(str(source))} %{{buildroot}}{payload}
         self.assertEqual(result["preserved_kernels"], [])
         self.assertTrue(any(eac in line and "Easy Anti-Cheat" in line for line in logs.output))
 
+    def eac_driver_fixture(self, *, new_kernel=True):
+        """NVIDIA moves from driver 1 to 2; only the newer EAC kernel gets a driver 2 module."""
+        private = Path(self.case.name) / "eac-driver-repo"
+        shutil.copytree(self.repo, private)
+        self.repo = private
+        old = "1-1.eac.noarch"
+        self.install_health_fixture("nvidia-kmod-common", "1")
+        self.install_health_fixture("kernel-eac-core", "1", headers=(
+            f"Provides: kernel-uname-r = {old}\nProvides: installonlypkg(kernel)"),
+            payload=f"/usr/lib/modules/{old}/vmlinuz")
+        module = "kmod-nvidia-prod-signed-" + old
+        self.install_health_fixture(module, "1", origin="nobara-kernel-mainline",
+                                    headers="Requires: nvidia-kmod-common = 1")
+        # As in Nobara's repositories, the old builds remain available.
+        for name, version, headers in (("nvidia-kmod-common", "1", ""), ("nvidia-kmod-common", "2", ""),
+                                       (module, "1", "Requires: nvidia-kmod-common = 1"),
+                                       ("kernel-eac-core", "1", f"Provides: kernel-uname-r = {old}\nProvides: installonlypkg(kernel)")):
+            shutil.copy2(self.build_rpm(name, version, headers=headers,
+                                        payload=f"/usr/lib/modules/{old}/vmlinuz" if name == "kernel-eac-core" else None), private)
+        if new_kernel:
+            kernel = "2-1.eac.noarch"
+            shutil.copy2(self.build_rpm("kmod-nvidia-prod-signed-" + kernel, "2",
+                                        headers="Requires: nvidia-kmod-common = 2"), private)
+            shutil.copy2(self.build_rpm("kernel-eac-core", "2", headers=(
+                f"Provides: kernel-uname-r = {kernel}\nProvides: installonlypkg(kernel)\n"
+                f"Requires: kmod-nvidia-prod-signed-{kernel}"),
+                payload=f"/usr/lib/modules/{kernel}/vmlinuz"), private)
+        subprocess.run(["createrepo_c", str(private)], check=True, capture_output=True)
+        return module
+
+    def test_driver_update_removes_signed_module_of_older_eac_kernel(self):
+        module = self.eac_driver_fixture()
+        with patch.object(planner, "check_selection_support"), self.assertLogs(planner.LOG, level="INFO") as logs:
+            result = self.prepare()
+        actions = {(p["name"], p["action"]) for p in result["packages"]}
+        self.assertIn((module, "Remove"), actions)
+        self.assertIn(("kernel-eac-core", "Install"), actions)
+        self.assertIn(("nvidia-kmod-common", "Upgrade"), actions)
+        # The older EAC kernel itself waits for the confirmed boot's retention.
+        self.assertFalse(any(p["name"] == "kernel-eac-core" and p["action"] == "Remove" for p in result["packages"]))
+        self.assertTrue(any(module in line and "Easy Anti-Cheat" in line for line in logs.output))
+        replay = subprocess.run(self.replay_command(test=False), capture_output=True, text=True)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+
+    def test_running_eac_kernel_module_removal_is_warned_about(self):
+        self.eac_driver_fixture()
+        with patch.object(planner, "check_selection_support"), \
+             patch.object(planner.os, "uname", return_value=Mock(release="1-1.eac.noarch")), \
+             self.assertLogs(planner.LOG, level="WARNING") as logs:
+            self.prepare()
+        self.assertTrue(any("running Easy Anti-Cheat kernel" in line for line in logs.output))
+
+    def test_without_a_newer_eac_kernel_the_driver_conflict_is_reported(self):
+        self.eac_driver_fixture(new_kernel=False)
+        with self.assertRaisesRegex(UpdateError, "(?s)Package conflicts.*nvidia-kmod-common"):
+            self.prepare()
+        self.assertFalse((self.job / "transaction.json").exists())
+
     def test_obsoletes_can_replace_local_package_under_a_different_name(self):
         self.local_desktop_fixture()
         replacement = self.build_rpm("replacement-desktop", "1", headers="Obsoletes: labwc < 99\nProvides: labwc = 6")

@@ -27,7 +27,7 @@ from .update_state import UpdateError, atomic_json, file_digest, os_release, rpm
 from .update_health import PackageHealth
 from .update_progress import PackageProgress
 from .update_repositories import migrated_media_urls, load_repositories
-from .update_retention import versioned_kmod_kernel, package_kernel
+from .update_retention import core_kernel, core_uname, versioned_kmod_kernel, package_kernel
 
 LOG = logging.getLogger(__name__)
 ESSENTIAL = {"glibc", "rpm", "dnf5", "libdnf5", "systemd", "bash", "coreutils", "python3", "nobara-updater"}
@@ -358,6 +358,54 @@ def repair_orphaned_kmods(base, goal, transaction, settings, origins, migrations
         transaction = goal.resolve()
         check_resolution(transaction, origins)
     return transaction, candidates
+
+
+def retire_stale_eac_kmods(base, goal, transaction, settings, origins, migrations):
+    """Let a driver update drop signed modules of older Easy Anti-Cheat kernels.
+
+    EAC kernels load only Nobara-signed modules (kmod-*-signed-<kernel>),
+    each built for one exact driver version. When the driver moves on (for
+    example NVIDIA 595 to 620), older EAC kernels usually get no new build,
+    and their installed modules then pin the old driver. Retry once without
+    the modules the solver names, and keep the result only if it resolves
+    and installs a newer EAC kernel, whose module matches the new driver.
+
+    The kernels themselves stay installed until the confirmed boot's kernel
+    retention (update_retention). The removed modules could not have loaded
+    with the new driver anyway, and recovery keeps the complete old system.
+    """
+    if transaction.get_problems() == base_api.GoalProblem_NO_PROBLEM:
+        return transaction
+    logs = "\n".join(transaction.get_resolve_logs_as_strings())
+    installed = rpm_api.PackageQuery(base)
+    installed.filter_installed()
+    stale = [(package, kernel) for package in installed
+             for kernel in [versioned_kmod_kernel(package)]
+             if kernel and eac_kernel(kernel) and re.search(r"(?<![\w.+-])" + re.escape(package.get_name()) + r"-\d", logs)]
+    if not stale:
+        return transaction
+    for package, _ in stale:
+        goal.add_rpm_remove(package, settings)
+    retried = goal.resolve()
+    if retried.get_problems() != base_api.GoalProblem_NO_PROBLEM:
+        return transaction
+    inbound = {trans.TransactionItemAction_INSTALL, trans.TransactionItemAction_UPGRADE}
+    incoming = [kernel for item in retried.get_transaction_packages()
+                if item.get_action() in inbound and core_kernel(item.get_package())
+                for kernel in [core_uname(item.get_package())] if eac_kernel(kernel)]
+    if not all(any(rpm_api.rpmvercmp(new, kernel) > 0 for new in incoming) for _, kernel in stale):
+        return transaction  # Without a newer EAC kernel, keep reporting the conflict.
+    running = os.uname().release
+    for package, kernel in stale:
+        migrations.remove.add(package.get_full_nevra())
+        LOG.info("Will remove %s: the updated driver has no build for the older Easy Anti-Cheat kernel %s. "
+                 "The new Easy Anti-Cheat kernel brings a matching module; the older kernel is removed "
+                 "after the new one has booted.", package.get_full_nevra(), kernel)
+        if kernel == running:
+            LOG.warning("The running Easy Anti-Cheat kernel %s loses its %s module with this update. "
+                        "Its loaded driver keeps working until the restart; after the update, start the new kernel.",
+                        kernel, package.get_name())
+    return retried
 
 
 def validate_kmod_cleanup(base, transaction, candidates):
@@ -815,6 +863,7 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
         # add Fedora defaults (e.g. plasma-setup) that conflict with Nobara's
         # desktop. New required Nobara packages belong in explicit migrations.
         transaction = goal.resolve()
+        transaction = retire_stale_eac_kmods(base, goal, transaction, settings, origins, migrations)
         check_resolution(transaction, origins)
         # Before anything else reads the hooks (kernel development packages,
         # boot space, execution mode): the new theme must actually arrive.

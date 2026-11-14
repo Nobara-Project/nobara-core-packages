@@ -519,7 +519,15 @@ the update's restart, once the new kernel has booted and the boot is confirmed
 (including its DKMS, akmods and kmod modules), cleanup runs again against the
 new kernel. The previously booted kernel becomes the second standard kernel, the
 oldest standard kernel is removed, and the new EAC kernel replaces the previous
-one. Cleanup waits until recovery data has been retired. If cleanup is unsafe or
+one. Cleanup waits until recovery data has been retired.
+
+EAC kernels load only Nobara-signed driver modules (`kmod-*-signed-<kernel>`),
+each built for one exact driver version. When a driver update (for example
+NVIDIA 595 to 620) has no build for an older EAC kernel, that kernel's installed
+module would block the update. If the same update installs a newer EAC kernel
+with a matching module, the old module is removed in the update transaction;
+the old EAC kernel itself is removed later by the cleanup above. Without a newer
+EAC kernel, the conflict is reported and nothing is installed. If cleanup is unsafe or
 cannot finish, it is logged and retried later without marking the successful
 update as failed.
 
