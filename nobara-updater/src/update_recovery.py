@@ -472,10 +472,14 @@ def validate_saved_recovery(recovery: dict, job: str) -> None:
         if any(path.is_symlink() for path in paths):
             raise UpdateError("The saved recovery snapshot contains a symlink in its identity paths.")
         owner = json.loads((parent / "owner.json").read_text())
-        origin = json.loads((parent / "origin.json").read_text())
+        # Updaters before origin.json (October 2026) left only the owner
+        # record and the snapshot's marker, which also names the original
+        # root. A present record must still match.
+        expected = dict(version=1, job=job, uuid=recovery["uuid"], fsroot=recovery["fsroot"])
+        origin = json.loads((parent / "origin.json").read_text()) if (parent / "origin.json").exists() else expected
         saved_marker = json.loads(marker.read_text())
         if (owner != dict(owner="nobara-updater", job=job)
-                or origin != dict(version=1, job=job, uuid=recovery["uuid"], fsroot=recovery["fsroot"])
+                or origin != expected
                 or saved_marker != dict(job=job, original_subvolume=recovery["fsroot"])):
             raise UpdateError("The saved recovery snapshot identity or marker does not match this update.")
         # An ordinary directory at this path is not a bootable snapshot.

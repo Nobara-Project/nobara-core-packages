@@ -173,6 +173,14 @@ class SnapshotValidationTests(RecoveryFixture):
         self.assertIn(["btrfs", "subvolume", "show", str(self.snapshot)], calls)
         self.assertEqual(calls[-1], ["umount", str(self.top)])
 
+    def test_snapshot_from_an_updater_before_origin_records_is_accepted(self):
+        (self.parent / "origin.json").unlink()
+        recovery.validate_saved_recovery(self.layout, JOB)
+        # A record that is present must still identify this root.
+        state.atomic_json(self.parent / "origin.json", dict(version=1, job=JOB, uuid=UUID, fsroot="/@other"))
+        with self.assertRaises(state.UpdateError):
+            recovery.validate_saved_recovery(self.layout, JOB)
+
     def test_wrong_job_root_and_filesystem_are_rejected_before_mounting(self):
         for field, value in (("uuid", "other-uuid"), ("fsroot", "/@other"), ("fstype", "ext4")):
             with self.subTest(field=field), patch.dict(self.mount, {field: value}), self.assertRaises(state.UpdateError):
