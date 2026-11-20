@@ -29,6 +29,15 @@ class UpdateError(RuntimeError):
     pass
 
 
+class BootSpaceError(UpdateError):
+    """/boot cannot hold this update; names the inbound packages and the shortfall."""
+
+    def __init__(self, message: str, *, shortfall: int, incoming=()):
+        super().__init__(message)
+        self.shortfall = shortfall
+        self.incoming = list(incoming)
+
+
 def package_selection(packages) -> list[str] | None:
     """Only literal RPM names/name.arch, never globs, paths or CLI switches."""
     if packages is None:

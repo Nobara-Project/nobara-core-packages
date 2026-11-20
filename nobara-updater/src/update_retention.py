@@ -9,6 +9,13 @@ The policy runs before every preparation, against the booted kernel, and
 again after an update's boot has been confirmed, against the new kernel. It
 never runs inside an update transaction: until the new kernel has booted
 (including its DKMS/akmods/kmod modules), the old ones remain the fallback.
+
+An update that installs new kernels briefly needs room for them and for the
+recovery copy of the booted kernel beside every kept kernel, which a 1 GiB
+/boot often lacks. When it does, free_boot_space() retires, before the
+update, only as many of the kernels it would replace as the shortfall needs:
+older standard kernels first, then EAC kernels with a newer EAC build
+inbound. The booted kernel is always kept, and the recovery entry boots it.
 """
 from __future__ import annotations
 
@@ -282,3 +289,111 @@ def prune_kernel_packages(*, obsolete_kernels=()) -> None:
                  config.get_installonly_limit_option().get_value())
     finally:
         base.unlock_system_repo()
+
+
+class InboundKernel:
+    """A kernel core RPM an update installs, from its planned NEVRA."""
+
+    def __init__(self, name: str, nevra: str):
+        match = re.fullmatch(re.escape(name) + r"-(?:(\d+):)?([^-]+)-(.+)\.([^.]+)", nevra)
+        if not match:
+            raise UpdateError(f"Cannot identify the planned kernel {nevra}.")
+        self.name, self.epoch = name, match[1] or "0"
+        self.version, self.release, self.arch = match[2], match[3], match[4]
+
+    def get_name(self): return self.name
+    def get_epoch(self): return self.epoch
+    def get_version(self): return self.version
+    def get_release(self): return self.release
+    def get_arch(self): return self.arch
+
+
+def inbound_kernels(packages) -> dict[str, InboundKernel]:
+    """Kernel versions whose boot image the update installs, from (name, nevra) pairs."""
+    kernels = {}
+    for name, nevra in packages:
+        if name.startswith("kernel") and name.endswith("-core") and "modules" not in name:
+            package = InboundKernel(name, nevra)
+            kernels[package_kernel(package)] = package
+    return kernels
+
+
+def boot_room_candidates(cores, incoming, *, running: str) -> list[str]:
+    """Installed kernels the update replaces, in the order to retire them early.
+
+    These are the versions the policy removes once the update's kernel has
+    booted, which in turn is the newest inbound kernel of the booted kind
+    (standard or EAC). Standard kernels come first, oldest first; EAC kernels
+    follow, as the inbound EAC build replaces them. Never the booted kernel.
+    """
+    kind = [kernel for kernel in incoming if eac_kernel(kernel) == eac_kernel(running)]
+    future = max(kind, key=cmp_to_key(lambda a, b: compare_kernels(incoming[a], incoming[b])), default=running)
+    excess = excess_kernels({**cores, **incoming}, running=future, keep={running}) - set(incoming)
+    return sorted(excess, key=cmp_to_key(lambda a, b: (eac_kernel(a) - eac_kernel(b))
+                                         or compare_kernels(cores[a], cores[b])))
+
+
+def kernel_boot_bytes(kernel: str, boot: Path = Path("/boot")) -> int:
+    """Space on /boot that removing a kernel version gives back."""
+    total = 0
+    for name in (f"vmlinuz-{kernel}", f".vmlinuz-{kernel}.hmac", f"initramfs-{kernel}.img",
+                 f"initramfs-{kernel}kdump.img", f"System.map-{kernel}", f"config-{kernel}"):
+        try:
+            info = (boot / name).lstat()
+        except OSError:
+            continue
+        if not os.path.islink(boot / name):
+            total += info.st_blocks * 512 or info.st_size
+    return total
+
+
+def kernels_to_retire(candidates, shortfall: int, boot: Path = Path("/boot")) -> list[str]:
+    """The shortest prefix of candidates that frees shortfall bytes, or none."""
+    chosen, freed = [], 0
+    for kernel in candidates:
+        if freed >= shortfall:
+            break
+        chosen.append(kernel)
+        freed += kernel_boot_bytes(kernel, boot)
+    if freed < shortfall:
+        LOG.warning("Retiring the kernels this update replaces would free only %d of the %d MiB it needs on /boot; "
+                    "keeping them.", freed // 1024**2, -(-shortfall // 1024**2))
+        return []
+    return chosen
+
+
+def installed_cores(base) -> dict:
+    installed = rpm_api.PackageQuery(base)
+    installed.filter_installed()
+    installonly = rpm_api.PackageQuery(installed)
+    installonly.filter_installonly()
+    kernel_packages, _, core_packages, _, _ = kernel_sets(installed, {p.get_id().id for p in installonly})
+    return {core_uname(kernel_packages[i][0]): kernel_packages[i][0] for i in core_packages}
+
+
+def free_boot_space(packages, shortfall: int, *, boot: Path = Path("/boot")) -> list[str]:
+    """Retire just enough of the kernels an update replaces to fit it on /boot.
+
+    packages are the update's inbound (name, nevra) pairs. Returns the kernel
+    versions removed; nothing is removed when even all candidates would not
+    free enough, since the update still could not be prepared.
+    """
+    incoming = inbound_kernels(packages)
+    if not incoming:
+        return []
+    base = base_api.Base()
+    base.load_config()
+    if not base.get_config().get_installonly_limit_option().get_value():
+        # installonly_limit=0: the administrator keeps every kernel.
+        return []
+    base.setup()
+    base.get_repo_sack().load_repos(repo_api.Repo.Type_SYSTEM)
+    candidates = boot_room_candidates(installed_cores(base), incoming, running=os.uname().release)
+    chosen = kernels_to_retire(candidates, shortfall, boot)
+    if not chosen:
+        return []
+    LOG.info("/boot needs %d MiB more for this update. Retiring %s now, which this update replaces; "
+             "the booted kernel %s is kept and remains the recovery kernel.",
+             -(-shortfall // 1024**2), ", ".join(chosen), os.uname().release)
+    prune_kernel_packages(obsolete_kernels=chosen)
+    return chosen

@@ -680,3 +680,107 @@ def reconcile_recovered_kernels(job: str, selected: str) -> None:
         LOG.warning("Disabled boot entry %s: kernel %s has no module tree in the recovered root.",
                     path.name, re.findall(r"(?m)^version\s+(.+)$", text)[0])
     os.sync()
+
+
+RESCUE_BUILD_DIR = Path("/var/tmp")
+
+
+def inbound_kernel_versions(packages: list[dict]) -> list[str]:
+    """Kernel versions whose boot image an update installed, from its package records."""
+    versions = []
+    for package in packages:
+        name = package.get("name", "")
+        if (package.get("action") not in INBOUND or not name.startswith("kernel")
+                or not name.endswith("-core") or "modules" in name):
+            continue
+        match = re.fullmatch(re.escape(name) + r"-(?:\d+:)?([^-]+-.+\.[^.]+)", package.get("nevra", ""))
+        if match:
+            versions.append(match[1])
+    return versions
+
+
+def previous_standard_kernel(updated: list[str], installed: set[str]) -> str | None:
+    """The newest installed standard kernel older than the update's new one, same family."""
+    from libdnf5.rpm import rpmvercmp
+    new = [k for k in updated if not eac_kernel(k)]
+    if not new:
+        return None
+    newest = max(new, key=cmp_to_key(rpmvercmp))
+    older = [k for k in installed - set(updated)
+             if not eac_kernel(k) and (".lts." in k) == (".lts." in newest) and rpmvercmp(k, newest) < 0]
+    return max(older, key=cmp_to_key(rpmvercmp), default=None)
+
+
+def rescue_entry_text(kernel_entry_text: str, kernel: str, machine: str) -> str:
+    """The rescue entry, from the BLS entry of the kernel it is built from."""
+    lines = []
+    for line in kernel_entry_text.splitlines():
+        key, _, value = line.partition(" ")
+        if key == "title":
+            name = value.strip().split(f" ({kernel})", 1)[0].strip() or "Nobara Linux"
+            line = f"title {name} Rescue Kernel ({kernel})"
+        elif key == "version":
+            line = f"version 0-rescue-{machine}"
+        elif key == "linux":
+            line = f"linux /vmlinuz-0-rescue-{machine}"
+        elif key == "initrd":
+            line = f"initrd /initramfs-0-rescue-{machine}.img"
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+def refresh_rescue_image(updated: list[str], *, boot: Path = BOOT, root: Path = Path("/")) -> str | None:
+    """Rebuild the existing rescue image from the previous kernel once a new one is confirmed.
+
+    The rescue image is generated once, when a system is installed, so it
+    soon boots a kernel whose modules are gone. After an update's new kernel
+    has booted, the previous standard kernel is the newest one known to work;
+    the rescue image is rebuilt from it. A system without a rescue entry is
+    left without one. The image is built outside /boot, and the current
+    rescue files are only replaced when the new ones fit. Returns the kernel
+    the image was built from, or None when nothing changed.
+    """
+    machine = MACHINE_ID.read_text().strip()
+    entry = boot / "loader/entries" / f"{machine}-0-rescue.conf"
+    if not machine or not entry.is_file():
+        return None
+    kernel = previous_standard_kernel(updated, installed_boot_kernels(root))
+    if kernel is None:
+        return None
+    source_entry = boot / "loader/entries" / f"{machine}-{kernel}.conf"
+    image = root / "usr/lib/modules" / kernel / "vmlinuz"
+    if not image.is_file():
+        image = boot / f"vmlinuz-{kernel}"
+    if not source_entry.is_file() or not image.is_file():
+        return None
+    if f"Rescue Kernel ({kernel})" in entry.read_text():
+        return None
+    vmlinuz = boot / f"vmlinuz-0-rescue-{machine}"
+    initrd = boot / f"initramfs-0-rescue-{machine}.img"
+    with tempfile.TemporaryDirectory(prefix="nobara-rescue-", dir=RESCUE_BUILD_DIR) as directory:
+        built = Path(directory) / "initramfs.img"
+        LOG.info("Rebuilding the rescue image from the previous kernel %s.", kernel)
+        result = subprocess.run(["dracut", "-f", "--no-hostonly", "--no-uefi", "-a", "rescue",
+                                 "--kver", kernel, str(built)], capture_output=True, text=True)
+        if result.returncode or not built.is_file():
+            raise UpdateError(f"dracut could not build the rescue image for {kernel}: "
+                              + (result.stderr or result.stdout).strip()[-2000:])
+        current = sum(p.stat().st_size for p in (vmlinuz, initrd) if p.is_file())
+        needed = built.stat().st_size + image.stat().st_size + 16 * 1024**2
+        free = shutil.disk_usage(boot).free
+        if free + current < needed:
+            LOG.warning("Keeping the current rescue image: /boot lacks %d MiB for one built from %s.",
+                        -(-(needed - free - current) // 1024**2), kernel)
+            return None
+        if free < needed:
+            # Room for the new files only once the old ones are gone. Drop
+            # the entry first, so GRUB never lists a rescue entry without files.
+            entry.unlink()
+            vmlinuz.unlink(missing_ok=True)
+            initrd.unlink(missing_ok=True)
+        write_boot_file(vmlinuz, source=image)
+        write_boot_file(initrd, source=built)
+        os.chmod(initrd, 0o600)
+        write_boot_file(entry, text=rescue_entry_text(source_entry.read_text(), kernel, machine))
+    LOG.info("The rescue image now boots kernel %s.", kernel)
+    return kernel

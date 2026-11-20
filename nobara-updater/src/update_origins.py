@@ -59,7 +59,8 @@ def mentioned_packages(text, origins):
 
 
 def annotate_failure(error, origins):
-    if isinstance(error, PackageOriginError):
+    if isinstance(error, PackageOriginError) or getattr(error, "shortfall", None) is not None:
+        # BootSpaceError: the backend frees /boot from its attributes.
         return error
     packages = mentioned_packages(str(error), origins)
     return PackageOriginError(str(error), packages) if packages else error

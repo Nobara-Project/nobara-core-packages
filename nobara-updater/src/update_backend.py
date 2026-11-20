@@ -13,12 +13,12 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-from .update_boot import newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root, installed_boot_kernels, reconcile_recovered_kernels, ensure_grub_kernel, validate_grub_initramfs, eac_kernel
+from .update_boot import INBOUND, inbound_kernel_versions, refresh_rescue_image, newest_updated_kernel, pin_kernel, kernel_entry, synchronize_boot_root, installed_boot_kernels, reconcile_recovered_kernels, ensure_grub_kernel, validate_grub_initramfs, eac_kernel
 from .update_recovery import create_recovery, probe_recovery, select_recovery, prune_recovery, trial_boot, confirm_trial, grub_environment, check_recovery_space, check_snapshot_swapfiles, restore_recovery_entry
 from .update_report import arm_report, publish_recovery, publish_failure, resolve_notice, publish_dkms_notice
 from .update_origins import annotate_failure
 from .update_progress import OfflineProgress, PackageProgress
-from .update_state import (ACTIVE, STATE_DIR, TRIGGER, UpdateError, atomic_json, file_digest,
+from .update_state import (ACTIVE, STATE_DIR, TRIGGER, BootSpaceError, UpdateError, atomic_json, file_digest,
                            in_installer_root, os_release, package_selection, read_state, rpm_fingerprint, status_message, update_lock,
                            verify_files, write_state)
 
@@ -258,7 +258,9 @@ def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = F
         settings = policy()
         cleanup_boot_archives(root, previous)
         prune_payloads(root)
-        for attempt in range(1, settings["prepare_attempts"] + 1):
+        attempt, made_room = 0, False
+        while attempt < settings["prepare_attempts"]:
+            attempt += 1
             state = {"job": uuid.uuid4().hex, "started": False, "attempt": attempt, "installer": installer, "selection": packages}
             if installer and previous.get("status") == "installer-complete" and previous.get("boot_selection"):
                 # Calamares may run updates followed by a separate codec job.
@@ -300,7 +302,9 @@ def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = F
                 if not installer and not live and not recovery["available"]:
                     LOG.warning("Automatic rollback is unavailable: %s", recovery["reason"])
                 elif not installer and not live:
-                    check_recovery_space(recovery, result.get("boot_space", {}))
+                    check_recovery_space(recovery, result.get("boot_space", {}),
+                                         incoming=[(p["name"], p["nevra"]) for p in result["packages"]
+                                                   if p["action"] in INBOUND])
                     LOG.info("Automatic rollback is available for this system layout.")
                     if recovery.get("shared_mounts"):
                         LOG.info("Recovery will preserve current container data at: %s",
@@ -328,6 +332,14 @@ def prepare(root: Path = STATE_DIR, *, codecs: bool = False, installer: bool = F
                 error = annotate_failure(error, state.get("package_origins", []))
                 write_state(root, state, "failed", error=str(error),
                             package_conflicts=getattr(error, "package_conflicts", []))
+                if isinstance(error, BootSpaceError) and not installer and not made_room:
+                    # Once per preparation: retire the kernels this update
+                    # replaces, as few as the shortfall needs, then plan again.
+                    made_room = True
+                    if make_boot_room(previous, error):
+                        shutil.rmtree(job, ignore_errors=True)
+                        attempt -= 1
+                        continue
                 # Retry only preparation. Never rerun an RPM transaction on an
                 # exception. Each retry gets fresh metadata and a separate job.
                 if isinstance(error, UpdateError):
@@ -1193,6 +1205,7 @@ def cleanup_confirmed_update(root: Path, state: dict) -> None:
     if state.get("recovery_cleanup_complete"):
         cleanup_boot_archives(root, state)
         cleanup_kernel_retention(state)
+        refresh_rescue(root, state)
         return
     try:
         if state["status"] == "recovered":
@@ -1208,8 +1221,27 @@ def cleanup_confirmed_update(root: Path, state: dict) -> None:
         write_state(root, state, state["status"], recovery_cleanup_complete=True)
         cleanup_boot_archives(root, state)
         cleanup_kernel_retention(state)
+        refresh_rescue(root, state)
     except Exception:
         LOG.exception("System boot confirmed, but recovery cleanup could not finish; it will retry on the next boot.")
+
+
+def refresh_rescue(root: Path, state: dict) -> None:
+    """Once per completed update with a new kernel: rescue image from the previous kernel.
+
+    Runs after retention cleanup, so it never builds from a kernel about to
+    be removed. Tried once per update: a failure leaves the current rescue
+    image in place and is not repeated on every boot.
+    """
+    if state.get("status") != "complete" or state.get("rescue_refreshed"):
+        return
+    try:
+        updated = inbound_kernel_versions(state.get("packages", []))
+        if updated:
+            refresh_rescue_image(updated)
+    except Exception as error:
+        LOG.warning("Kept the current rescue image; rebuilding it from the previous kernel failed: %s", error)
+    write_state(root, state, state["status"], rescue_refreshed=True)
 
 
 def prune_kernel_packages(*, obsolete_kernels=()) -> None:
@@ -1217,6 +1249,27 @@ def prune_kernel_packages(*, obsolete_kernels=()) -> None:
     # native replay process potentially upgrades that library and Python.
     from .update_retention import prune_kernel_packages as prune
     prune(obsolete_kernels=obsolete_kernels)
+
+
+def free_boot_space(packages, shortfall: int) -> list[str]:
+    from .update_retention import free_boot_space as free
+    return free(packages, shortfall)
+
+
+def kernel_cleanup_allowed(state: dict) -> bool:
+    """No installation, recovery or boot trial depends on the installed kernels."""
+    status = state.get("status")
+    if status not in {"complete", "unchanged", "live-complete", "idle"} and not (
+            status == "failed" and not state.get("started")):
+        return False
+    if state.get("recovery", {}).get("created") and not state.get("recovery_cleanup_complete"):
+        return False
+    if (TRIGGER.is_symlink() or TRIGGER.exists()
+            or Path("/etc/nobara-updater-recovery.json").exists()):
+        return False
+    environment = grub_environment()
+    return not (any(environment.get(key) for key in ("nobara_fallback", "nobara_trial", "next_entry"))
+                or environment.get("saved_entry", "").startswith("nobara-recovery-"))
 
 
 def cleanup_kernel_retention(state: dict) -> None:
@@ -1227,23 +1280,22 @@ def cleanup_kernel_retention(state: dict) -> None:
     that failed before changing packages, e.g. for lack of /boot space)
     are brought to the retention policy before anything is planned.
     """
-    status = state.get("status")
-    if status not in {"complete", "unchanged", "live-complete", "idle"} and not (
-            status == "failed" and not state.get("started")):
-        return
-    if state.get("recovery", {}).get("created") and not state.get("recovery_cleanup_complete"):
-        return
     try:
-        if (TRIGGER.is_symlink() or TRIGGER.exists()
-                or Path("/etc/nobara-updater-recovery.json").exists()):
-            return
-        environment = grub_environment()
-        if (any(environment.get(key) for key in ("nobara_fallback", "nobara_trial", "next_entry"))
-                or environment.get("saved_entry", "").startswith("nobara-recovery-")):
-            return
-        prune_kernel_packages(obsolete_kernels=state.get("preserved_kernels", []))
+        if kernel_cleanup_allowed(state):
+            prune_kernel_packages(obsolete_kernels=state.get("preserved_kernels", []))
     except Exception as error:
         LOG.warning("Old-kernel cleanup deferred; it will retry on a later boot or updater run: %s", error)
+
+
+def make_boot_room(previous: dict, error: BootSpaceError) -> bool:
+    """Retire the kernels an update replaces when /boot cannot hold it; True if any went."""
+    try:
+        if not kernel_cleanup_allowed(previous):
+            return False
+        return bool(free_boot_space(error.incoming, error.shortfall))
+    except Exception as failure:
+        LOG.warning("Could not free /boot by retiring replaced kernels: %s", failure)
+        return False
 
 
 def confirm_boot(root: Path = STATE_DIR) -> None:

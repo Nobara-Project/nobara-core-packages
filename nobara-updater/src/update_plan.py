@@ -20,10 +20,10 @@ import libdnf5.transaction as trans
 from .update_migrations import (BGRT_FILES, add_codec_migration, add_plymouth_migration, is_htpc, machine_product,
                                 plan_migrations, plasma_login_migrated, settle_nobara_theme,
                                 keep_rsyslog, rsyslog_removed)
-from .update_boot import changes_kernel, check_selection_support, boot_space_requirements, eac_kernel, installed_boot_kernels
+from .update_boot import INBOUND, changes_kernel, check_selection_support, boot_space_requirements, eac_kernel, installed_boot_kernels
 from .update_policy import execution_policy, format_restart_reasons
 from .update_origins import PackageOriginError, collect_package_origins, annotate_failure
-from .update_state import UpdateError, atomic_json, file_digest, os_release, rpm_fingerprint
+from .update_state import BootSpaceError, UpdateError, atomic_json, file_digest, os_release, rpm_fingerprint
 from .update_health import PackageHealth
 from .update_progress import PackageProgress
 from .update_repositories import migrated_media_urls, load_repositories
@@ -578,9 +578,13 @@ def resolve_obsolete_cleanup(base, goal, transaction, settings, origins, migrati
         check_resolution(transaction, origins)
 
 
-def require_space(path: Path, required: int) -> None:
-    if shutil.disk_usage(path).free < required:
-        raise UpdateError(f"Not enough space on {path}: at least {required // (1024 * 1024)} MiB free is required.")
+def require_space(path: Path, required: int, *, incoming=None) -> None:
+    free = shutil.disk_usage(path).free
+    if free < required:
+        message = f"Not enough space on {path}: at least {required // (1024 * 1024)} MiB free is required."
+        if incoming is not None:
+            raise BootSpaceError(message, shortfall=required - free, incoming=incoming)
+        raise UpdateError(message)
 
 
 def kernel_unames(package) -> set[str]:
@@ -962,8 +966,10 @@ def prepare_transaction(job: Path, *, codecs: bool = False, allow_live: bool = T
         boot_space = {}
         if execution["mode"] == "offline":
             boot_space = boot_space_requirements(records, migrations.hooks)
+            inbound = [(p["name"], p["nevra"]) for p in records if p["action"] in INBOUND]
             for path, required in boot_space.items():
-                require_space(Path(path), required)
+                # Only /boot itself can be freed by retiring kernels early.
+                require_space(Path(path), required, incoming=inbound if path == "/boot" else None)
             LOG.info("%s", format_restart_reasons(execution["reasons"]))
         else:
             LOG.info("This transaction contains application updates eligible for installation now.")

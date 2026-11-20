@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 from pathlib import Path, PurePosixPath
 
-from .update_state import UpdateError, atomic_json
+from .update_state import BootSpaceError, UpdateError, atomic_json
 from .update_boot import write_boot_file
 
 SHARED_CONTAINER_PATHS = {"var/lib/machines", "var/lib/portables"}
@@ -561,13 +561,14 @@ def recovery_boot_space(layout: dict) -> int:
     return required
 
 
-def check_recovery_space(layout: dict, boot_space: dict) -> None:
+def check_recovery_space(layout: dict, boot_space: dict, *, incoming=()) -> None:
     if not layout.get("available"):
         return
     required = recovery_boot_space(layout) + boot_space.get("/boot", 32 * 1024**2)
     free = shutil.disk_usage("/boot").free
     if free < required:
-        raise UpdateError(f"Not enough space on /boot for recovery and this update: need {required // 1024**2} MiB free, have {free // 1024**2} MiB. Free space before retrying; no update has been installed.")
+        raise BootSpaceError(f"Not enough space on /boot for recovery and this update: need {required // 1024**2} MiB free, have {free // 1024**2} MiB. Free space before retrying; no update has been installed.",
+                             shortfall=required - free, incoming=incoming)
 
 
 def create_recovery(job: Path, layout: dict, *, boot_space: dict | None = None) -> dict:

@@ -521,6 +521,27 @@ new kernel. The previously booted kernel becomes the second standard kernel, the
 oldest standard kernel is removed, and the new EAC kernel replaces the previous
 one. Cleanup waits until recovery data has been retired.
 
+An update that installs new kernels needs room on /boot for them and for the
+recovery copy of the booted kernel, beside every kernel that is kept. A 1 GiB
+/boot often cannot hold all of that at once. When the space check fails, the
+updater retires the kernels this update replaces early, before the update, and
+prepares it again. These are the same kernels the cleanup after the confirmed
+boot would remove. Older standard kernels go first, then an EAC kernel whose
+newer build is in the update. Only as many are removed as the shortfall needs.
+The booted kernel is always kept, and the recovery entry boots it if the
+update fails. If removing all of them would still not free enough, nothing is
+removed and the space error is reported. With `installonly_limit=0`, no kernel
+is removed.
+
+The rescue image is generated once, when Nobara is installed, so over time it
+boots a kernel whose modules are no longer installed. Once an update's new
+kernel has booted and been confirmed, and the old kernels have been cleaned
+up, the updater rebuilds the rescue image from the previous standard kernel,
+the newest one known to boot. This runs once per update. The new image is
+built outside /boot first. If that build fails, or /boot cannot hold the new
+image, the current rescue image is kept. A system without a rescue entry is
+not given one.
+
 EAC kernels load only Nobara-signed driver modules (`kmod-*-signed-<kernel>`),
 each built for one exact driver version. When a driver update (for example
 NVIDIA 595 to 620) has no build for an older EAC kernel, that kernel's installed
